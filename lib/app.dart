@@ -1,0 +1,29 @@
+import 'package:flutter/material.dart';
+import 'package:ma5zony/app_router.dart';
+import 'package:ma5zony/utils/constants.dart';
+import 'package:google_fonts/google_fonts.dart';
+
+class Ma5zonyApp extends StatelessWidget {
+  const Ma5zonyApp({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return MaterialApp.router(
+      title: 'Ma5zony - Inventory Management',
+      debugShowCheckedModeBanner: false,
+      theme: ThemeData(
+        colorScheme: ColorScheme.fromSeed(
+          seedColor: AppColors.primary,
+          primary: AppColors.primary,
+          secondary: AppColors.secondary,
+          surface: AppColors.surface,
+          background: AppColors.background,
+        ),
+        useMaterial3: true,
+        textTheme: GoogleFonts.interTextTheme(),
+        scaffoldBackgroundColor: AppColors.background,
+      ),
+      routerConfig: appRouter,
+    );
+  }
+}

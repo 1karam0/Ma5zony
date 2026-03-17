@@ -1,0 +1,298 @@
+import 'package:flutter/material.dart';
+import 'package:intl/intl.dart';
+import 'package:provider/provider.dart';
+import 'package:ma5zony/providers/app_state.dart';
+import 'package:ma5zony/utils/constants.dart';
+import 'package:ma5zony/widgets/shared_widgets.dart';
+
+class IntegrationsScreen extends StatefulWidget {
+  const IntegrationsScreen({super.key});
+
+  @override
+  State<IntegrationsScreen> createState() => _IntegrationsScreenState();
+}
+
+class _IntegrationsScreenState extends State<IntegrationsScreen> {
+  bool _importing = false;
+  bool _syncing = false;
+  final _domainController = TextEditingController(text: 'demo.myshopify.com');
+
+  @override
+  void dispose() {
+    _domainController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final state = context.watch<AppState>();
+    final connection = state.shopifyConnection;
+    final isConnected = connection?.isConnected ?? false;
+
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(24),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SectionHeader(title: 'Integrations Hub'),
+
+          // Shopify card
+          Card(
+            elevation: 2,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Padding(
+              padding: const EdgeInsets.all(24),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Container(
+                    width: 80,
+                    height: 80,
+                    decoration: BoxDecoration(
+                      color: Colors.green[50],
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: const Icon(
+                      Icons.shopping_bag,
+                      size: 40,
+                      color: Colors.green,
+                    ),
+                  ),
+                  const SizedBox(width: 24),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        // Title + status chip
+                        Row(
+                          children: [
+                            Text('Shopify', style: AppTextStyles.h2),
+                            const SizedBox(width: 12),
+                            StatusChip(
+                              isConnected ? 'Connected' : 'Not Connected',
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 4),
+                        if (isConnected && connection?.lastSyncAt != null)
+                          Text(
+                            'Last synced: ${DateFormat('MMM d, yyyy HH:mm').format(connection!.lastSyncAt!)}',
+                            style: AppTextStyles.label,
+                          ),
+                        const SizedBox(height: 8),
+                        Text(
+                          'Sync products, variants, and inventory levels automatically. Import orders to adjust stock.',
+                          style: AppTextStyles.body.copyWith(
+                            color: AppColors.textSecondary,
+                          ),
+                        ),
+                        const SizedBox(height: 16),
+
+                        // Capabilities list
+                        const Column(
+                          children: [
+                            _CapabilityItem(label: 'Inventory Sync'),
+                            _CapabilityItem(label: 'Order Imports'),
+                            _CapabilityItem(label: 'Product Mapping'),
+                          ],
+                        ),
+                        const SizedBox(height: 24),
+
+                        // Domain field + Connect / Disconnect
+                        if (!isConnected) ...[
+                          SizedBox(
+                            width: 380,
+                            child: TextField(
+                              controller: _domainController,
+                              decoration: const InputDecoration(
+                                labelText: 'Shopify Store Domain',
+                                hintText: 'mystore.myshopify.com',
+                                border: OutlineInputBorder(),
+                                prefixIcon: Icon(Icons.link),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(height: 16),
+                        ],
+                        Row(
+                          children: [
+                            ElevatedButton(
+                              onPressed: () async {
+                                final messenger = ScaffoldMessenger.of(context);
+                                if (isConnected) {
+                                  await context
+                                      .read<AppState>()
+                                      .disconnectShopify();
+                                  if (mounted) {
+                                    messenger.showSnackBar(
+                                      const SnackBar(
+                                        content: Text(
+                                          'Shopify store disconnected',
+                                        ),
+                                      ),
+                                    );
+                                  }
+                                } else {
+                                  await context.read<AppState>().connectShopify(
+                                    _domainController.text,
+                                  );
+                                  if (mounted) {
+                                    messenger.showSnackBar(
+                                      const SnackBar(
+                                        content: Text(
+                                          'Shopify store connected!',
+                                        ),
+                                      ),
+                                    );
+                                  }
+                                }
+                              },
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: isConnected
+                                    ? Colors.red[50]
+                                    : AppColors.primary,
+                                foregroundColor: isConnected
+                                    ? Colors.red
+                                    : Colors.white,
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 24,
+                                  vertical: 12,
+                                ),
+                              ),
+                              child: Text(
+                                isConnected
+                                    ? 'Disconnect Store'
+                                    : 'Connect Shopify Store',
+                              ),
+                            ),
+                            if (isConnected) ...[
+                              const SizedBox(width: 12),
+                              OutlinedButton.icon(
+                                onPressed: _importing
+                                    ? null
+                                    : () async {
+                                        final messenger = ScaffoldMessenger.of(
+                                          context,
+                                        );
+                                        setState(() => _importing = true);
+                                        await context
+                                            .read<AppState>()
+                                            .importShopifyProducts();
+                                        setState(() => _importing = false);
+                                        if (mounted) {
+                                          messenger.showSnackBar(
+                                            const SnackBar(
+                                              content: Text(
+                                                'Products imported!',
+                                              ),
+                                            ),
+                                          );
+                                        }
+                                      },
+                                icon: _importing
+                                    ? const SizedBox(
+                                        width: 14,
+                                        height: 14,
+                                        child: CircularProgressIndicator(
+                                          strokeWidth: 2,
+                                        ),
+                                      )
+                                    : const Icon(Icons.download),
+                                label: const Text('Import Products'),
+                              ),
+                              const SizedBox(width: 12),
+                              OutlinedButton.icon(
+                                onPressed: _syncing
+                                    ? null
+                                    : () async {
+                                        final messenger = ScaffoldMessenger.of(
+                                          context,
+                                        );
+                                        setState(() => _syncing = true);
+                                        await context
+                                            .read<AppState>()
+                                            .syncShopifyInventory();
+                                        setState(() => _syncing = false);
+                                        if (mounted) {
+                                          messenger.showSnackBar(
+                                            const SnackBar(
+                                              content: Text(
+                                                'Inventory synced!',
+                                              ),
+                                            ),
+                                          );
+                                        }
+                                      },
+                                icon: _syncing
+                                    ? const SizedBox(
+                                        width: 14,
+                                        height: 14,
+                                        child: CircularProgressIndicator(
+                                          strokeWidth: 2,
+                                        ),
+                                      )
+                                    : const Icon(Icons.sync),
+                                label: const Text('Sync Inventory'),
+                              ),
+                            ],
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+
+          // Security notice
+          const SizedBox(height: 16),
+          Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: AppColors.secondary,
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: AppColors.primary.withOpacity(0.2)),
+            ),
+            child: Row(
+              children: [
+                const Icon(Icons.security, size: 16, color: AppColors.primary),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    'Real Shopify OAuth tokens are managed securely on your backend server. '
+                    'This client never stores sensitive credentials.',
+                    style: AppTextStyles.label.copyWith(
+                      color: AppColors.textSecondary,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _CapabilityItem extends StatelessWidget {
+  final String label;
+  const _CapabilityItem({required this.label});
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8.0),
+      child: Row(
+        children: [
+          const Icon(Icons.check_circle, color: AppColors.success, size: 16),
+          const SizedBox(width: 8),
+          Text(label, style: AppTextStyles.body),
+        ],
+      ),
+    );
+  }
+}
