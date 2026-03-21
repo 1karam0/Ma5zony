@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
-import 'package:provider/provider.dart';
 import 'package:ma5zony/providers/app_state.dart';
 import 'package:ma5zony/features/auth/login_screen.dart';
 import 'package:ma5zony/features/auth/register_screen.dart';
@@ -19,9 +18,10 @@ import 'package:ma5zony/features/settings/settings_screen.dart';
 final _rootNavigatorKey = GlobalKey<NavigatorState>();
 final _shellNavigatorKey = GlobalKey<NavigatorState>();
 
-final appRouter = GoRouter(
+GoRouter buildAppRouter(AppState appState) => GoRouter(
   navigatorKey: _rootNavigatorKey,
   initialLocation: '/login',
+  refreshListenable: appState,
   routes: [
     GoRoute(path: '/login', builder: (context, state) => const LoginScreen()),
     GoRoute(
@@ -83,7 +83,7 @@ final appRouter = GoRouter(
     ),
   ],
   redirect: (context, state) {
-    final loggedIn = context.read<AppState>().currentUser != null;
+    final loggedIn = appState.currentUser != null;
     final loggingIn =
         state.uri.toString() == '/login' || state.uri.toString() == '/register';
 

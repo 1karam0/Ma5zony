@@ -131,14 +131,35 @@ class SuppliersScreen extends StatelessWidget {
                                 size: 20,
                                 color: AppColors.error,
                               ),
-                              onPressed: () {
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  SnackBar(
+                              onPressed: () async {
+                                final confirmed = await showDialog<bool>(
+                                  context: context,
+                                  builder: (ctx) => AlertDialog(
+                                    title: const Text('Delete Supplier'),
                                     content: Text(
-                                      'Deleted supplier: ${s.name}',
+                                      'Delete "${s.name}"? This cannot be undone.',
                                     ),
+                                    actions: [
+                                      TextButton(
+                                        onPressed: () =>
+                                            Navigator.pop(ctx, false),
+                                        child: const Text('Cancel'),
+                                      ),
+                                      TextButton(
+                                        onPressed: () =>
+                                            Navigator.pop(ctx, true),
+                                        child: const Text('Delete',
+                                            style: TextStyle(
+                                                color: AppColors.error)),
+                                      ),
+                                    ],
                                   ),
                                 );
+                                if (confirmed == true && context.mounted) {
+                                  await context
+                                      .read<AppState>()
+                                      .deleteSupplier(s.id);
+                                }
                               },
                               tooltip: 'Delete',
                             ),
@@ -231,7 +252,7 @@ class _SupplierFormDialogState extends State<_SupplierFormDialog> {
     _emailCtrl = TextEditingController(text: s?.contactEmail ?? '');
     _phoneCtrl = TextEditingController(text: s?.phone ?? '');
     _leadTimeCtrl = TextEditingController(
-      text: '${s?.typicalLeadTimeDays ?? 14}',
+      text: s != null ? '${s.typicalLeadTimeDays}' : '',
     );
   }
 
@@ -300,17 +321,24 @@ class _SupplierFormDialogState extends State<_SupplierFormDialog> {
             backgroundColor: AppColors.primary,
             foregroundColor: Colors.white,
           ),
-          onPressed: () {
-            Navigator.pop(context);
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(
-                content: Text(
-                  isEdit
-                      ? 'Supplier "${_nameCtrl.text}" updated'
-                      : 'Supplier "${_nameCtrl.text}" added',
-                ),
-              ),
+          onPressed: () async {
+            final supplier = Supplier(
+              id: widget.supplier?.id ?? '',
+              name: _nameCtrl.text.trim(),
+              contactEmail: _emailCtrl.text.trim(),
+              phone: _phoneCtrl.text.trim().isEmpty
+                  ? null
+                  : _phoneCtrl.text.trim(),
+              typicalLeadTimeDays:
+                  int.tryParse(_leadTimeCtrl.text) ?? 0,
             );
+            final appState = context.read<AppState>();
+            Navigator.pop(context);
+            if (isEdit) {
+              await appState.updateSupplier(supplier);
+            } else {
+              await appState.addSupplier(supplier);
+            }
           },
           child: Text(isEdit ? 'Save Changes' : 'Add Supplier'),
         ),

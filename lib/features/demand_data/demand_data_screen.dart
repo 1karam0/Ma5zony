@@ -1,12 +1,71 @@
+import 'package:csv/csv.dart' show CsvDecoder;
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
+import 'package:ma5zony/models/demand_record.dart';
 import 'package:ma5zony/providers/app_state.dart';
 import 'package:ma5zony/utils/constants.dart';
 import 'package:ma5zony/widgets/shared_widgets.dart';
 
 class DemandDataScreen extends StatelessWidget {
   const DemandDataScreen({super.key});
+
+  Future<void> _importCsv(BuildContext context) async {
+    final result = await FilePicker.platform.pickFiles(
+      type: FileType.custom,
+      allowedExtensions: ['csv'],
+      withData: true,
+    );
+    if (result == null || result.files.single.bytes == null) return;
+    if (!context.mounted) return;
+
+    final content = String.fromCharCodes(result.files.single.bytes!);
+    final rows = const CsvDecoder().convert(content);
+
+    // Expect header: productId, periodStart (yyyy-MM-dd), quantity
+    if (rows.length < 2) return;
+
+    final records = <DomainDemandRecord>[];
+    for (var i = 1; i < rows.length; i++) {
+      final row = rows[i];
+      if (row.length < 3) continue;
+      final productId = row[0].toString().trim();
+      final dateStr = row[1].toString().trim();
+      final qty = int.tryParse(row[2].toString().trim()) ?? 0;
+      final date = DateTime.tryParse(dateStr);
+      if (date == null || productId.isEmpty || qty <= 0) continue;
+      records.add(DomainDemandRecord(
+        id: '',
+        productId: productId,
+        periodStart: date,
+        quantity: qty,
+      ));
+    }
+
+    if (records.isEmpty) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('No valid records found in CSV')),
+        );
+      }
+      return;
+    }
+
+    await context.read<AppState>().addDemandRecordsBatch(records);
+    if (context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('${records.length} record(s) imported')),
+      );
+    }
+  }
+
+  void _showAddRecordDialog(BuildContext context) {
+    showDialog(
+      context: context,
+      builder: (_) => const _AddDemandRecordDialog(),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -24,13 +83,13 @@ class DemandDataScreen extends StatelessWidget {
                   title: 'Demand and Inventory Data Logs',
                   actions: [
                     OutlinedButton.icon(
-                      onPressed: () {},
+                      onPressed: () => _importCsv(context),
                       icon: const Icon(Icons.file_upload),
                       label: const Text('Import CSV'),
                     ),
                     const SizedBox(width: 16),
                     ElevatedButton.icon(
-                      onPressed: () {},
+                      onPressed: () => _showAddRecordDialog(context),
                       icon: const Icon(Icons.add),
                       label: const Text('Add Record'),
                       style: ElevatedButton.styleFrom(
@@ -114,11 +173,11 @@ class _DemandHistoryTab extends StatelessWidget {
                 ),
               ),
               const SizedBox(width: 16),
-              const Expanded(
+              Expanded(
                 child: KPICard(
-                  title: 'Top Sales Source',
-                  value: 'Internal',
-                  icon: Icons.store,
+                  title: 'Total Records',
+                  value: '${allRecords.length}',
+                  icon: Icons.storage,
                 ),
               ),
             ],
@@ -209,6 +268,110 @@ class _InventoryRecordsTab extends StatelessWidget {
           ),
         ),
       ),
+    );
+  }
+}
+
+// ─── Add Demand Record Dialog ─────────────────────────────────────────────────
+
+class _AddDemandRecordDialog extends StatefulWidget {
+  const _AddDemandRecordDialog();
+
+  @override
+  State<_AddDemandRecordDialog> createState() => _AddDemandRecordDialogState();
+}
+
+class _AddDemandRecordDialogState extends State<_AddDemandRecordDialog> {
+  String? _selectedProductId;
+  final _qtyCtrl = TextEditingController();
+  DateTime _selectedDate = DateTime(DateTime.now().year, DateTime.now().month, 1);
+
+  @override
+  void dispose() {
+    _qtyCtrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final products = context.read<AppState>().products;
+
+    return AlertDialog(
+      title: const Text('Add Demand Record'),
+      content: SizedBox(
+        width: 400,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            DropdownButtonFormField<String>(
+              decoration: const InputDecoration(
+                labelText: 'Product',
+                border: OutlineInputBorder(),
+              ),
+              initialValue: _selectedProductId,
+              items: products
+                  .map((p) => DropdownMenuItem(value: p.id, child: Text(p.name)))
+                  .toList(),
+              onChanged: (v) => setState(() => _selectedProductId = v),
+            ),
+            const SizedBox(height: 16),
+            TextFormField(
+              controller: _qtyCtrl,
+              decoration: const InputDecoration(
+                labelText: 'Quantity',
+                border: OutlineInputBorder(),
+              ),
+              keyboardType: TextInputType.number,
+            ),
+            const SizedBox(height: 16),
+            ListTile(
+              contentPadding: EdgeInsets.zero,
+              title: const Text('Period Start'),
+              subtitle: Text(DateFormat('MMM yyyy').format(_selectedDate)),
+              trailing: const Icon(Icons.calendar_today),
+              onTap: () async {
+                final picked = await showDatePicker(
+                  context: context,
+                  initialDate: _selectedDate,
+                  firstDate: DateTime(2020),
+                  lastDate: DateTime.now(),
+                );
+                if (picked != null) {
+                  setState(() => _selectedDate = DateTime(picked.year, picked.month, 1));
+                }
+              },
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Cancel'),
+        ),
+        ElevatedButton(
+          style: ElevatedButton.styleFrom(
+            backgroundColor: AppColors.primary,
+            foregroundColor: Colors.white,
+          ),
+          onPressed: _selectedProductId == null
+              ? null
+              : () async {
+                  final qty = int.tryParse(_qtyCtrl.text) ?? 0;
+                  if (qty <= 0) return;
+                  final record = DomainDemandRecord(
+                    id: '',
+                    productId: _selectedProductId!,
+                    periodStart: _selectedDate,
+                    quantity: qty,
+                  );
+                  final appState = context.read<AppState>();
+                  Navigator.pop(context);
+                  await appState.addDemandRecord(record);
+                },
+          child: const Text('Add Record'),
+        ),
+      ],
     );
   }
 }

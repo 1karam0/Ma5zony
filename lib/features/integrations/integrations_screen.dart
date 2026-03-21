@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
+import 'package:url_launcher/url_launcher.dart';
 import 'package:ma5zony/providers/app_state.dart';
 import 'package:ma5zony/utils/constants.dart';
 import 'package:ma5zony/widgets/shared_widgets.dart';
@@ -15,7 +16,8 @@ class IntegrationsScreen extends StatefulWidget {
 class _IntegrationsScreenState extends State<IntegrationsScreen> {
   bool _importing = false;
   bool _syncing = false;
-  final _domainController = TextEditingController(text: 'demo.myshopify.com');
+  bool _connecting = false;
+  final _domainController = TextEditingController();
 
   @override
   void dispose() {
@@ -119,12 +121,13 @@ class _IntegrationsScreenState extends State<IntegrationsScreen> {
                         Row(
                           children: [
                             ElevatedButton(
-                              onPressed: () async {
+                              onPressed: _connecting
+                                  ? null
+                                  : () async {
                                 final messenger = ScaffoldMessenger.of(context);
+                                final appState = context.read<AppState>();
                                 if (isConnected) {
-                                  await context
-                                      .read<AppState>()
-                                      .disconnectShopify();
+                                  await appState.disconnectShopify();
                                   if (mounted) {
                                     messenger.showSnackBar(
                                       const SnackBar(
@@ -135,17 +138,56 @@ class _IntegrationsScreenState extends State<IntegrationsScreen> {
                                     );
                                   }
                                 } else {
-                                  await context.read<AppState>().connectShopify(
-                                    _domainController.text,
-                                  );
-                                  if (mounted) {
+                                  final domain = _domainController.text.trim();
+                                  if (domain.isEmpty) {
                                     messenger.showSnackBar(
                                       const SnackBar(
                                         content: Text(
-                                          'Shopify store connected!',
+                                          'Enter your Shopify store domain first.',
                                         ),
                                       ),
                                     );
+                                    return;
+                                  }
+                                  setState(() => _connecting = true);
+                                  try {
+                                    // Get OAuth URL from Cloud Function
+                                    final authUrl =
+                                        await appState.getShopifyOAuthUrl(domain);
+                                    if (authUrl != null) {
+                                      final uri = Uri.parse(authUrl);
+                                      if (await canLaunchUrl(uri)) {
+                                        await launchUrl(
+                                          uri,
+                                          mode: LaunchMode.externalApplication,
+                                        );
+                                      }
+                                      // Poll until the connection is confirmed
+                                      await appState.connectShopify(domain);
+                                    }
+                                    if (mounted) {
+                                      messenger.showSnackBar(
+                                        const SnackBar(
+                                          content: Text(
+                                            'Shopify store connected!',
+                                          ),
+                                        ),
+                                      );
+                                    }
+                                  } catch (e) {
+                                    if (mounted) {
+                                      messenger.showSnackBar(
+                                        SnackBar(
+                                          content: Text(
+                                            'Connection failed: $e',
+                                          ),
+                                        ),
+                                      );
+                                    }
+                                  } finally {
+                                    if (mounted) {
+                                      setState(() => _connecting = false);
+                                    }
                                   }
                                 }
                               },
@@ -161,7 +203,16 @@ class _IntegrationsScreenState extends State<IntegrationsScreen> {
                                   vertical: 12,
                                 ),
                               ),
-                              child: Text(
+                              child: _connecting
+                                  ? const SizedBox(
+                                      width: 16,
+                                      height: 16,
+                                      child: CircularProgressIndicator(
+                                        strokeWidth: 2,
+                                        color: Colors.white,
+                                      ),
+                                    )
+                                  : Text(
                                 isConnected
                                     ? 'Disconnect Store'
                                     : 'Connect Shopify Store',

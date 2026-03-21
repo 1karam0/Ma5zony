@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:ma5zony/models/warehouse.dart';
 import 'package:ma5zony/providers/app_state.dart';
 import 'package:ma5zony/utils/constants.dart';
 import 'package:ma5zony/widgets/shared_widgets.dart';
@@ -121,7 +122,7 @@ class WarehousesScreen extends StatelessWidget {
                           children: [
                             IconButton(
                               icon: const Icon(Icons.edit, size: 20),
-                              onPressed: () {},
+                              onPressed: () => _showWarehouseDialog(context, w),
                               tooltip: 'Edit',
                             ),
                             IconButton(
@@ -130,14 +131,35 @@ class WarehousesScreen extends StatelessWidget {
                                 size: 20,
                                 color: AppColors.error,
                               ),
-                              onPressed: () {
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  SnackBar(
+                              onPressed: () async {
+                                final confirmed = await showDialog<bool>(
+                                  context: context,
+                                  builder: (ctx) => AlertDialog(
+                                    title: const Text('Delete Warehouse'),
                                     content: Text(
-                                      'Deleted warehouse: ${w.name}',
+                                      'Delete "${w.name}"? This cannot be undone.',
                                     ),
+                                    actions: [
+                                      TextButton(
+                                        onPressed: () =>
+                                            Navigator.pop(ctx, false),
+                                        child: const Text('Cancel'),
+                                      ),
+                                      TextButton(
+                                        onPressed: () =>
+                                            Navigator.pop(ctx, true),
+                                        child: const Text('Delete',
+                                            style: TextStyle(
+                                                color: AppColors.error)),
+                                      ),
+                                    ],
                                   ),
                                 );
+                                if (confirmed == true && context.mounted) {
+                                  await context
+                                      .read<AppState>()
+                                      .deleteWarehouse(w.id);
+                                }
                               },
                               tooltip: 'Delete',
                             ),
@@ -201,13 +223,18 @@ class WarehousesScreen extends StatelessWidget {
   }
 
   void _showAddWarehouseDialog(BuildContext context) {
-    final nameCtrl = TextEditingController();
-    final cityCtrl = TextEditingController();
-    final countryCtrl = TextEditingController();
+    _showWarehouseDialog(context, null);
+  }
+
+  void _showWarehouseDialog(BuildContext context, Warehouse? existing) {
+    final nameCtrl = TextEditingController(text: existing?.name ?? '');
+    final cityCtrl = TextEditingController(text: existing?.city ?? '');
+    final countryCtrl = TextEditingController(text: existing?.country ?? '');
+    final isEdit = existing != null;
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('Add New Warehouse'),
+        title: Text(isEdit ? 'Edit Warehouse' : 'Add New Warehouse'),
         content: SizedBox(
           width: 400,
           child: Column(
@@ -248,13 +275,23 @@ class WarehousesScreen extends StatelessWidget {
               backgroundColor: AppColors.primary,
               foregroundColor: Colors.white,
             ),
-            onPressed: () {
-              Navigator.pop(ctx);
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(content: Text('Warehouse "${nameCtrl.text}" added')),
+            onPressed: () async {
+              final warehouse = Warehouse(
+                id: existing?.id ?? '',
+                name: nameCtrl.text.trim(),
+                city: cityCtrl.text.trim(),
+                country: countryCtrl.text.trim(),
+                totalStock: existing?.totalStock ?? 0,
               );
+              final appState = context.read<AppState>();
+              Navigator.pop(ctx);
+              if (isEdit) {
+                await appState.updateWarehouse(warehouse);
+              } else {
+                await appState.addWarehouse(warehouse);
+              }
             },
-            child: const Text('Add Warehouse'),
+            child: Text(isEdit ? 'Save Changes' : 'Add Warehouse'),
           ),
         ],
       ),

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import 'package:ma5zony/services/mock_data_service.dart';
+import 'package:ma5zony/providers/app_state.dart';
+import 'package:ma5zony/services/settings_service.dart';
 import 'package:ma5zony/utils/constants.dart';
 import 'package:ma5zony/widgets/shared_widgets.dart';
 
@@ -48,11 +49,41 @@ class SettingsScreen extends StatelessWidget {
   }
 }
 
-class _GlobalParametersTab extends StatelessWidget {
+class _GlobalParametersTab extends StatefulWidget {
   const _GlobalParametersTab();
 
   @override
+  State<_GlobalParametersTab> createState() => _GlobalParametersTabState();
+}
+
+class _GlobalParametersTabState extends State<_GlobalParametersTab> {
+  late TextEditingController _serviceLevelCtrl;
+  late TextEditingController _leadTimeCtrl;
+  String? _planningBucket;
+  bool _initialized = false;
+
+  void _initFromSettings(UserSettings s) {
+    if (_initialized) return;
+    _serviceLevelCtrl = TextEditingController(text: '${s.serviceLevelTarget}');
+    _leadTimeCtrl = TextEditingController(text: '${s.defaultLeadTimeDays}');
+    _planningBucket = s.planningTimeBucket;
+    _initialized = true;
+  }
+
+  @override
+  void dispose() {
+    if (_initialized) {
+      _serviceLevelCtrl.dispose();
+      _leadTimeCtrl.dispose();
+    }
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final settings = context.watch<AppState>().settings;
+    _initFromSettings(settings);
+
     return SingleChildScrollView(
       padding: const EdgeInsets.all(24),
       child: SizedBox(
@@ -70,23 +101,25 @@ class _GlobalParametersTab extends StatelessWidget {
                 Text('Inventory Policies', style: AppTextStyles.h3),
                 const SizedBox(height: 24),
                 TextFormField(
-                  initialValue: '95',
+                  controller: _serviceLevelCtrl,
                   decoration: const InputDecoration(
                     labelText: 'Service Level Target (%)',
                     border: OutlineInputBorder(),
                   ),
+                  keyboardType: TextInputType.number,
                 ),
                 const SizedBox(height: 16),
                 TextFormField(
-                  initialValue: '7',
+                  controller: _leadTimeCtrl,
                   decoration: const InputDecoration(
                     labelText: 'Default Lead Time (Days)',
                     border: OutlineInputBorder(),
                   ),
+                  keyboardType: TextInputType.number,
                 ),
                 const SizedBox(height: 16),
                 DropdownButtonFormField<String>(
-                  initialValue: 'Daily',
+                  initialValue: _planningBucket,
                   decoration: const InputDecoration(
                     labelText: 'Planning Time Bucket',
                     border: OutlineInputBorder(),
@@ -96,13 +129,28 @@ class _GlobalParametersTab extends StatelessWidget {
                     DropdownMenuItem(value: 'Weekly', child: Text('Weekly')),
                     DropdownMenuItem(value: 'Monthly', child: Text('Monthly')),
                   ],
-                  onChanged: (_) {},
+                  onChanged: (v) => setState(() => _planningBucket = v),
                 ),
                 const SizedBox(height: 32),
                 SizedBox(
                   width: double.infinity,
                   child: ElevatedButton(
-                    onPressed: () {},
+                    onPressed: () async {
+                      final appState = context.read<AppState>();
+                      final updated = appState.settings.copyWith(
+                        serviceLevelTarget:
+                            double.tryParse(_serviceLevelCtrl.text),
+                        defaultLeadTimeDays:
+                            int.tryParse(_leadTimeCtrl.text),
+                        planningTimeBucket: _planningBucket,
+                      );
+                      await appState.saveSettings(updated);
+                      if (context.mounted) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(content: Text('Settings saved')),
+                        );
+                      }
+                    },
                     style: ElevatedButton.styleFrom(
                       backgroundColor: AppColors.primary,
                       foregroundColor: Colors.white,
@@ -119,11 +167,40 @@ class _GlobalParametersTab extends StatelessWidget {
   }
 }
 
-class _ForecastingDefaultsTab extends StatelessWidget {
+class _ForecastingDefaultsTab extends StatefulWidget {
   const _ForecastingDefaultsTab();
 
   @override
+  State<_ForecastingDefaultsTab> createState() =>
+      _ForecastingDefaultsTabState();
+}
+
+class _ForecastingDefaultsTabState extends State<_ForecastingDefaultsTab> {
+  late TextEditingController _smaWindowCtrl;
+  late TextEditingController _sesAlphaCtrl;
+  bool _initialized = false;
+
+  void _initFromSettings(UserSettings s) {
+    if (_initialized) return;
+    _smaWindowCtrl = TextEditingController(text: '${s.smaWindow}');
+    _sesAlphaCtrl = TextEditingController(text: '${s.sesAlpha}');
+    _initialized = true;
+  }
+
+  @override
+  void dispose() {
+    if (_initialized) {
+      _smaWindowCtrl.dispose();
+      _sesAlphaCtrl.dispose();
+    }
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final settings = context.watch<AppState>().settings;
+    _initFromSettings(settings);
+
     return SingleChildScrollView(
       padding: const EdgeInsets.all(24),
       child: SizedBox(
@@ -141,25 +218,41 @@ class _ForecastingDefaultsTab extends StatelessWidget {
                 Text('Algorithm Defaults', style: AppTextStyles.h3),
                 const SizedBox(height: 24),
                 TextFormField(
-                  initialValue: '3',
+                  controller: _smaWindowCtrl,
                   decoration: const InputDecoration(
                     labelText: 'Default SMA Window Size',
                     border: OutlineInputBorder(),
                   ),
+                  keyboardType: TextInputType.number,
                 ),
                 const SizedBox(height: 16),
                 TextFormField(
-                  initialValue: '0.5',
+                  controller: _sesAlphaCtrl,
                   decoration: const InputDecoration(
                     labelText: 'Default SES Alpha',
                     border: OutlineInputBorder(),
                   ),
+                  keyboardType: TextInputType.number,
                 ),
                 const SizedBox(height: 32),
                 SizedBox(
                   width: double.infinity,
                   child: ElevatedButton(
-                    onPressed: () {},
+                    onPressed: () async {
+                      final appState = context.read<AppState>();
+                      final updated = appState.settings.copyWith(
+                        smaWindow: int.tryParse(_smaWindowCtrl.text),
+                        sesAlpha: double.tryParse(_sesAlphaCtrl.text),
+                      );
+                      await appState.saveSettings(updated);
+                      if (context.mounted) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                            content: Text('Forecasting defaults saved'),
+                          ),
+                        );
+                      }
+                    },
                     style: ElevatedButton.styleFrom(
                       backgroundColor: AppColors.primary,
                       foregroundColor: Colors.white,
@@ -181,7 +274,7 @@ class _UserManagementTab extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final currentUser = context.watch<MockDataService>().currentUser;
+    final currentUser = context.watch<AppState>().currentUser;
 
     return SingleChildScrollView(
       padding: const EdgeInsets.all(24),
@@ -205,14 +298,6 @@ class _UserManagementTab extends StatelessWidget {
                   const DataCell(Icon(Icons.more_horiz)),
                 ],
               ),
-            const DataRow(
-              cells: [
-                DataCell(Text('Admin User')),
-                DataCell(Text('SME Owner')),
-                DataCell(StatusChip('Active')),
-                DataCell(Icon(Icons.more_horiz)),
-              ],
-            ),
           ],
         ),
       ),

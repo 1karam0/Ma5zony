@@ -174,7 +174,16 @@ class _ProductDataSource extends DataTableSource {
             children: [
               IconButton(
                 icon: const Icon(Icons.edit, size: 20),
-                onPressed: () {},
+                onPressed: () {
+                  final state = context.read<AppState>();
+                  showDialog(
+                    context: context,
+                    builder: (_) => _AddProductDialog(
+                      suppliers: state.suppliers,
+                      existingProduct: p,
+                    ),
+                  );
+                },
                 tooltip: 'Edit',
               ),
               IconButton(
@@ -183,7 +192,29 @@ class _ProductDataSource extends DataTableSource {
                   size: 20,
                   color: AppColors.error,
                 ),
-                onPressed: () {},
+                onPressed: () async {
+                  final confirmed = await showDialog<bool>(
+                    context: context,
+                    builder: (ctx) => AlertDialog(
+                      title: const Text('Delete Product'),
+                      content: Text('Delete "${p.name}"? This cannot be undone.'),
+                      actions: [
+                        TextButton(
+                          onPressed: () => Navigator.pop(ctx, false),
+                          child: const Text('Cancel'),
+                        ),
+                        TextButton(
+                          onPressed: () => Navigator.pop(ctx, true),
+                          child: const Text('Delete',
+                              style: TextStyle(color: AppColors.error)),
+                        ),
+                      ],
+                    ),
+                  );
+                  if (confirmed == true && context.mounted) {
+                    await context.read<AppState>().deleteProduct(p.id);
+                  }
+                },
                 tooltip: 'Delete',
               ),
             ],
@@ -212,12 +243,35 @@ class _ImportDialog extends StatefulWidget {
 
 class _ImportDialogState extends State<_ImportDialog> {
   final Set<String> _selectedIds = {};
+  List<Product> _shopifyProducts = [];
+  bool _loading = true;
+  String? _error;
 
-  final _mockShopifyProducts = [
-    {'id': 'sp_101', 'sku': 'SH-NEW-01', 'name': 'Summer Hat', 'price': 25.0},
-    {'id': 'sp_102', 'sku': 'SH-NEW-02', 'name': 'Beach Towel', 'price': 40.0},
-    {'id': 'sp_103', 'sku': 'SH-NEW-03', 'name': 'Sunglasses', 'price': 150.0},
-  ];
+  @override
+  void initState() {
+    super.initState();
+    _fetchProducts();
+  }
+
+  Future<void> _fetchProducts() async {
+    try {
+      final appState = context.read<AppState>();
+      final products = await appState.fetchShopifyProducts();
+      if (mounted) {
+        setState(() {
+          _shopifyProducts = products;
+          _loading = false;
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _error = e.toString();
+          _loading = false;
+        });
+      }
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -226,17 +280,35 @@ class _ImportDialogState extends State<_ImportDialog> {
       content: SizedBox(
         width: 500,
         height: 400,
-        child: Column(
+        child: _loading
+            ? const Center(child: CircularProgressIndicator())
+            : _error != null
+                ? Center(
+                    child: Text(
+                      'Failed to load products:\n$_error',
+                      textAlign: TextAlign.center,
+                    ),
+                  )
+                : _shopifyProducts.isEmpty
+                    ? const Center(
+                        child: Text(
+                          'No products found in your Shopify store.\n'
+                          'Make sure your store is connected.',
+                          textAlign: TextAlign.center,
+                        ),
+                      )
+                    : Column(
           children: [
             Row(
               children: [
                 Checkbox(
-                  value: _selectedIds.length == _mockShopifyProducts.length,
+                  value: _selectedIds.length == _shopifyProducts.length &&
+                      _shopifyProducts.isNotEmpty,
                   onChanged: (v) {
                     setState(() {
                       if (v == true) {
                         _selectedIds.addAll(
-                          _mockShopifyProducts.map((p) => p['id'] as String),
+                          _shopifyProducts.map((p) => p.id),
                         );
                       } else {
                         _selectedIds.clear();
@@ -250,10 +322,9 @@ class _ImportDialogState extends State<_ImportDialog> {
             const Divider(),
             Expanded(
               child: ListView.builder(
-                itemCount: _mockShopifyProducts.length,
+                itemCount: _shopifyProducts.length,
                 itemBuilder: (context, i) {
-                  final p = _mockShopifyProducts[i];
-                  final id = p['id'] as String;
+                  final p = _shopifyProducts[i];
                   return ListTile(
                     leading: Container(
                       width: 40,
@@ -261,16 +332,18 @@ class _ImportDialogState extends State<_ImportDialog> {
                       color: Colors.grey[200],
                       child: const Icon(Icons.image),
                     ),
-                    title: Text(p['name'] as String),
-                    subtitle: Text('${p['sku']} - \$${p['price']}'),
+                    title: Text(p.name),
+                    subtitle: Text(
+                      '${p.sku} - \$${p.unitCost.toStringAsFixed(2)}',
+                    ),
                     trailing: Checkbox(
-                      value: _selectedIds.contains(id),
+                      value: _selectedIds.contains(p.id),
                       onChanged: (v) {
                         setState(() {
                           if (v == true) {
-                            _selectedIds.add(id);
+                            _selectedIds.add(p.id);
                           } else {
-                            _selectedIds.remove(id);
+                            _selectedIds.remove(p.id);
                           }
                         });
                       },
@@ -317,7 +390,8 @@ class _ImportDialogState extends State<_ImportDialog> {
 
 class _AddProductDialog extends StatefulWidget {
   final List suppliers;
-  const _AddProductDialog({required this.suppliers});
+  final Product? existingProduct;
+  const _AddProductDialog({required this.suppliers, this.existingProduct});
 
   @override
   State<_AddProductDialog> createState() => _AddProductDialogState();
@@ -331,10 +405,26 @@ class _AddProductDialogState extends State<_AddProductDialog> {
   final _stockCtrl = TextEditingController(text: '0');
   String? _selectedSupplierId;
 
+  bool get _isEdit => widget.existingProduct != null;
+
+  @override
+  void initState() {
+    super.initState();
+    final p = widget.existingProduct;
+    if (p != null) {
+      _skuCtrl.text = p.sku;
+      _nameCtrl.text = p.name;
+      _categoryCtrl.text = p.category;
+      _costCtrl.text = p.unitCost.toStringAsFixed(2);
+      _stockCtrl.text = '${p.currentStock}';
+      _selectedSupplierId = p.supplierId;
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
-      title: const Text('Add New Product'),
+      title: Text(_isEdit ? 'Edit Product' : 'Add New Product'),
       content: SizedBox(
         width: 600,
         child: SingleChildScrollView(
@@ -425,19 +515,25 @@ class _AddProductDialogState extends State<_AddProductDialog> {
             backgroundColor: AppColors.primary,
             foregroundColor: Colors.white,
           ),
-          onPressed: () {
-            // In a real app, this would persist via the repository.
-            // For now we show the dialog and close it.
-            Navigator.pop(context);
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(
-                content: Text(
-                  'Product "${_nameCtrl.text.isEmpty ? 'New Product' : _nameCtrl.text}" added',
-                ),
-              ),
+          onPressed: () async {
+            final product = Product(
+              id: widget.existingProduct?.id ?? '',
+              sku: _skuCtrl.text.trim(),
+              name: _nameCtrl.text.trim(),
+              category: _categoryCtrl.text.trim(),
+              unitCost: double.tryParse(_costCtrl.text) ?? 0,
+              currentStock: int.tryParse(_stockCtrl.text) ?? 0,
+              supplierId: _selectedSupplierId,
             );
+            final appState = context.read<AppState>();
+            Navigator.pop(context);
+            if (_isEdit) {
+              await appState.updateProduct(product);
+            } else {
+              await appState.addProduct(product);
+            }
           },
-          child: const Text('Save Product'),
+          child: Text(_isEdit ? 'Save Changes' : 'Save Product'),
         ),
       ],
     );

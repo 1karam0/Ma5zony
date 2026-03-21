@@ -4,6 +4,7 @@ import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 import 'package:ma5zony/providers/app_state.dart';
 import 'package:ma5zony/models/forecast_result.dart';
+import 'package:ma5zony/services/settings_service.dart';
 import 'package:ma5zony/utils/constants.dart';
 import 'package:ma5zony/widgets/shared_widgets.dart';
 
@@ -16,14 +17,24 @@ class ForecastsScreen extends StatefulWidget {
 
 class _ForecastsScreenState extends State<ForecastsScreen> {
   String? _selectedProductId;
-  String _algorithm = 'SMA';
-  double _smaWindow = 3;
-  double _sesAlpha = 0.3;
+  String? _algorithm;
+  double? _smaWindow;
+  double? _sesAlpha;
   bool _running = false;
+  bool _defaultsLoaded = false;
+
+  void _loadDefaults(UserSettings s) {
+    if (_defaultsLoaded) return;
+    _algorithm = s.defaultAlgorithm;
+    _smaWindow = s.smaWindow.toDouble();
+    _sesAlpha = s.sesAlpha;
+    _defaultsLoaded = true;
+  }
 
   @override
   Widget build(BuildContext context) {
     final state = context.watch<AppState>();
+    _loadDefaults(state.settings);
     final products = state.products;
     final ForecastResult? forecast = state.currentForecast;
 
@@ -114,18 +125,18 @@ class _ForecastsScreenState extends State<ForecastsScreen> {
                     ),
                     const SizedBox(height: 24),
                     if (_algorithm == 'SMA') ...[
-                      Text('Window Size: ${_smaWindow.toInt()} months'),
+                      Text('Window Size: ${_smaWindow?.toInt() ?? 3} months'),
                       Slider(
-                        value: _smaWindow,
+                        value: _smaWindow ?? 3,
                         min: 2,
                         max: 12,
                         divisions: 10,
                         onChanged: (v) => setState(() => _smaWindow = v),
                       ),
                     ] else ...[
-                      Text('Alpha: ${_sesAlpha.toStringAsFixed(2)}'),
+                      Text('Alpha: ${(_sesAlpha ?? 0.3).toStringAsFixed(2)}'),
                       Slider(
-                        value: _sesAlpha,
+                        value: _sesAlpha ?? 0.3,
                         min: 0.1,
                         max: 0.9,
                         divisions: 8,
@@ -142,9 +153,9 @@ class _ForecastsScreenState extends State<ForecastsScreen> {
                                 setState(() => _running = true);
                                 await context.read<AppState>().runForecast(
                                   _selectedProductId!,
-                                  _algorithm,
-                                  _smaWindow.toInt(),
-                                  _sesAlpha,
+                                  _algorithm ?? 'SMA',
+                                  (_smaWindow ?? 3).toInt(),
+                                  _sesAlpha ?? 0.3,
                                 );
                                 setState(() => _running = false);
                               },

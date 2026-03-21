@@ -1,6 +1,7 @@
 // ignore_for_file: deprecated_member_use
 import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
+import 'package:go_router/go_router.dart';
 import 'package:provider/provider.dart';
 import 'package:ma5zony/providers/app_state.dart';
 import 'package:ma5zony/utils/constants.dart';
@@ -62,9 +63,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     ),
                   ),
                   ElevatedButton(
-                    onPressed: () => context.read<AppState>().connectShopify(
-                      'demo.myshopify.com',
-                    ),
+                    onPressed: () => context.go('/integrations'),
                     style: ElevatedButton.styleFrom(
                       backgroundColor: AppColors.primary,
                       foregroundColor: Colors.white,
@@ -116,8 +115,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   ),
                   KPICard(
                     title: 'Forecast Accuracy',
-                    value:
-                        '${(state.forecastAccuracy * 100).toStringAsFixed(1)}%',
+                    value: state.forecastAccuracy > 0
+                        ? '${(state.forecastAccuracy * 100).toStringAsFixed(1)}%'
+                        : 'N/A',
                     icon: Icons.auto_graph,
                     color: AppColors.success,
                   ),

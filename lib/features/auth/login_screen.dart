@@ -15,6 +15,7 @@ class _LoginScreenState extends State<LoginScreen> {
   final _emailController = TextEditingController();
   final _passwordController = TextEditingController();
   bool _isLoading = false;
+  bool _rememberMe = true;
 
   @override
   Widget build(BuildContext context) {
@@ -66,11 +67,14 @@ class _LoginScreenState extends State<LoginScreen> {
                 const SizedBox(height: 16),
                 Row(
                   children: [
-                    Checkbox(value: true, onChanged: (_) {}),
+                    Checkbox(
+                      value: _rememberMe,
+                      onChanged: (v) => setState(() => _rememberMe = v ?? true),
+                    ),
                     const Text('Remember me'),
                     const Spacer(),
                     TextButton(
-                      onPressed: () {},
+                      onPressed: _handleForgotPassword,
                       child: const Text('Forgot password?'),
                     ),
                   ],
@@ -118,7 +122,8 @@ class _LoginScreenState extends State<LoginScreen> {
 
   Future<void> _handleLogin() async {
     setState(() => _isLoading = true);
-    final success = await context.read<AppState>().login(
+    final appState = context.read<AppState>();
+    final success = await appState.login(
       _emailController.text,
       _passwordController.text,
     );
@@ -127,9 +132,33 @@ class _LoginScreenState extends State<LoginScreen> {
     if (success && mounted) {
       context.go('/dashboard');
     } else if (mounted) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('Invalid credentials')));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(appState.authError ?? 'Login failed')),
+      );
+    }
+  }
+
+  Future<void> _handleForgotPassword() async {
+    final email = _emailController.text.trim();
+    if (email.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Enter your email first')),
+      );
+      return;
+    }
+    try {
+      await context.read<AppState>().resetPassword(email);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Password reset email sent. Check your inbox.')),
+        );
+      }
+    } on Exception {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Could not send reset email. Check the address and try again.')),
+        );
+      }
     }
   }
 }

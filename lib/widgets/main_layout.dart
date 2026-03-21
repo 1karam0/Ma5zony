@@ -278,33 +278,200 @@ class _TopBar extends StatelessWidget {
         children: [
           Text(title, style: AppTextStyles.h2),
           const Spacer(),
-          Container(
-            width: 300,
-            height: 40,
-            decoration: BoxDecoration(
-              color: AppColors.background,
-              borderRadius: BorderRadius.circular(8),
-            ),
-            padding: const EdgeInsets.symmetric(horizontal: 12),
-            child: Row(
-              children: [
-                const Icon(Icons.search, color: AppColors.textSecondary),
-                const SizedBox(width: 8),
-                Text(
-                  'Search...',
-                  style: AppTextStyles.body.copyWith(
-                    color: AppColors.textSecondary,
-                  ),
-                ),
-              ],
-            ),
-          ),
+          _GlobalSearchBox(),
           const SizedBox(width: 16),
           IconButton(
             icon: const Icon(Icons.notifications_none),
             onPressed: () {},
             color: AppColors.textSecondary,
           ),
+        ],
+      ),
+    );
+  }
+}
+
+class _GlobalSearchBox extends StatefulWidget {
+  @override
+  State<_GlobalSearchBox> createState() => _GlobalSearchBoxState();
+}
+
+class _GlobalSearchBoxState extends State<_GlobalSearchBox> {
+  final _controller = TextEditingController();
+  final _focusNode = FocusNode();
+  OverlayEntry? _overlay;
+
+  @override
+  void dispose() {
+    _removeOverlay();
+    _controller.dispose();
+    _focusNode.dispose();
+    super.dispose();
+  }
+
+  void _removeOverlay() {
+    _overlay?.remove();
+    _overlay = null;
+  }
+
+  void _onChanged(String query) {
+    _removeOverlay();
+    if (query.trim().isEmpty) return;
+
+    final state = context.read<AppState>();
+    final q = query.toLowerCase();
+
+    final matchedProducts = state.products
+        .where((p) =>
+            p.name.toLowerCase().contains(q) ||
+            p.sku.toLowerCase().contains(q) ||
+            p.category.toLowerCase().contains(q))
+        .take(5)
+        .toList();
+
+    final matchedSuppliers = state.suppliers
+        .where((s) =>
+            s.name.toLowerCase().contains(q) ||
+            s.contactEmail.toLowerCase().contains(q))
+        .take(3)
+        .toList();
+
+    final matchedWarehouses = state.warehouses
+        .where((w) =>
+            w.name.toLowerCase().contains(q) ||
+            w.city.toLowerCase().contains(q))
+        .take(3)
+        .toList();
+
+    if (matchedProducts.isEmpty &&
+        matchedSuppliers.isEmpty &&
+        matchedWarehouses.isEmpty) return;
+
+    final renderBox = context.findRenderObject() as RenderBox;
+    final offset = renderBox.localToGlobal(Offset.zero);
+
+    _overlay = OverlayEntry(
+      builder: (_) => Positioned(
+        top: offset.dy + renderBox.size.height + 4,
+        left: offset.dx,
+        width: 300,
+        child: Material(
+          elevation: 8,
+          borderRadius: BorderRadius.circular(8),
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxHeight: 320),
+            child: ListView(
+              padding: const EdgeInsets.symmetric(vertical: 4),
+              shrinkWrap: true,
+              children: [
+                if (matchedProducts.isNotEmpty) ...[
+                  _sectionLabel('Products'),
+                  ...matchedProducts.map((p) => _resultTile(
+                        icon: Icons.inventory,
+                        title: p.name,
+                        subtitle: p.sku,
+                        onTap: () {
+                          _clear();
+                          context.go('/products');
+                        },
+                      )),
+                ],
+                if (matchedSuppliers.isNotEmpty) ...[
+                  _sectionLabel('Suppliers'),
+                  ...matchedSuppliers.map((s) => _resultTile(
+                        icon: Icons.local_shipping,
+                        title: s.name,
+                        subtitle: s.contactEmail,
+                        onTap: () {
+                          _clear();
+                          context.go('/suppliers');
+                        },
+                      )),
+                ],
+                if (matchedWarehouses.isNotEmpty) ...[
+                  _sectionLabel('Warehouses'),
+                  ...matchedWarehouses.map((w) => _resultTile(
+                        icon: Icons.warehouse,
+                        title: w.name,
+                        subtitle: w.city,
+                        onTap: () {
+                          _clear();
+                          context.go('/warehouses');
+                        },
+                      )),
+                ],
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+    Overlay.of(context).insert(_overlay!);
+  }
+
+  Widget _sectionLabel(String text) => Padding(
+        padding: const EdgeInsets.fromLTRB(12, 8, 12, 2),
+        child: Text(text,
+            style: AppTextStyles.label
+                .copyWith(fontWeight: FontWeight.w600, fontSize: 11)),
+      );
+
+  Widget _resultTile({
+    required IconData icon,
+    required String title,
+    required String subtitle,
+    required VoidCallback onTap,
+  }) =>
+      ListTile(
+        dense: true,
+        leading: Icon(icon, size: 18, color: AppColors.primary),
+        title: Text(title, style: AppTextStyles.body),
+        subtitle: Text(subtitle, style: AppTextStyles.label),
+        onTap: onTap,
+      );
+
+  void _clear() {
+    _controller.clear();
+    _removeOverlay();
+    _focusNode.unfocus();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 300,
+      height: 40,
+      decoration: BoxDecoration(
+        color: AppColors.background,
+        borderRadius: BorderRadius.circular(8),
+      ),
+      padding: const EdgeInsets.symmetric(horizontal: 12),
+      child: Row(
+        children: [
+          const Icon(Icons.search, color: AppColors.textSecondary, size: 20),
+          const SizedBox(width: 8),
+          Expanded(
+            child: TextField(
+              controller: _controller,
+              focusNode: _focusNode,
+              onChanged: _onChanged,
+              style: AppTextStyles.body,
+              decoration: InputDecoration(
+                hintText: 'Search products, suppliers...',
+                hintStyle:
+                    AppTextStyles.body.copyWith(color: AppColors.textSecondary),
+                border: InputBorder.none,
+                isDense: true,
+                contentPadding: EdgeInsets.zero,
+              ),
+            ),
+          ),
+          if (_controller.text.isNotEmpty)
+            GestureDetector(
+              onTap: _clear,
+              child: const Icon(Icons.close,
+                  size: 16, color: AppColors.textSecondary),
+            ),
         ],
       ),
     );

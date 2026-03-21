@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 import 'package:ma5zony/app_router.dart';
+import 'package:ma5zony/providers/app_state.dart';
 import 'package:ma5zony/utils/constants.dart';
 import 'package:google_fonts/google_fonts.dart';
 
@@ -8,6 +10,9 @@ class Ma5zonyApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final appState = context.read<AppState>();
+    final router = buildAppRouter(appState);
+
     return MaterialApp.router(
       title: 'Ma5zony - Inventory Management',
       debugShowCheckedModeBanner: false,
@@ -23,7 +28,7 @@ class Ma5zonyApp extends StatelessWidget {
         textTheme: GoogleFonts.interTextTheme(),
         scaffoldBackgroundColor: AppColors.background,
       ),
-      routerConfig: appRouter,
+      routerConfig: router,
     );
   }
 }

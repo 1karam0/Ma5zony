@@ -1,0 +1,19 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "ma5zony (Chrome)",
+      "request": "launch",
+      "type": "dart",
+      "deviceId": "chrome",
+      "args": ["--web-renderer", "canvaskit"]
+    },
+    {
+      "name": "ma5zony (Edge)",
+      "request": "launch",
+      "type": "dart",
+      "deviceId": "edge",
+      "args": ["--web-renderer", "canvaskit"]
+    }
+  ]
+}

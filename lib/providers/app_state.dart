@@ -1,4 +1,6 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
+import 'package:ma5zony/models/app_user.dart';
 import 'package:ma5zony/models/demand_record.dart';
 import 'package:ma5zony/models/forecast_result.dart';
 import 'package:ma5zony/models/product.dart';
@@ -6,69 +8,175 @@ import 'package:ma5zony/models/replenishment_recommendation.dart';
 import 'package:ma5zony/models/shopify_store_connection.dart';
 import 'package:ma5zony/models/supplier.dart';
 import 'package:ma5zony/models/warehouse.dart';
+import 'package:ma5zony/services/firebase_auth_service.dart';
+import 'package:ma5zony/services/firestore_inventory_repository.dart';
 import 'package:ma5zony/services/forecasting_service.dart';
 import 'package:ma5zony/services/inventory_policy_service.dart';
-import 'package:ma5zony/services/mock_inventory_repository.dart';
+import 'package:ma5zony/services/inventory_repository.dart';
 import 'package:ma5zony/services/replenishment_service.dart';
-import 'package:ma5zony/services/shopify_integration_service.dart';
-
-// Re-export User from app_models for auth
-import 'package:ma5zony/models/app_models.dart' show User;
+import 'package:ma5zony/services/settings_service.dart';
+import 'package:ma5zony/services/firebase_shopify_service.dart';
 
 /// Central application state ChangeNotifier.
 /// Composes all domain services and exposes reactive state to the UI.
 class AppState extends ChangeNotifier {
   // ── Services ───────────────────────────────────────────────────────────────
-  late final MockInventoryRepository _repo;
+  InventoryRepository? _repo;
+  SettingsService? _settingsService;
+  FirebaseShopifyService? _shopifyService;
   late final ForecastingService _forecastingService;
   late final InventoryPolicyService _policyService;
   late final ReplenishmentService _replenishmentService;
-  late final ShopifyIntegrationService _shopifyService;
+  late final FirebaseAuthService _authService;
 
   AppState() {
-    _repo = MockInventoryRepository();
     _forecastingService = ForecastingService();
     _policyService = InventoryPolicyService();
     _replenishmentService = ReplenishmentService(
       forecastingService: _forecastingService,
       policyService: _policyService,
     );
-    _shopifyService = MockShopifyIntegrationService(repository: _repo);
+    _authService = FirebaseAuthService();
+
+    // Listen to Firebase auth state changes and sync our AppUser.
+    _authService.authStateChanges.listen(_onAuthStateChanged);
+  }
+
+  /// Initialise Firestore repo once we know the user's uid.
+  void _initRepo(String uid) {
+    _repo = FirestoreInventoryRepository(uid: uid);
+    _settingsService = SettingsService(uid: uid);
+    _shopifyService = FirebaseShopifyService(uid: uid);
   }
 
   // ── Auth State ─────────────────────────────────────────────────────────────
-  User? _currentUser;
-  User? get currentUser => _currentUser;
+  AppUser? _currentUser;
+  AppUser? get currentUser => _currentUser;
 
-  Future<bool> login(String email, String password) async {
-    await Future.delayed(const Duration(milliseconds: 600));
-    if (email.isNotEmpty && password.isNotEmpty) {
-      _currentUser = User(
-        id: 'u1',
-        name: 'Demo User',
-        email: email,
-        role: 'Inventory Manager',
-      );
-      notifyListeners();
-      return true;
+  String? _authError;
+  String? get authError => _authError;
+
+  void _onAuthStateChanged(dynamic firebaseUser) async {
+    if (firebaseUser == null) {
+      _currentUser = null;
+      _repo = null;
+      _settingsService = null;
+      _shopifyService = null;
+      _clearDomainState();
+    } else {
+      // Fetch the Firestore user profile.
+      final profile = await _authService.getUserProfile(firebaseUser.uid);
+      if (profile != null) {
+        _currentUser = AppUser.fromFirestore(firebaseUser.uid, profile);
+      } else {
+        // Fallback when profile doc hasn't been created yet.
+        _currentUser = AppUser(
+          uid: firebaseUser.uid,
+          name: firebaseUser.displayName ?? '',
+          email: firebaseUser.email ?? '',
+          role: 'Inventory Manager',
+        );
+      }
+      _initRepo(firebaseUser.uid);
     }
-    return false;
-  }
-
-  void logout() {
-    _currentUser = null;
     notifyListeners();
   }
 
-  Future<void> register(
+  void _clearDomainState() {
+    _products = [];
+    _warehouses = [];
+    _suppliers = [];
+    _demandByProduct = {};
+    _recommendations = [];
+    _currentForecast = null;
+    _shopifyConnection = null;
+    _settings = const UserSettings();
+    _approvedRecommendations = {};
+  }
+
+  Future<bool> login(String email, String password) async {
+    _authError = null;
+    try {
+      final user = await _authService.login(email, password);
+      if (user != null) {
+        final profile = await _authService.getUserProfile(user.uid);
+        if (profile != null) {
+          _currentUser = AppUser.fromFirestore(user.uid, profile);
+        } else {
+          _currentUser = AppUser(
+            uid: user.uid,
+            name: user.displayName ?? '',
+            email: user.email ?? '',
+            role: 'Inventory Manager',
+          );
+        }
+        _initRepo(user.uid);
+        notifyListeners();
+        return true;
+      }
+      return false;
+    } on Exception catch (e) {
+      _authError = _parseFirebaseError(e);
+      notifyListeners();
+      return false;
+    }
+  }
+
+  Future<void> logout() async {
+    await _authService.logout();
+    _currentUser = null;
+    _repo = null;
+    _settingsService = null;
+    _shopifyService = null;
+    _clearDomainState();
+    notifyListeners();
+  }
+
+  Future<bool> register(
     String name,
     String email,
     String password,
     String role,
   ) async {
-    await Future.delayed(const Duration(milliseconds: 600));
-    _currentUser = User(id: 'u2', name: name, email: email, role: role);
-    notifyListeners();
+    _authError = null;
+    try {
+      final user = await _authService.register(
+        name: name,
+        email: email,
+        password: password,
+        role: role,
+      );
+      if (user != null) {
+        _currentUser = AppUser(
+          uid: user.uid,
+          name: name,
+          email: email,
+          role: role,
+        );
+        notifyListeners();
+        return true;
+      }
+      return false;
+    } on Exception catch (e) {
+      _authError = _parseFirebaseError(e);
+      notifyListeners();
+      return false;
+    }
+  }
+
+  Future<void> resetPassword(String email) async {
+    await _authService.resetPassword(email);
+  }
+
+  String _parseFirebaseError(Exception e) {
+    final msg = e.toString();
+    if (msg.contains('user-not-found')) return 'No account found with that email.';
+    if (msg.contains('wrong-password')) return 'Incorrect password.';
+    if (msg.contains('invalid-email')) return 'Invalid email address.';
+    if (msg.contains('email-already-in-use')) return 'An account already exists with that email.';
+    if (msg.contains('weak-password')) return 'Password must be at least 6 characters.';
+    if (msg.contains('invalid-credential')) return 'Invalid email or password.';
+    return 'Authentication failed. Please try again.';
   }
 
   // ── Domain State ───────────────────────────────────────────────────────────
@@ -82,6 +190,8 @@ class AppState extends ChangeNotifier {
   List<ReplenishmentRecommendation> _recommendations = [];
   ForecastResult? _currentForecast;
   ShopifyStoreConnection? _shopifyConnection;
+  UserSettings _settings = const UserSettings();
+  Set<String> _approvedRecommendations = {};
 
   List<Product> get products => _products;
   List<Warehouse> get warehouses => _warehouses;
@@ -90,6 +200,128 @@ class AppState extends ChangeNotifier {
   List<ReplenishmentRecommendation> get recommendations => _recommendations;
   ForecastResult? get currentForecast => _currentForecast;
   ShopifyStoreConnection? get shopifyConnection => _shopifyConnection;
+  UserSettings get settings => _settings;
+  Set<String> get approvedRecommendations => _approvedRecommendations;
+
+  // ── Product CRUD ───────────────────────────────────────────────────────────
+
+  Future<void> addProduct(Product product) async {
+    final saved = await _repo!.addProduct(product);
+    _products.add(saved);
+    _rebuildRecommendations();
+    notifyListeners();
+  }
+
+  Future<void> updateProduct(Product product) async {
+    await _repo!.updateProduct(product);
+    final idx = _products.indexWhere((p) => p.id == product.id);
+    if (idx != -1) _products[idx] = product;
+    _rebuildRecommendations();
+    notifyListeners();
+  }
+
+  Future<void> deleteProduct(String productId) async {
+    await _repo!.deleteProduct(productId);
+    _products.removeWhere((p) => p.id == productId);
+    _rebuildRecommendations();
+    notifyListeners();
+  }
+
+  // ── Supplier CRUD ──────────────────────────────────────────────────────────
+
+  Future<void> addSupplier(Supplier supplier) async {
+    final saved = await _repo!.addSupplier(supplier);
+    _suppliers.add(saved);
+    notifyListeners();
+  }
+
+  Future<void> updateSupplier(Supplier supplier) async {
+    await _repo!.updateSupplier(supplier);
+    final idx = _suppliers.indexWhere((s) => s.id == supplier.id);
+    if (idx != -1) _suppliers[idx] = supplier;
+    notifyListeners();
+  }
+
+  Future<void> deleteSupplier(String supplierId) async {
+    await _repo!.deleteSupplier(supplierId);
+    _suppliers.removeWhere((s) => s.id == supplierId);
+    notifyListeners();
+  }
+
+  // ── Warehouse CRUD ─────────────────────────────────────────────────────────
+
+  Future<void> addWarehouse(Warehouse warehouse) async {
+    final saved = await _repo!.addWarehouse(warehouse);
+    _warehouses.add(saved);
+    notifyListeners();
+  }
+
+  Future<void> updateWarehouse(Warehouse warehouse) async {
+    await _repo!.updateWarehouse(warehouse);
+    final idx = _warehouses.indexWhere((w) => w.id == warehouse.id);
+    if (idx != -1) _warehouses[idx] = warehouse;
+    notifyListeners();
+  }
+
+  Future<void> deleteWarehouse(String warehouseId) async {
+    await _repo!.deleteWarehouse(warehouseId);
+    _warehouses.removeWhere((w) => w.id == warehouseId);
+    notifyListeners();
+  }
+
+  // ── Demand Record CRUD ─────────────────────────────────────────────────────
+
+  Future<void> addDemandRecord(DomainDemandRecord record) async {
+    final saved = await _repo!.addDemandRecord(record);
+    _demandByProduct.putIfAbsent(saved.productId, () => []).add(saved);
+    _rebuildRecommendations();
+    notifyListeners();
+  }
+
+  Future<void> addDemandRecordsBatch(List<DomainDemandRecord> records) async {
+    for (final record in records) {
+      final saved = await _repo!.addDemandRecord(record);
+      _demandByProduct.putIfAbsent(saved.productId, () => []).add(saved);
+    }
+    _rebuildRecommendations();
+    notifyListeners();
+  }
+
+  // ── Settings ───────────────────────────────────────────────────────────────
+
+  Future<void> loadSettings() async {
+    if (_settingsService == null) return;
+    _settings = await _settingsService!.load();
+    notifyListeners();
+  }
+
+  Future<void> saveSettings(UserSettings updated) async {
+    if (_settingsService == null) return;
+    await _settingsService!.save(updated);
+    _settings = updated;
+    notifyListeners();
+  }
+
+  // ── Replenishment Approval ─────────────────────────────────────────────────
+
+  Future<void> approveRecommendation(ReplenishmentRecommendation rec) async {
+    if (_repo == null || _currentUser == null) return;
+    // Store approval under users/{uid}/approvals/{productId}
+    await FirebaseFirestore.instance
+        .collection('users')
+        .doc(_currentUser!.uid)
+        .collection('approvals')
+        .doc(rec.productId)
+        .set({
+      'productId': rec.productId,
+      'productName': rec.productName,
+      'sku': rec.sku,
+      'suggestedOrderQty': rec.suggestedOrderQty,
+      'approvedAt': FieldValue.serverTimestamp(),
+    });
+    _approvedRecommendations.add(rec.productId);
+    notifyListeners();
+  }
 
   // ── Computed KPIs ──────────────────────────────────────────────────────────
 
@@ -103,9 +335,9 @@ class AppState extends ChangeNotifier {
   /// Open replenishment recommendations count.
   int get openRecommendations => _recommendations.length;
 
-  /// Forecast accuracy = 1 – MAPE (falls back to 0.85 when no forecast run yet).
+  /// Forecast accuracy = 1 – MAPE (0.0 when no forecast has been run yet).
   double get forecastAccuracy =>
-      _currentForecast?.mape != null ? 1 - _currentForecast!.mape! : 0.85;
+      _currentForecast?.mape != null ? 1 - _currentForecast!.mape! : 0.0;
 
   // ── Load All Data ──────────────────────────────────────────────────────────
 
@@ -113,20 +345,39 @@ class AppState extends ChangeNotifier {
     _isLoading = true;
     notifyListeners();
 
+    if (_repo == null) {
+      _isLoading = false;
+      notifyListeners();
+      return;
+    }
+
     try {
       final results = await Future.wait([
-        _repo.getProducts(),
-        _repo.getWarehouses(),
-        _repo.getSuppliers(),
-        _repo.getDemandHistory(),
-        _shopifyService.getCurrentConnection(),
+        _repo!.getProducts(),
+        _repo!.getWarehouses(),
+        _repo!.getSuppliers(),
+        _repo!.getDemandHistory(),
       ]);
 
       _products = results[0] as List<Product>;
       _warehouses = results[1] as List<Warehouse>;
       _suppliers = results[2] as List<Supplier>;
       _demandByProduct = results[3] as Map<String, List<DomainDemandRecord>>;
-      _shopifyConnection = results[4] as ShopifyStoreConnection;
+
+      await loadSettings();
+
+      // Load Shopify connection state
+      await _loadShopifyConnection();
+
+      // Load approvals
+      if (_currentUser != null) {
+        final approvalSnap = await FirebaseFirestore.instance
+            .collection('users')
+            .doc(_currentUser!.uid)
+            .collection('approvals')
+            .get();
+        _approvedRecommendations = approvalSnap.docs.map((d) => d.id).toSet();
+      }
 
       _rebuildRecommendations();
     } finally {
@@ -171,34 +422,76 @@ class AppState extends ChangeNotifier {
       products: _products,
       demandByProduct: _demandByProduct,
       suppliers: supplierMap,
+      settings: _settings,
     );
   }
 
   // ── Shopify ────────────────────────────────────────────────────────────────
 
+  /// Returns the OAuth URL the UI should open in a browser.
+  /// After the user approves, call [waitForShopifyConnection] to poll.
+  Future<String?> getShopifyOAuthUrl(String shopDomain) async {
+    if (_shopifyService == null) return null;
+    return _shopifyService!.getOAuthUrl(shopDomain);
+  }
+
+  /// Polls Firestore until the OAuth callback writes the connection doc.
   Future<void> connectShopify(String shopDomain) async {
-    _shopifyConnection = await _shopifyService.connectStore(
+    if (_shopifyService == null) return;
+    _shopifyConnection = await _shopifyService!.connectStore(
       shopDomain: shopDomain,
     );
     notifyListeners();
   }
 
   Future<void> disconnectShopify() async {
-    await _shopifyService.disconnectStore();
-    _shopifyConnection = await _shopifyService.getCurrentConnection();
+    if (_shopifyService == null) {
+      _shopifyConnection = null;
+      notifyListeners();
+      return;
+    }
+    await _shopifyService!.disconnectStore();
+    _shopifyConnection = null;
     notifyListeners();
   }
 
   Future<void> importShopifyProducts() async {
-    await _shopifyService.importProductsFromShopify();
-    _products = await _repo.getProducts();
+    if (_shopifyService == null) return;
+    final imported = await _shopifyService!.importProductsFromShopify();
+    // Merge into local state
+    for (final p in imported) {
+      final idx = _products.indexWhere((e) => e.id == p.id);
+      if (idx != -1) {
+        _products[idx] = p;
+      } else {
+        _products.add(p);
+      }
+    }
     _rebuildRecommendations();
     notifyListeners();
   }
 
   Future<void> syncShopifyInventory() async {
-    await _shopifyService.syncInventoryFromShopify();
-    _shopifyConnection = await _shopifyService.getCurrentConnection();
+    if (_shopifyService == null) return;
+    await _shopifyService!.syncInventoryFromShopify();
+    // Reload products to get updated stock levels.
+    if (_repo != null) {
+      _products = await _repo!.getProducts();
+      _rebuildRecommendations();
+    }
+    _shopifyConnection = await _shopifyService!.getCurrentConnection();
     notifyListeners();
+  }
+
+  /// Fetches available products from the Shopify store for the import dialog.
+  Future<List<Product>> fetchShopifyProducts() async {
+    if (_shopifyService == null) return [];
+    return _shopifyService!.fetchShopifyProducts();
+  }
+
+  /// Loads Shopify connection state from Firestore.
+  Future<void> _loadShopifyConnection() async {
+    if (_shopifyService == null) return;
+    _shopifyConnection = await _shopifyService!.getCurrentConnection();
   }
 }

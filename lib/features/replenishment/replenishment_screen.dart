@@ -1,8 +1,11 @@
+import 'package:csv/csv.dart' show CsvEncoder;
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:ma5zony/providers/app_state.dart';
 import 'package:ma5zony/models/replenishment_recommendation.dart';
 import 'package:ma5zony/utils/constants.dart';
+import 'package:ma5zony/utils/download_helper.dart';
 import 'package:ma5zony/widgets/shared_widgets.dart';
 
 class ReplenishmentScreen extends StatefulWidget {
@@ -14,6 +17,69 @@ class ReplenishmentScreen extends StatefulWidget {
 
 class _ReplenishmentScreenState extends State<ReplenishmentScreen> {
   String _searchQuery = '';
+
+  void _exportCsv(
+    BuildContext context,
+    List<ReplenishmentRecommendation> recs,
+    Map<String, dynamic> productMap,
+  ) {
+    final rows = <List<dynamic>>[
+      ['Product', 'SKU', 'Stock', 'Forecast', 'ROP', 'Suggested Qty', 'Status'],
+      ...recs.map((r) => [
+            r.productName,
+            r.sku,
+            r.currentStock,
+            r.forecastNextPeriod,
+            r.reorderPoint,
+            r.suggestedOrderQty,
+            r.status,
+          ]),
+    ];
+    final csvString = const CsvEncoder().convert(rows);
+
+    if (kIsWeb) {
+      downloadCsvWeb(csvString, 'replenishment_export.csv');
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('CSV downloaded')),
+      );
+    } else {
+      // Non-web fallback: show in a dialog
+      showDialog(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('CSV Export'),
+          content: SingleChildScrollView(child: SelectableText(csvString)),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('Close'),
+            ),
+          ],
+        ),
+      );
+    }
+  }
+
+  Widget _buildApproveButton(BuildContext context, ReplenishmentRecommendation r) {
+    final approved = context.watch<AppState>().approvedRecommendations;
+    if (approved.contains(r.productId)) {
+      return const Chip(
+        label: Text('Approved', style: TextStyle(color: Colors.white, fontSize: 12)),
+        backgroundColor: AppColors.success,
+      );
+    }
+    return TextButton(
+      onPressed: () async {
+        await context.read<AppState>().approveRecommendation(r);
+        if (context.mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Order for ${r.productName} approved!')),
+          );
+        }
+      },
+      child: const Text('Approve'),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -117,7 +183,7 @@ class _ReplenishmentScreenState extends State<ReplenishmentScreen> {
                       ),
                       const SizedBox(width: 16),
                       ElevatedButton.icon(
-                        onPressed: () {},
+                        onPressed: () => _exportCsv(context, recommendations, productMap),
                         icon: const Icon(Icons.download),
                         label: const Text('Export'),
                         style: ElevatedButton.styleFrom(
@@ -217,19 +283,7 @@ class _ReplenishmentScreenState extends State<ReplenishmentScreen> {
                                   ),
                                   DataCell(StatusChip(r.status)),
                                   DataCell(
-                                    TextButton(
-                                      onPressed: () =>
-                                          ScaffoldMessenger.of(
-                                            context,
-                                          ).showSnackBar(
-                                            SnackBar(
-                                              content: Text(
-                                                'Order for ${r.productName} approved!',
-                                              ),
-                                            ),
-                                          ),
-                                      child: const Text('Approve'),
-                                    ),
+                                    _buildApproveButton(context, r),
                                   ),
                                 ],
                               );

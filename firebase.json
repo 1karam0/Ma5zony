@@ -1,0 +1,25 @@
+{
+  "functions": [
+    {
+      "source": "functions",
+      "codebase": "default",
+      "ignore": ["node_modules", ".git"],
+      "predeploy": []
+    }
+  ],
+  "flutter": {
+    "platforms": {
+      "dart": {
+        "lib/firebase_options.dart": {
+          "projectId": "ma5zony",
+          "configurations": {
+            "ios": "1:184799104005:ios:317368f927a512942b606c",
+            "macos": "1:184799104005:ios:317368f927a512942b606c",
+            "web": "1:184799104005:web:952337bffa1c112c2b606c",
+            "windows": "1:184799104005:web:ee849a434f5e3aea2b606c"
+          }
+        }
+      }
+    }
+  }
+}

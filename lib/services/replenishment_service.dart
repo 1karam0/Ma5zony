@@ -4,6 +4,7 @@ import 'package:ma5zony/models/replenishment_recommendation.dart';
 import 'package:ma5zony/models/supplier.dart';
 import 'package:ma5zony/services/forecasting_service.dart';
 import 'package:ma5zony/services/inventory_policy_service.dart';
+import 'package:ma5zony/services/settings_service.dart';
 
 /// Builds replenishment recommendations from products, demand history and
 /// supplier metadata using [ForecastingService] and [InventoryPolicyService].
@@ -21,10 +22,22 @@ class ReplenishmentService {
   /// current stock is at or below the computed reorder point.
   ///
   /// Uses a default supplier when none matches (leadTime = 7 days).
+  /// Maps a service-level percentage (e.g. 95) to its Z-score.
+  static double _serviceLevelToZ(double serviceLevelPercent) {
+    if (serviceLevelPercent >= 99) return 2.33;
+    if (serviceLevelPercent >= 97.5) return 1.96;
+    if (serviceLevelPercent >= 95) return 1.65;
+    if (serviceLevelPercent >= 90) return 1.28;
+    if (serviceLevelPercent >= 85) return 1.04;
+    if (serviceLevelPercent >= 80) return 0.84;
+    return 0.67;
+  }
+
   List<ReplenishmentRecommendation> buildRecommendations({
     required List<Product> products,
     required Map<String, List<DomainDemandRecord>> demandByProduct,
     required Map<String, Supplier> suppliers,
+    UserSettings? settings,
   }) {
     final recommendations = <ReplenishmentRecommendation>[];
 
@@ -51,6 +64,9 @@ class ReplenishmentService {
         product: product,
         demandSeries: demandSeries,
         supplier: supplier,
+        serviceLevelZ: settings != null
+            ? _serviceLevelToZ(settings.serviceLevelTarget)
+            : 1.65,
       );
 
       // Only include products at or below ROP
