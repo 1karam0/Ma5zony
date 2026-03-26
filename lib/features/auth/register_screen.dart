@@ -14,6 +14,7 @@ class RegisterScreen extends StatefulWidget {
 
 class _RegisterScreenState extends State<RegisterScreen> {
   String _selectedRole = 'Inventory Manager';
+  final _formKey = GlobalKey<FormState>();
   final _nameController = TextEditingController();
   final _emailController = TextEditingController();
   final _passwordController = TextEditingController();
@@ -33,7 +34,9 @@ class _RegisterScreenState extends State<RegisterScreen> {
           child: Container(
             width: 500,
             padding: const EdgeInsets.all(32),
-            child: Column(
+            child: Form(
+              key: _formKey,
+              child: Column(
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
@@ -67,25 +70,37 @@ class _RegisterScreenState extends State<RegisterScreen> {
                   ],
                 ),
                 const SizedBox(height: 24),
-                TextField(
+                TextFormField(
                   controller: _nameController,
                   decoration: const InputDecoration(
                     labelText: 'Full Name',
                     border: OutlineInputBorder(),
                     prefixIcon: Icon(Icons.person_outline),
                   ),
+                  validator: (v) {
+                    if (v == null || v.trim().isEmpty) return 'Name is required';
+                    return null;
+                  },
                 ),
                 const SizedBox(height: 16),
-                TextField(
+                TextFormField(
                   controller: _emailController,
                   decoration: const InputDecoration(
                     labelText: 'Email',
                     border: OutlineInputBorder(),
                     prefixIcon: Icon(Icons.email_outlined),
                   ),
+                  keyboardType: TextInputType.emailAddress,
+                  validator: (v) {
+                    if (v == null || v.trim().isEmpty) return 'Email is required';
+                    if (!RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]+$').hasMatch(v.trim())) {
+                      return 'Enter a valid email address';
+                    }
+                    return null;
+                  },
                 ),
                 const SizedBox(height: 16),
-                TextField(
+                TextFormField(
                   controller: _passwordController,
                   obscureText: true,
                   decoration: const InputDecoration(
@@ -93,9 +108,14 @@ class _RegisterScreenState extends State<RegisterScreen> {
                     border: OutlineInputBorder(),
                     prefixIcon: Icon(Icons.lock_outline),
                   ),
+                  validator: (v) {
+                    if (v == null || v.isEmpty) return 'Password is required';
+                    if (v.length < 6) return 'Must be at least 6 characters';
+                    return null;
+                  },
                 ),
                 const SizedBox(height: 16),
-                TextField(
+                TextFormField(
                   controller: _confirmPasswordController,
                   obscureText: true,
                   decoration: const InputDecoration(
@@ -103,6 +123,10 @@ class _RegisterScreenState extends State<RegisterScreen> {
                     border: OutlineInputBorder(),
                     prefixIcon: Icon(Icons.lock_outline),
                   ),
+                  validator: (v) {
+                    if (v != _passwordController.text) return 'Passwords do not match';
+                    return null;
+                  },
                 ),
                 const SizedBox(height: 24),
                 ElevatedButton(
@@ -139,6 +163,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                 ),
               ],
             ),
+            ),
           ),
         ),
       ),
@@ -146,18 +171,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
   }
 
   Future<void> _handleRegister() async {
-    if (_passwordController.text != _confirmPasswordController.text) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Passwords do not match')),
-      );
-      return;
-    }
-    if (_passwordController.text.length < 6) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Password must be at least 6 characters')),
-      );
-      return;
-    }
+    if (!_formKey.currentState!.validate()) return;
 
     setState(() => _isLoading = true);
     final appState = context.read<AppState>();

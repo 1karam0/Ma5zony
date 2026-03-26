@@ -12,6 +12,7 @@ class LoginScreen extends StatefulWidget {
 }
 
 class _LoginScreenState extends State<LoginScreen> {
+  final _formKey = GlobalKey<FormState>();
   final _emailController = TextEditingController();
   final _passwordController = TextEditingController();
   bool _isLoading = false;
@@ -30,7 +31,9 @@ class _LoginScreenState extends State<LoginScreen> {
           child: Container(
             width: 400,
             padding: const EdgeInsets.all(32),
-            child: Column(
+            child: Form(
+              key: _formKey,
+              child: Column(
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
@@ -46,16 +49,24 @@ class _LoginScreenState extends State<LoginScreen> {
                   textAlign: TextAlign.center,
                 ),
                 const SizedBox(height: 32),
-                TextField(
+                TextFormField(
                   controller: _emailController,
                   decoration: const InputDecoration(
                     labelText: 'Email',
                     border: OutlineInputBorder(),
                     prefixIcon: Icon(Icons.email_outlined),
                   ),
+                  keyboardType: TextInputType.emailAddress,
+                  validator: (v) {
+                    if (v == null || v.trim().isEmpty) return 'Email is required';
+                    if (!RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]+$').hasMatch(v.trim())) {
+                      return 'Enter a valid email address';
+                    }
+                    return null;
+                  },
                 ),
                 const SizedBox(height: 16),
-                TextField(
+                TextFormField(
                   controller: _passwordController,
                   obscureText: true,
                   decoration: const InputDecoration(
@@ -63,6 +74,10 @@ class _LoginScreenState extends State<LoginScreen> {
                     border: OutlineInputBorder(),
                     prefixIcon: Icon(Icons.lock_outline),
                   ),
+                  validator: (v) {
+                    if (v == null || v.isEmpty) return 'Password is required';
+                    return null;
+                  },
                 ),
                 const SizedBox(height: 16),
                 Row(
@@ -114,6 +129,7 @@ class _LoginScreenState extends State<LoginScreen> {
                 ),
               ],
             ),
+            ),
           ),
         ),
       ),
@@ -121,6 +137,7 @@ class _LoginScreenState extends State<LoginScreen> {
   }
 
   Future<void> _handleLogin() async {
+    if (!_formKey.currentState!.validate()) return;
     setState(() => _isLoading = true);
     final appState = context.read<AppState>();
     final success = await appState.login(

@@ -72,7 +72,23 @@ class SuppliersScreen extends StatelessWidget {
           ),
           const SizedBox(height: 24),
 
-          Card(
+          if (suppliers.isEmpty)
+            const Padding(
+              padding: EdgeInsets.symmetric(vertical: 48),
+              child: Center(
+                child: Column(
+                  children: [
+                    Icon(Icons.local_shipping_outlined, size: 64, color: Colors.grey),
+                    SizedBox(height: 16),
+                    Text('No suppliers yet', style: TextStyle(fontSize: 18, color: Colors.grey)),
+                    SizedBox(height: 8),
+                    Text('Add your first supplier to get started.', style: TextStyle(color: Colors.grey)),
+                  ],
+                ),
+              ),
+            )
+          else
+            Card(
             elevation: 2,
             shape: RoundedRectangleBorder(
               borderRadius: BorderRadius.circular(12),
@@ -156,9 +172,17 @@ class SuppliersScreen extends StatelessWidget {
                                   ),
                                 );
                                 if (confirmed == true && context.mounted) {
-                                  await context
-                                      .read<AppState>()
-                                      .deleteSupplier(s.id);
+                                  try {
+                                    await context
+                                        .read<AppState>()
+                                        .deleteSupplier(s.id);
+                                  } catch (e) {
+                                    if (context.mounted) {
+                                      ScaffoldMessenger.of(context).showSnackBar(
+                                        SnackBar(content: Text('Failed to delete supplier: $e')),
+                                      );
+                                    }
+                                  }
                                 }
                               },
                               tooltip: 'Delete',
@@ -239,6 +263,7 @@ class _SupplierFormDialog extends StatefulWidget {
 }
 
 class _SupplierFormDialogState extends State<_SupplierFormDialog> {
+  final _formKey = GlobalKey<FormState>();
   late final TextEditingController _nameCtrl;
   late final TextEditingController _emailCtrl;
   late final TextEditingController _phoneCtrl;
@@ -272,42 +297,58 @@ class _SupplierFormDialogState extends State<_SupplierFormDialog> {
       title: Text(isEdit ? 'Edit Supplier' : 'Add New Supplier'),
       content: SizedBox(
         width: 400,
-        child: SingleChildScrollView(
-          child: Column(
-            children: [
-              TextFormField(
-                controller: _nameCtrl,
-                decoration: const InputDecoration(labelText: 'Supplier Name'),
-              ),
-              const SizedBox(height: 16),
-              Row(
-                children: [
-                  Expanded(
-                    child: TextFormField(
-                      controller: _emailCtrl,
-                      decoration: const InputDecoration(
-                        labelText: 'Contact Email',
+        child: Form(
+          key: _formKey,
+          child: SingleChildScrollView(
+            child: Column(
+              children: [
+                TextFormField(
+                  controller: _nameCtrl,
+                  decoration: const InputDecoration(labelText: 'Supplier Name'),
+                  validator: (v) => v == null || v.trim().isEmpty ? 'Name is required' : null,
+                ),
+                const SizedBox(height: 16),
+                Row(
+                  children: [
+                    Expanded(
+                      child: TextFormField(
+                        controller: _emailCtrl,
+                        decoration: const InputDecoration(
+                          labelText: 'Contact Email',
+                        ),
+                        validator: (v) {
+                          if (v == null || v.trim().isEmpty) return 'Email is required';
+                          final emailRegex = RegExp(r'^[^@]+@[^@]+\.[^@]+$');
+                          if (!emailRegex.hasMatch(v.trim())) return 'Enter a valid email';
+                          return null;
+                        },
                       ),
                     ),
-                  ),
-                  const SizedBox(width: 16),
-                  Expanded(
-                    child: TextFormField(
-                      controller: _phoneCtrl,
-                      decoration: const InputDecoration(labelText: 'Phone'),
+                    const SizedBox(width: 16),
+                    Expanded(
+                      child: TextFormField(
+                        controller: _phoneCtrl,
+                        decoration: const InputDecoration(labelText: 'Phone'),
+                      ),
                     ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 16),
-              TextFormField(
-                controller: _leadTimeCtrl,
-                decoration: const InputDecoration(
-                  labelText: 'Lead Time (days)',
+                  ],
                 ),
-                keyboardType: TextInputType.number,
-              ),
-            ],
+                const SizedBox(height: 16),
+                TextFormField(
+                  controller: _leadTimeCtrl,
+                  decoration: const InputDecoration(
+                    labelText: 'Lead Time (days)',
+                  ),
+                  keyboardType: TextInputType.number,
+                  validator: (v) {
+                    if (v == null || v.trim().isEmpty) return 'Lead time is required';
+                    final val = int.tryParse(v);
+                    if (val == null || val < 1) return 'Enter a positive number';
+                    return null;
+                  },
+                ),
+              ],
+            ),
           ),
         ),
       ),
@@ -322,6 +363,7 @@ class _SupplierFormDialogState extends State<_SupplierFormDialog> {
             foregroundColor: Colors.white,
           ),
           onPressed: () async {
+            if (!_formKey.currentState!.validate()) return;
             final supplier = Supplier(
               id: widget.supplier?.id ?? '',
               name: _nameCtrl.text.trim(),

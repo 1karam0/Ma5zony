@@ -226,7 +226,23 @@ class _DemandHistoryTabState extends State<_DemandHistoryTab> {
           ),
           const SizedBox(height: 16),
 
-          Card(
+          if (allRecords.isEmpty)
+            const Padding(
+              padding: EdgeInsets.symmetric(vertical: 48),
+              child: Center(
+                child: Column(
+                  children: [
+                    Icon(Icons.show_chart, size: 64, color: Colors.grey),
+                    SizedBox(height: 16),
+                    Text('No demand records yet', style: TextStyle(fontSize: 18, color: Colors.grey)),
+                    SizedBox(height: 8),
+                    Text('Add a demand record or import from Shopify.', style: TextStyle(color: Colors.grey)),
+                  ],
+                ),
+              ),
+            )
+          else
+            Card(
             elevation: 2,
             shape: RoundedRectangleBorder(
               borderRadius: BorderRadius.circular(12),
@@ -295,12 +311,11 @@ class _InventoryRecordsTab extends StatelessWidget {
               DataColumn(label: Text('Warehouse')),
             ],
             rows: products.map((p) {
-              final warehouse = state.warehouses.firstWhere(
-                (w) => w.id == p.warehouseId,
-                orElse: () => state.warehouses.isNotEmpty
-                    ? state.warehouses.first
-                    : throw StateError('No warehouses'),
-              );
+              final warehouseName = state.warehouses.isEmpty
+                  ? '—'
+                  : (state.warehouses.any((w) => w.id == p.warehouseId)
+                      ? state.warehouses.firstWhere((w) => w.id == p.warehouseId).name
+                      : state.warehouses.first.name);
               return DataRow(
                 cells: [
                   DataCell(Text(p.sku)),
@@ -308,7 +323,7 @@ class _InventoryRecordsTab extends StatelessWidget {
                   DataCell(Text(p.category)),
                   DataCell(Text('${p.currentStock}')),
                   DataCell(Text('\$${p.unitCost.toStringAsFixed(2)}')),
-                  DataCell(Text(warehouse.name)),
+                  DataCell(Text(warehouseName)),
                 ],
               );
             }).toList(),
@@ -329,6 +344,7 @@ class _AddDemandRecordDialog extends StatefulWidget {
 }
 
 class _AddDemandRecordDialogState extends State<_AddDemandRecordDialog> {
+  final _formKey = GlobalKey<FormState>();
   String? _selectedProductId;
   final _qtyCtrl = TextEditingController();
   DateTime _selectedDate = DateTime(DateTime.now().year, DateTime.now().month, 1);
@@ -347,48 +363,58 @@ class _AddDemandRecordDialogState extends State<_AddDemandRecordDialog> {
       title: const Text('Add Demand Record'),
       content: SizedBox(
         width: 400,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            DropdownButtonFormField<String>(
-              decoration: const InputDecoration(
-                labelText: 'Product',
-                border: OutlineInputBorder(),
+        child: Form(
+          key: _formKey,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              DropdownButtonFormField<String>(
+                decoration: const InputDecoration(
+                  labelText: 'Product',
+                  border: OutlineInputBorder(),
+                ),
+                value: _selectedProductId,
+                items: products
+                    .map((p) => DropdownMenuItem(value: p.id, child: Text(p.name)))
+                    .toList(),
+                onChanged: (v) => setState(() => _selectedProductId = v),
+                validator: (v) => v == null ? 'Select a product' : null,
               ),
-              initialValue: _selectedProductId,
-              items: products
-                  .map((p) => DropdownMenuItem(value: p.id, child: Text(p.name)))
-                  .toList(),
-              onChanged: (v) => setState(() => _selectedProductId = v),
-            ),
-            const SizedBox(height: 16),
-            TextFormField(
-              controller: _qtyCtrl,
-              decoration: const InputDecoration(
-                labelText: 'Quantity',
-                border: OutlineInputBorder(),
+              const SizedBox(height: 16),
+              TextFormField(
+                controller: _qtyCtrl,
+                decoration: const InputDecoration(
+                  labelText: 'Quantity',
+                  border: OutlineInputBorder(),
+                ),
+                keyboardType: TextInputType.number,
+                validator: (v) {
+                  if (v == null || v.trim().isEmpty) return 'Quantity is required';
+                  final val = int.tryParse(v);
+                  if (val == null || val <= 0) return 'Enter a positive number';
+                  return null;
+                },
               ),
-              keyboardType: TextInputType.number,
-            ),
-            const SizedBox(height: 16),
-            ListTile(
-              contentPadding: EdgeInsets.zero,
-              title: const Text('Period Start'),
-              subtitle: Text(DateFormat('MMM yyyy').format(_selectedDate)),
-              trailing: const Icon(Icons.calendar_today),
-              onTap: () async {
-                final picked = await showDatePicker(
-                  context: context,
-                  initialDate: _selectedDate,
-                  firstDate: DateTime(2020),
-                  lastDate: DateTime.now(),
-                );
-                if (picked != null) {
-                  setState(() => _selectedDate = DateTime(picked.year, picked.month, 1));
-                }
-              },
-            ),
-          ],
+              const SizedBox(height: 16),
+              ListTile(
+                contentPadding: EdgeInsets.zero,
+                title: const Text('Period Start'),
+                subtitle: Text(DateFormat('MMM yyyy').format(_selectedDate)),
+                trailing: const Icon(Icons.calendar_today),
+                onTap: () async {
+                  final picked = await showDatePicker(
+                    context: context,
+                    initialDate: _selectedDate,
+                    firstDate: DateTime(2020),
+                    lastDate: DateTime.now(),
+                  );
+                  if (picked != null) {
+                    setState(() => _selectedDate = DateTime(picked.year, picked.month, 1));
+                  }
+                },
+              ),
+            ],
+          ),
         ),
       ),
       actions: [
@@ -404,13 +430,12 @@ class _AddDemandRecordDialogState extends State<_AddDemandRecordDialog> {
           onPressed: _selectedProductId == null
               ? null
               : () async {
-                  final qty = int.tryParse(_qtyCtrl.text) ?? 0;
-                  if (qty <= 0) return;
+                  if (!_formKey.currentState!.validate()) return;
                   final record = DomainDemandRecord(
                     id: '',
                     productId: _selectedProductId!,
                     periodStart: _selectedDate,
-                    quantity: qty,
+                    quantity: int.parse(_qtyCtrl.text),
                   );
                   final appState = context.read<AppState>();
                   Navigator.pop(context);

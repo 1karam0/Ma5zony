@@ -70,6 +70,9 @@ class AppState extends ChangeNotifier {
   String? _authError;
   String? get authError => _authError;
 
+  String? _errorMessage;
+  String? get errorMessage => _errorMessage;
+
   void _onAuthStateChanged(dynamic firebaseUser) async {
     if (firebaseUser == null) {
       _currentUser = null;
@@ -232,85 +235,173 @@ class AppState extends ChangeNotifier {
   // ── Product CRUD ───────────────────────────────────────────────────────────
 
   Future<void> addProduct(Product product) async {
-    final saved = await _repo!.addProduct(product);
-    _products.add(saved);
-    _rebuildRecommendations();
-    notifyListeners();
+    try {
+      final saved = await _repo!.addProduct(product);
+      _products.add(saved);
+      _rebuildRecommendations();
+      notifyListeners();
+    } catch (e) {
+      _errorMessage = 'Failed to add product: $e';
+      notifyListeners();
+      rethrow;
+    }
   }
 
   Future<void> updateProduct(Product product) async {
-    await _repo!.updateProduct(product);
-    final idx = _products.indexWhere((p) => p.id == product.id);
-    if (idx != -1) _products[idx] = product;
-    _rebuildRecommendations();
-    notifyListeners();
+    try {
+      await _repo!.updateProduct(product);
+      final idx = _products.indexWhere((p) => p.id == product.id);
+      if (idx != -1) _products[idx] = product;
+      _rebuildRecommendations();
+      notifyListeners();
+    } catch (e) {
+      _errorMessage = 'Failed to update product: $e';
+      notifyListeners();
+      rethrow;
+    }
   }
 
   Future<void> deleteProduct(String productId) async {
-    await _repo!.deleteProduct(productId);
-    _products.removeWhere((p) => p.id == productId);
-    _rebuildRecommendations();
-    notifyListeners();
+    try {
+      // Cascade: delete associated demand records
+      final records = _demandByProduct[productId] ?? [];
+      for (final r in records) {
+        await _repo!.deleteDemandRecord(r.id);
+      }
+      await _repo!.deleteProduct(productId);
+      _products.removeWhere((p) => p.id == productId);
+      _demandByProduct.remove(productId);
+      _rebuildRecommendations();
+      notifyListeners();
+    } catch (e) {
+      _errorMessage = 'Failed to delete product: $e';
+      notifyListeners();
+      rethrow;
+    }
   }
 
   // ── Supplier CRUD ──────────────────────────────────────────────────────────
 
   Future<void> addSupplier(Supplier supplier) async {
-    final saved = await _repo!.addSupplier(supplier);
-    _suppliers.add(saved);
-    notifyListeners();
+    try {
+      final saved = await _repo!.addSupplier(supplier);
+      _suppliers.add(saved);
+      notifyListeners();
+    } catch (e) {
+      _errorMessage = 'Failed to add supplier: $e';
+      notifyListeners();
+      rethrow;
+    }
   }
 
   Future<void> updateSupplier(Supplier supplier) async {
-    await _repo!.updateSupplier(supplier);
-    final idx = _suppliers.indexWhere((s) => s.id == supplier.id);
-    if (idx != -1) _suppliers[idx] = supplier;
-    notifyListeners();
+    try {
+      await _repo!.updateSupplier(supplier);
+      final idx = _suppliers.indexWhere((s) => s.id == supplier.id);
+      if (idx != -1) _suppliers[idx] = supplier;
+      notifyListeners();
+    } catch (e) {
+      _errorMessage = 'Failed to update supplier: $e';
+      notifyListeners();
+      rethrow;
+    }
   }
 
   Future<void> deleteSupplier(String supplierId) async {
-    await _repo!.deleteSupplier(supplierId);
-    _suppliers.removeWhere((s) => s.id == supplierId);
-    notifyListeners();
+    try {
+      // Cascade: null out supplierId on linked products
+      for (var i = 0; i < _products.length; i++) {
+        if (_products[i].supplierId == supplierId) {
+          final updated = Product(
+            id: _products[i].id,
+            sku: _products[i].sku,
+            name: _products[i].name,
+            category: _products[i].category,
+            unitCost: _products[i].unitCost,
+            currentStock: _products[i].currentStock,
+            supplierId: null,
+          );
+          await _repo!.updateProduct(updated);
+          _products[i] = updated;
+        }
+      }
+      await _repo!.deleteSupplier(supplierId);
+      _suppliers.removeWhere((s) => s.id == supplierId);
+      notifyListeners();
+    } catch (e) {
+      _errorMessage = 'Failed to delete supplier: $e';
+      notifyListeners();
+      rethrow;
+    }
   }
 
   // ── Warehouse CRUD ─────────────────────────────────────────────────────────
 
   Future<void> addWarehouse(Warehouse warehouse) async {
-    final saved = await _repo!.addWarehouse(warehouse);
-    _warehouses.add(saved);
-    notifyListeners();
+    try {
+      final saved = await _repo!.addWarehouse(warehouse);
+      _warehouses.add(saved);
+      notifyListeners();
+    } catch (e) {
+      _errorMessage = 'Failed to add warehouse: $e';
+      notifyListeners();
+      rethrow;
+    }
   }
 
   Future<void> updateWarehouse(Warehouse warehouse) async {
-    await _repo!.updateWarehouse(warehouse);
-    final idx = _warehouses.indexWhere((w) => w.id == warehouse.id);
-    if (idx != -1) _warehouses[idx] = warehouse;
-    notifyListeners();
+    try {
+      await _repo!.updateWarehouse(warehouse);
+      final idx = _warehouses.indexWhere((w) => w.id == warehouse.id);
+      if (idx != -1) _warehouses[idx] = warehouse;
+      notifyListeners();
+    } catch (e) {
+      _errorMessage = 'Failed to update warehouse: $e';
+      notifyListeners();
+      rethrow;
+    }
   }
 
   Future<void> deleteWarehouse(String warehouseId) async {
-    await _repo!.deleteWarehouse(warehouseId);
-    _warehouses.removeWhere((w) => w.id == warehouseId);
-    notifyListeners();
+    try {
+      await _repo!.deleteWarehouse(warehouseId);
+      _warehouses.removeWhere((w) => w.id == warehouseId);
+      notifyListeners();
+    } catch (e) {
+      _errorMessage = 'Failed to delete warehouse: $e';
+      notifyListeners();
+      rethrow;
+    }
   }
 
   // ── Demand Record CRUD ─────────────────────────────────────────────────────
 
   Future<void> addDemandRecord(DomainDemandRecord record) async {
-    final saved = await _repo!.addDemandRecord(record);
-    _demandByProduct.putIfAbsent(saved.productId, () => []).add(saved);
-    _rebuildRecommendations();
-    notifyListeners();
+    try {
+      final saved = await _repo!.addDemandRecord(record);
+      _demandByProduct.putIfAbsent(saved.productId, () => []).add(saved);
+      _rebuildRecommendations();
+      notifyListeners();
+    } catch (e) {
+      _errorMessage = 'Failed to add demand record: $e';
+      notifyListeners();
+      rethrow;
+    }
   }
 
   Future<void> addDemandRecordsBatch(List<DomainDemandRecord> records) async {
-    for (final record in records) {
-      final saved = await _repo!.addDemandRecord(record);
-      _demandByProduct.putIfAbsent(saved.productId, () => []).add(saved);
+    try {
+      for (final record in records) {
+        final saved = await _repo!.addDemandRecord(record);
+        _demandByProduct.putIfAbsent(saved.productId, () => []).add(saved);
+      }
+      _rebuildRecommendations();
+      notifyListeners();
+    } catch (e) {
+      _errorMessage = 'Failed to import demand records: $e';
+      notifyListeners();
+      rethrow;
     }
-    _rebuildRecommendations();
-    notifyListeners();
   }
 
   // ── Settings ───────────────────────────────────────────────────────────────

@@ -74,7 +74,23 @@ class _ProductsScreenState extends State<ProductsScreen> {
             ],
           ),
 
-          Card(
+          if (products.isEmpty)
+            const Padding(
+              padding: EdgeInsets.symmetric(vertical: 48),
+              child: Center(
+                child: Column(
+                  children: [
+                    Icon(Icons.inventory_2_outlined, size: 64, color: Colors.grey),
+                    SizedBox(height: 16),
+                    Text('No products yet', style: TextStyle(fontSize: 18, color: Colors.grey)),
+                    SizedBox(height: 8),
+                    Text('Add your first product to get started.', style: TextStyle(color: Colors.grey)),
+                  ],
+                ),
+              ),
+            )
+          else
+            Card(
             elevation: 2,
             shape: RoundedRectangleBorder(
               borderRadius: BorderRadius.circular(12),
@@ -212,7 +228,15 @@ class _ProductDataSource extends DataTableSource {
                     ),
                   );
                   if (confirmed == true && context.mounted) {
-                    await context.read<AppState>().deleteProduct(p.id);
+                    try {
+                      await context.read<AppState>().deleteProduct(p.id);
+                    } catch (e) {
+                      if (context.mounted) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(content: Text('Failed to delete product: $e')),
+                        );
+                      }
+                    }
                   }
                 },
                 tooltip: 'Delete',
@@ -398,6 +422,7 @@ class _AddProductDialog extends StatefulWidget {
 }
 
 class _AddProductDialogState extends State<_AddProductDialog> {
+  final _formKey = GlobalKey<FormState>();
   final _skuCtrl = TextEditingController();
   final _nameCtrl = TextEditingController();
   final _categoryCtrl = TextEditingController();
@@ -427,81 +452,97 @@ class _AddProductDialogState extends State<_AddProductDialog> {
       title: Text(_isEdit ? 'Edit Product' : 'Add New Product'),
       content: SizedBox(
         width: 600,
-        child: SingleChildScrollView(
-          child: Column(
-            children: [
-              Row(
-                children: [
-                  Expanded(
-                    child: TextFormField(
-                      controller: _skuCtrl,
-                      decoration: const InputDecoration(labelText: 'SKU'),
-                    ),
-                  ),
-                  const SizedBox(width: 16),
-                  Expanded(
-                    child: TextFormField(
-                      controller: _nameCtrl,
-                      decoration: const InputDecoration(
-                        labelText: 'Product Name',
+        child: Form(
+          key: _formKey,
+          child: SingleChildScrollView(
+            child: Column(
+              children: [
+                Row(
+                  children: [
+                    Expanded(
+                      child: TextFormField(
+                        controller: _skuCtrl,
+                        decoration: const InputDecoration(labelText: 'SKU'),
+                        validator: (v) => v == null || v.trim().isEmpty ? 'SKU is required' : null,
                       ),
                     ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 16),
-              Row(
-                children: [
-                  Expanded(
-                    child: TextFormField(
-                      controller: _categoryCtrl,
-                      decoration: const InputDecoration(labelText: 'Category'),
-                    ),
-                  ),
-                  const SizedBox(width: 16),
-                  Expanded(
-                    child: TextFormField(
-                      controller: _costCtrl,
-                      decoration: const InputDecoration(
-                        labelText: 'Unit Cost',
-                        prefixText: '\$',
+                    const SizedBox(width: 16),
+                    Expanded(
+                      child: TextFormField(
+                        controller: _nameCtrl,
+                        decoration: const InputDecoration(
+                          labelText: 'Product Name',
+                        ),
+                        validator: (v) => v == null || v.trim().isEmpty ? 'Name is required' : null,
                       ),
-                      keyboardType: TextInputType.number,
                     ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 16),
-              Row(
-                children: [
-                  Expanded(
-                    child: TextFormField(
-                      controller: _stockCtrl,
-                      decoration: const InputDecoration(
-                        labelText: 'Current Stock',
+                  ],
+                ),
+                const SizedBox(height: 16),
+                Row(
+                  children: [
+                    Expanded(
+                      child: TextFormField(
+                        controller: _categoryCtrl,
+                        decoration: const InputDecoration(labelText: 'Category'),
+                        validator: (v) => v == null || v.trim().isEmpty ? 'Category is required' : null,
                       ),
-                      keyboardType: TextInputType.number,
                     ),
-                  ),
-                  const SizedBox(width: 16),
-                  Expanded(
-                    child: DropdownButtonFormField<String>(
-                      decoration: const InputDecoration(labelText: 'Supplier'),
-                      value: _selectedSupplierId,
-                      items: widget.suppliers
-                          .map<DropdownMenuItem<String>>(
-                            (s) => DropdownMenuItem<String>(
-                              value: s.id as String,
-                              child: Text(s.name as String),
-                            ),
-                          )
-                          .toList(),
-                      onChanged: (v) => setState(() => _selectedSupplierId = v),
+                    const SizedBox(width: 16),
+                    Expanded(
+                      child: TextFormField(
+                        controller: _costCtrl,
+                        decoration: const InputDecoration(
+                          labelText: 'Unit Cost',
+                          prefixText: '\$',
+                        ),
+                        keyboardType: TextInputType.number,
+                        validator: (v) {
+                          final val = double.tryParse(v ?? '');
+                          if (val == null || val < 0) return 'Enter a valid cost';
+                          return null;
+                        },
+                      ),
                     ),
-                  ),
-                ],
-              ),
-            ],
+                  ],
+                ),
+                const SizedBox(height: 16),
+                Row(
+                  children: [
+                    Expanded(
+                      child: TextFormField(
+                        controller: _stockCtrl,
+                        decoration: const InputDecoration(
+                          labelText: 'Current Stock',
+                        ),
+                        keyboardType: TextInputType.number,
+                        validator: (v) {
+                          final val = int.tryParse(v ?? '');
+                          if (val == null || val < 0) return 'Enter a valid stock count';
+                          return null;
+                        },
+                      ),
+                    ),
+                    const SizedBox(width: 16),
+                    Expanded(
+                      child: DropdownButtonFormField<String>(
+                        decoration: const InputDecoration(labelText: 'Supplier'),
+                        value: _selectedSupplierId,
+                        items: widget.suppliers
+                            .map<DropdownMenuItem<String>>(
+                              (s) => DropdownMenuItem<String>(
+                                value: s.id as String,
+                                child: Text(s.name as String),
+                              ),
+                            )
+                            .toList(),
+                        onChanged: (v) => setState(() => _selectedSupplierId = v),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
           ),
         ),
       ),
@@ -516,6 +557,7 @@ class _AddProductDialogState extends State<_AddProductDialog> {
             foregroundColor: Colors.white,
           ),
           onPressed: () async {
+            if (!_formKey.currentState!.validate()) return;
             final product = Product(
               id: widget.existingProduct?.id ?? '',
               sku: _skuCtrl.text.trim(),

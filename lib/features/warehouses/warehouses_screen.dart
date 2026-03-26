@@ -82,7 +82,23 @@ class WarehousesScreen extends StatelessWidget {
             ],
           ),
 
-          Card(
+          if (warehouses.isEmpty)
+            const Padding(
+              padding: EdgeInsets.symmetric(vertical: 48),
+              child: Center(
+                child: Column(
+                  children: [
+                    Icon(Icons.warehouse_outlined, size: 64, color: Colors.grey),
+                    SizedBox(height: 16),
+                    Text('No warehouses yet', style: TextStyle(fontSize: 18, color: Colors.grey)),
+                    SizedBox(height: 8),
+                    Text('Add your first warehouse to get started.', style: TextStyle(color: Colors.grey)),
+                  ],
+                ),
+              ),
+            )
+          else
+            Card(
             elevation: 2,
             shape: RoundedRectangleBorder(
               borderRadius: BorderRadius.circular(12),
@@ -156,9 +172,17 @@ class WarehousesScreen extends StatelessWidget {
                                   ),
                                 );
                                 if (confirmed == true && context.mounted) {
-                                  await context
-                                      .read<AppState>()
-                                      .deleteWarehouse(w.id);
+                                  try {
+                                    await context
+                                        .read<AppState>()
+                                        .deleteWarehouse(w.id);
+                                  } catch (e) {
+                                    if (context.mounted) {
+                                      ScaffoldMessenger.of(context).showSnackBar(
+                                        SnackBar(content: Text('Failed to delete warehouse: $e')),
+                                      );
+                                    }
+                                  }
                                 }
                               },
                               tooltip: 'Delete',
@@ -230,6 +254,7 @@ class WarehousesScreen extends StatelessWidget {
     final nameCtrl = TextEditingController(text: existing?.name ?? '');
     final cityCtrl = TextEditingController(text: existing?.city ?? '');
     final countryCtrl = TextEditingController(text: existing?.country ?? '');
+    final formKey = GlobalKey<FormState>();
     final isEdit = existing != null;
     showDialog(
       context: context,
@@ -237,32 +262,36 @@ class WarehousesScreen extends StatelessWidget {
         title: Text(isEdit ? 'Edit Warehouse' : 'Add New Warehouse'),
         content: SizedBox(
           width: 400,
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              TextFormField(
-                controller: nameCtrl,
-                decoration: const InputDecoration(labelText: 'Warehouse Name'),
-              ),
-              const SizedBox(height: 16),
-              Row(
-                children: [
-                  Expanded(
-                    child: TextFormField(
-                      controller: cityCtrl,
-                      decoration: const InputDecoration(labelText: 'City'),
+          child: Form(
+            key: formKey,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextFormField(
+                  controller: nameCtrl,
+                  decoration: const InputDecoration(labelText: 'Warehouse Name'),
+                  validator: (v) => v == null || v.trim().isEmpty ? 'Name is required' : null,
+                ),
+                const SizedBox(height: 16),
+                Row(
+                  children: [
+                    Expanded(
+                      child: TextFormField(
+                        controller: cityCtrl,
+                        decoration: const InputDecoration(labelText: 'City'),
+                      ),
                     ),
-                  ),
-                  const SizedBox(width: 16),
-                  Expanded(
-                    child: TextFormField(
-                      controller: countryCtrl,
-                      decoration: const InputDecoration(labelText: 'Country'),
+                    const SizedBox(width: 16),
+                    Expanded(
+                      child: TextFormField(
+                        controller: countryCtrl,
+                        decoration: const InputDecoration(labelText: 'Country'),
+                      ),
                     ),
-                  ),
-                ],
-              ),
-            ],
+                  ],
+                ),
+              ],
+            ),
           ),
         ),
         actions: [
@@ -276,6 +305,7 @@ class WarehousesScreen extends StatelessWidget {
               foregroundColor: Colors.white,
             ),
             onPressed: () async {
+              if (!formKey.currentState!.validate()) return;
               final warehouse = Warehouse(
                 id: existing?.id ?? '',
                 name: nameCtrl.text.trim(),
