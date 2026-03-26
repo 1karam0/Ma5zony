@@ -2,6 +2,7 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:provider/provider.dart';
+import 'package:ma5zony/models/app_notification.dart';
 import 'package:ma5zony/utils/constants.dart';
 import 'package:ma5zony/providers/app_state.dart';
 import 'package:ma5zony/utils/role_guard.dart';
@@ -292,14 +293,182 @@ class _TopBar extends StatelessWidget {
           const Spacer(),
           _GlobalSearchBox(),
           const SizedBox(width: 16),
-          IconButton(
-            icon: const Icon(Icons.notifications_none),
-            onPressed: () {},
-            color: AppColors.textSecondary,
-          ),
+          _NotificationBell(),
         ],
       ),
     );
+  }
+}
+
+/// Notification bell icon with badge + dropdown panel.
+class _NotificationBell extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    final state = context.watch<AppState>();
+    final unread = state.unreadNotificationCount;
+
+    return PopupMenuButton<String>(
+      offset: const Offset(0, 50),
+      tooltip: 'Notifications',
+      icon: Badge(
+        isLabelVisible: unread > 0,
+        label: Text('$unread', style: const TextStyle(fontSize: 10)),
+        child: Icon(
+          unread > 0 ? Icons.notifications : Icons.notifications_none,
+          color: unread > 0 ? AppColors.primary : AppColors.textSecondary,
+        ),
+      ),
+      constraints: const BoxConstraints(maxWidth: 380, maxHeight: 460),
+      itemBuilder: (_) {
+        final notifications = state.notifications;
+        if (notifications.isEmpty) {
+          return [
+            const PopupMenuItem(
+              enabled: false,
+              child: Padding(
+                padding: EdgeInsets.symmetric(vertical: 16),
+                child: Center(child: Text('No notifications')),
+              ),
+            ),
+          ];
+        }
+        return [
+          // Header with "Mark all read"
+          PopupMenuItem<String>(
+            enabled: false,
+            child: Row(
+              children: [
+                Text('Notifications', style: AppTextStyles.h3),
+                const Spacer(),
+                if (unread > 0)
+                  TextButton(
+                    onPressed: () {
+                      state.markAllNotificationsRead();
+                      Navigator.pop(context);
+                    },
+                    child: const Text('Mark all read',
+                        style: TextStyle(fontSize: 12)),
+                  ),
+              ],
+            ),
+          ),
+          const PopupMenuDivider(),
+          // Notifications list (max 10)
+          ...notifications.take(10).map((n) {
+            return PopupMenuItem<String>(
+              value: n.actionRoute,
+              child: _NotificationTile(notification: n, state: state),
+            );
+          }),
+        ];
+      },
+      onSelected: (route) {
+        if (route.isNotEmpty) {
+          context.go(route);
+        }
+      },
+    );
+  }
+}
+
+class _NotificationTile extends StatelessWidget {
+  final AppNotification notification;
+  final AppState state;
+
+  const _NotificationTile({required this.notification, required this.state});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 320,
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      decoration: BoxDecoration(
+        color: notification.isRead
+            ? Colors.transparent
+            : AppColors.secondary.withOpacity(0.5),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(_iconForType(notification.type),
+              size: 20, color: _colorForType(notification.type)),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(notification.title,
+                    style: AppTextStyles.body.copyWith(
+                      fontWeight:
+                          notification.isRead ? FontWeight.normal : FontWeight.w600,
+                    )),
+                const SizedBox(height: 2),
+                Text(notification.message,
+                    style: AppTextStyles.bodySmall,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis),
+                const SizedBox(height: 2),
+                Text(_timeAgo(notification.createdAt),
+                    style: AppTextStyles.label.copyWith(fontSize: 11)),
+              ],
+            ),
+          ),
+          if (!notification.isRead)
+            InkWell(
+              onTap: () => state.markNotificationRead(notification.id),
+              child: const Padding(
+                padding: EdgeInsets.all(4),
+                child: Icon(Icons.check_circle_outline,
+                    size: 16, color: AppColors.primary),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  static IconData _iconForType(NotificationType type) {
+    switch (type) {
+      case NotificationType.lowStock:
+        return Icons.warning_amber;
+      case NotificationType.stockout:
+        return Icons.error_outline;
+      case NotificationType.orderApproved:
+        return Icons.check_circle;
+      case NotificationType.shopifySync:
+        return Icons.sync;
+      case NotificationType.forecastReady:
+        return Icons.auto_graph;
+      case NotificationType.general:
+        return Icons.info_outline;
+    }
+  }
+
+  static Color _colorForType(NotificationType type) {
+    switch (type) {
+      case NotificationType.lowStock:
+        return AppColors.warning;
+      case NotificationType.stockout:
+        return AppColors.error;
+      case NotificationType.orderApproved:
+        return AppColors.success;
+      case NotificationType.shopifySync:
+        return AppColors.accent;
+      case NotificationType.forecastReady:
+        return AppColors.primary;
+      case NotificationType.general:
+        return AppColors.textSecondary;
+    }
+  }
+
+  static String _timeAgo(DateTime dt) {
+    final diff = DateTime.now().difference(dt);
+    if (diff.inMinutes < 1) return 'Just now';
+    if (diff.inMinutes < 60) return '${diff.inMinutes}m ago';
+    if (diff.inHours < 24) return '${diff.inHours}h ago';
+    if (diff.inDays < 7) return '${diff.inDays}d ago';
+    return '${dt.month}/${dt.day}/${dt.year}';
   }
 }
 

@@ -1,5 +1,8 @@
+import 'dart:async';
+
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
+import 'package:ma5zony/models/app_notification.dart';
 import 'package:ma5zony/models/app_user.dart';
 import 'package:ma5zony/models/demand_record.dart';
 import 'package:ma5zony/models/forecast_result.dart';
@@ -16,6 +19,7 @@ import 'package:ma5zony/services/inventory_repository.dart';
 import 'package:ma5zony/services/replenishment_service.dart';
 import 'package:ma5zony/services/settings_service.dart';
 import 'package:ma5zony/services/firebase_shopify_service.dart';
+import 'package:ma5zony/services/notification_service.dart';
 
 /// Central application state ChangeNotifier.
 /// Composes all domain services and exposes reactive state to the UI.
@@ -24,6 +28,8 @@ class AppState extends ChangeNotifier {
   InventoryRepository? _repo;
   SettingsService? _settingsService;
   FirebaseShopifyService? _shopifyService;
+  NotificationService? _notificationService;
+  StreamSubscription<List<AppNotification>>? _notifSub;
   late final ForecastingService _forecastingService;
   late final InventoryPolicyService _policyService;
   late final ReplenishmentService _replenishmentService;
@@ -42,11 +48,19 @@ class AppState extends ChangeNotifier {
     _authService.authStateChanges.listen(_onAuthStateChanged);
   }
 
+  @override
+  void dispose() {
+    _notifSub?.cancel();
+    super.dispose();
+  }
+
   /// Initialise Firestore repo once we know the user's uid.
   void _initRepo(String uid) {
     _repo = FirestoreInventoryRepository(uid: uid);
     _settingsService = SettingsService(uid: uid);
     _shopifyService = FirebaseShopifyService(uid: uid);
+    _notificationService = NotificationService(uid: uid);
+    _startNotificationListener();
   }
 
   // ── Auth State ─────────────────────────────────────────────────────────────
@@ -83,6 +97,8 @@ class AppState extends ChangeNotifier {
   }
 
   void _clearDomainState() {
+    _notifSub?.cancel();
+    _notifSub = null;
     _products = [];
     _warehouses = [];
     _suppliers = [];
@@ -92,6 +108,7 @@ class AppState extends ChangeNotifier {
     _shopifyConnection = null;
     _settings = const UserSettings();
     _approvedRecommendations = {};
+    _notifications = [];
   }
 
   Future<bool> login(String email, String password) async {
@@ -202,6 +219,12 @@ class AppState extends ChangeNotifier {
   ShopifyStoreConnection? get shopifyConnection => _shopifyConnection;
   UserSettings get settings => _settings;
   Set<String> get approvedRecommendations => _approvedRecommendations;
+
+  // ── Notifications ──────────────────────────────────────────────────────────
+  List<AppNotification> _notifications = [];
+  List<AppNotification> get notifications => _notifications;
+  int get unreadNotificationCount =>
+      _notifications.where((n) => !n.isRead).length;
 
   // ── Product CRUD ───────────────────────────────────────────────────────────
 
@@ -323,6 +346,44 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
+  // ── Notifications ──────────────────────────────────────────────────────────
+
+  void _startNotificationListener() {
+    _notifSub?.cancel();
+    _notifSub = _notificationService?.stream().listen((list) {
+      _notifications = list;
+      notifyListeners();
+    });
+  }
+
+  Future<void> markNotificationRead(String notifId) async {
+    await _notificationService?.markRead(notifId);
+  }
+
+  Future<void> markAllNotificationsRead() async {
+    await _notificationService?.markAllRead();
+  }
+
+  Future<void> deleteNotification(String notifId) async {
+    await _notificationService?.delete(notifId);
+  }
+
+  /// Checks all products and generates low-stock / stockout notifications.
+  Future<void> _checkStockAlerts() async {
+    if (_notificationService == null) return;
+    for (final rec in _recommendations) {
+      final product =
+          _products.where((p) => p.id == rec.productId).firstOrNull;
+      if (product == null) continue;
+      if (product.currentStock == 0) {
+        await _notificationService!.notifyStockout(product.name);
+      } else if (rec.status == 'Order Now' || rec.status == 'Critical') {
+        await _notificationService!
+            .notifyLowStock(product.name, product.currentStock);
+      }
+    }
+  }
+
   // ── Computed KPIs ──────────────────────────────────────────────────────────
 
   /// Total inventory value = Σ(currentStock × unitCost)
@@ -380,6 +441,9 @@ class AppState extends ChangeNotifier {
       }
 
       _rebuildRecommendations();
+
+      // Check for stock alerts (fire-and-forget)
+      _checkStockAlerts();
     } finally {
       _isLoading = false;
       notifyListeners();
@@ -498,6 +562,11 @@ class AppState extends ChangeNotifier {
     if (_repo != null) {
       _demandByProduct = await _repo!.getDemandHistory();
       _rebuildRecommendations();
+    }
+    // Notify about the import
+    final imported = result['imported'] as int? ?? 0;
+    if (imported > 0) {
+      await _notificationService?.notifyShopifySync(imported);
     }
     notifyListeners();
     return result;
