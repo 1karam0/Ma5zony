@@ -5,6 +5,7 @@ import 'package:ma5zony/features/auth/login_screen.dart';
 import 'package:ma5zony/features/auth/register_screen.dart';
 import 'package:ma5zony/widgets/main_layout.dart';
 import 'package:ma5zony/features/dashboard/dashboard_screen.dart';
+import 'package:ma5zony/features/dashboard/owner_dashboard_screen.dart';
 import 'package:ma5zony/features/products/products_screen.dart';
 import 'package:ma5zony/features/suppliers/suppliers_screen.dart';
 import 'package:ma5zony/features/warehouses/warehouses_screen.dart';
@@ -37,8 +38,13 @@ GoRouter buildAppRouter(AppState appState) => GoRouter(
       routes: [
         GoRoute(
           path: '/dashboard',
-          pageBuilder: (context, state) =>
-              const NoTransitionPage(child: DashboardScreen()),
+          pageBuilder: (context, state) {
+            final user = appState.currentUser;
+            final Widget dashboard = isOwner(user)
+                ? const OwnerDashboardScreen()
+                : const DashboardScreen();
+            return NoTransitionPage(child: dashboard);
+          },
         ),
         GoRoute(
           path: '/products',
@@ -79,6 +85,11 @@ GoRouter buildAppRouter(AppState appState) => GoRouter(
           path: '/settings',
           pageBuilder: (context, state) =>
               const NoTransitionPage(child: SettingsScreen()),
+        ),
+        GoRoute(
+          path: '/financial-analytics',
+          pageBuilder: (context, state) =>
+              const NoTransitionPage(child: OwnerDashboardScreen()),
         ),
       ],
     ),

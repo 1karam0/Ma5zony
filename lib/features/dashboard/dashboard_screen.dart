@@ -96,9 +96,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 physics: const NeverScrollableScrollPhysics(),
                 children: [
                   KPICard(
-                    title: 'Total Stock Value',
-                    value: '\$${state.totalStockValue.toStringAsFixed(0)}',
-                    icon: Icons.monetization_on,
+                    title: 'Total Units in Stock',
+                    value: '${products.fold<int>(0, (sum, p) => sum + p.currentStock)}',
+                    icon: Icons.inventory_2,
                   ),
                   KPICard(
                     title: 'Items Below ROP',
