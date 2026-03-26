@@ -14,6 +14,7 @@ import 'package:ma5zony/features/forecasts/forecasts_screen.dart';
 import 'package:ma5zony/features/replenishment/replenishment_screen.dart';
 import 'package:ma5zony/features/integrations/integrations_screen.dart';
 import 'package:ma5zony/features/settings/settings_screen.dart';
+import 'package:ma5zony/features/financial_analytics/financial_analytics_screen.dart';
 import 'package:ma5zony/utils/role_guard.dart';
 
 // Private navigators
@@ -89,7 +90,7 @@ GoRouter buildAppRouter(AppState appState) => GoRouter(
         GoRoute(
           path: '/financial-analytics',
           pageBuilder: (context, state) =>
-              const NoTransitionPage(child: OwnerDashboardScreen()),
+              const NoTransitionPage(child: FinancialAnalyticsScreen()),
         ),
       ],
     ),
