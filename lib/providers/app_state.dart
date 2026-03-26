@@ -109,6 +109,7 @@ class AppState extends ChangeNotifier {
     _settings = const UserSettings();
     _approvedRecommendations = {};
     _notifications = [];
+    _teamMembers = [];
   }
 
   Future<bool> login(String email, String password) async {
@@ -209,6 +210,7 @@ class AppState extends ChangeNotifier {
   ShopifyStoreConnection? _shopifyConnection;
   UserSettings _settings = const UserSettings();
   Set<String> _approvedRecommendations = {};
+  List<AppUser> _teamMembers = [];
 
   List<Product> get products => _products;
   List<Warehouse> get warehouses => _warehouses;
@@ -219,6 +221,7 @@ class AppState extends ChangeNotifier {
   ShopifyStoreConnection? get shopifyConnection => _shopifyConnection;
   UserSettings get settings => _settings;
   Set<String> get approvedRecommendations => _approvedRecommendations;
+  List<AppUser> get teamMembers => _teamMembers;
 
   // ── Notifications ──────────────────────────────────────────────────────────
   List<AppNotification> _notifications = [];
@@ -384,6 +387,36 @@ class AppState extends ChangeNotifier {
     }
   }
 
+  // ── Team Management ────────────────────────────────────────────────────────
+
+  /// Load team members (for owners).
+  Future<void> loadTeamMembers() async {
+    if (_currentUser == null || _currentUser!.role != 'SME Owner') return;
+    final rawList = await _authService.getTeamMembers(_currentUser!.uid);
+    _teamMembers = rawList
+        .map((data) => AppUser.fromFirestore(data['uid'] as String, data))
+        .toList();
+    notifyListeners();
+  }
+
+  /// Invite an Inventory Manager by email.
+  Future<String> inviteTeamMember(String email) async {
+    if (_currentUser == null) return 'Not authenticated.';
+    final result =
+        await _authService.inviteTeamMember(_currentUser!.uid, email);
+    if (result == 'success') {
+      await loadTeamMembers();
+    }
+    return result;
+  }
+
+  /// Remove a team member.
+  Future<void> removeTeamMember(String memberUid) async {
+    await _authService.removeTeamMember(memberUid);
+    _teamMembers.removeWhere((m) => m.uid == memberUid);
+    notifyListeners();
+  }
+
   // ── Computed KPIs ──────────────────────────────────────────────────────────
 
   /// Total inventory value = Σ(currentStock × unitCost)
@@ -441,6 +474,9 @@ class AppState extends ChangeNotifier {
       }
 
       _rebuildRecommendations();
+
+      // Load team members for owners
+      await loadTeamMembers();
 
       // Check for stock alerts (fire-and-forget)
       _checkStockAlerts();

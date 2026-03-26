@@ -10,8 +10,14 @@ service cloud.firestore {
 
     // ── User profile ─────────────────────────────────────────────────────
     // Each user can read/write their own profile document.
+    // Owners can also read profiles of their team members (ownerId match).
     match /users/{userId} {
-      allow read, update: if request.auth != null && request.auth.uid == userId;
+      allow read: if request.auth != null
+                  && (request.auth.uid == userId
+                      || resource.data.ownerId == request.auth.uid);
+      allow update: if request.auth != null
+                    && (request.auth.uid == userId
+                        || resource.data.ownerId == request.auth.uid);
       allow create: if request.auth != null && request.auth.uid == userId;
       allow delete: if false; // Users cannot delete their own profile
 

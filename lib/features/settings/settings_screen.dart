@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:ma5zony/models/app_user.dart';
 import 'package:ma5zony/providers/app_state.dart';
 import 'package:ma5zony/services/settings_service.dart';
 import 'package:ma5zony/utils/constants.dart';
+import 'package:ma5zony/utils/role_guard.dart';
 import 'package:ma5zony/widgets/shared_widgets.dart';
 
 class SettingsScreen extends StatelessWidget {
@@ -269,37 +271,258 @@ class _ForecastingDefaultsTabState extends State<_ForecastingDefaultsTab> {
   }
 }
 
-class _UserManagementTab extends StatelessWidget {
+class _UserManagementTab extends StatefulWidget {
   const _UserManagementTab();
 
   @override
+  State<_UserManagementTab> createState() => _UserManagementTabState();
+}
+
+class _UserManagementTabState extends State<_UserManagementTab> {
+  final _emailController = TextEditingController();
+  bool _inviting = false;
+
+  @override
+  void dispose() {
+    _emailController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _inviteMember() async {
+    final email = _emailController.text.trim();
+    if (email.isEmpty) return;
+
+    setState(() => _inviting = true);
+    final state = context.read<AppState>();
+    final result = await state.inviteTeamMember(email);
+    setState(() => _inviting = false);
+
+    if (!mounted) return;
+    if (result == 'success') {
+      _emailController.clear();
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Team member added successfully.')),
+      );
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(result)),
+      );
+    }
+  }
+
+  Future<void> _removeMember(AppUser member) async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Remove Team Member'),
+        content: Text('Remove ${member.name} from your team?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: TextButton.styleFrom(foregroundColor: AppColors.error),
+            child: const Text('Remove'),
+          ),
+        ],
+      ),
+    );
+    if (confirm == true && mounted) {
+      await context.read<AppState>().removeTeamMember(member.uid);
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
-    final currentUser = context.watch<AppState>().currentUser;
+    final state = context.watch<AppState>();
+    final currentUser = state.currentUser;
+    final userIsOwner = isOwner(currentUser);
 
     return SingleChildScrollView(
       padding: const EdgeInsets.all(24),
-      child: Card(
-        elevation: 2,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-        child: DataTable(
-          columns: const [
-            DataColumn(label: Text('Name')),
-            DataColumn(label: Text('Role')),
-            DataColumn(label: Text('Status')),
-            DataColumn(label: Text('Actions')),
-          ],
-          rows: [
-            if (currentUser != null)
-              DataRow(
-                cells: [
-                  DataCell(Text(currentUser.name)),
-                  DataCell(Text(currentUser.role)),
-                  const DataCell(StatusChip('Active')),
-                  const DataCell(Icon(Icons.more_horiz)),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // ── Current User Info ─────────────────────────────────────
+          Card(
+            elevation: 2,
+            shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12)),
+            child: Padding(
+              padding: const EdgeInsets.all(20),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('Your Account', style: AppTextStyles.h3),
+                  const SizedBox(height: 16),
+                  if (currentUser != null)
+                    Row(
+                      children: [
+                        CircleAvatar(
+                          backgroundColor: AppColors.primary,
+                          child: Text(
+                            currentUser.name.isNotEmpty
+                                ? currentUser.name[0].toUpperCase()
+                                : '?',
+                            style: const TextStyle(color: Colors.white),
+                          ),
+                        ),
+                        const SizedBox(width: 16),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(currentUser.name,
+                                  style: AppTextStyles.body.copyWith(
+                                      fontWeight: FontWeight.w600)),
+                              Text(currentUser.email,
+                                  style: AppTextStyles.bodySmall),
+                            ],
+                          ),
+                        ),
+                        StatusChip(currentUser.role),
+                      ],
+                    ),
                 ],
               ),
+            ),
+          ),
+          const SizedBox(height: 24),
+
+          // ── Team Management (Owner only) ──────────────────────────
+          if (userIsOwner) ...[
+            Card(
+              elevation: 2,
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12)),
+              child: Padding(
+                padding: const EdgeInsets.all(20),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        const Icon(Icons.group, color: AppColors.primary),
+                        const SizedBox(width: 8),
+                        Text('Team Members', style: AppTextStyles.h3),
+                        const Spacer(),
+                        Text(
+                          '${state.teamMembers.length} members',
+                          style: AppTextStyles.label,
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 16),
+
+                    // ── Invite Row ───────────────────────────────────
+                    Row(
+                      children: [
+                        Expanded(
+                          child: TextField(
+                            controller: _emailController,
+                            decoration: InputDecoration(
+                              hintText:
+                                  'Enter Inventory Manager email to invite',
+                              isDense: true,
+                              border: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(8),
+                              ),
+                              prefixIcon: const Icon(Icons.email_outlined),
+                            ),
+                            keyboardType: TextInputType.emailAddress,
+                            onSubmitted: (_) => _inviteMember(),
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        ElevatedButton.icon(
+                          onPressed: _inviting ? null : _inviteMember,
+                          icon: _inviting
+                              ? const SizedBox(
+                                  width: 16,
+                                  height: 16,
+                                  child: CircularProgressIndicator(
+                                      strokeWidth: 2),
+                                )
+                              : const Icon(Icons.person_add),
+                          label: const Text('Add'),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: AppColors.primary,
+                            foregroundColor: Colors.white,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 16),
+
+                    // ── Members Table ────────────────────────────────
+                    if (state.teamMembers.isEmpty)
+                      const Padding(
+                        padding: EdgeInsets.symmetric(vertical: 24),
+                        child: Center(
+                          child: Text(
+                            'No team members yet. Invite an Inventory Manager by email.',
+                          ),
+                        ),
+                      )
+                    else
+                      SizedBox(
+                        width: double.infinity,
+                        child: DataTable(
+                          columns: const [
+                            DataColumn(label: Text('Name')),
+                            DataColumn(label: Text('Email')),
+                            DataColumn(label: Text('Role')),
+                            DataColumn(label: Text('Actions')),
+                          ],
+                          rows: state.teamMembers.map((member) {
+                            return DataRow(cells: [
+                              DataCell(Text(member.name,
+                                  style: AppTextStyles.body.copyWith(
+                                      fontWeight: FontWeight.w600))),
+                              DataCell(Text(member.email)),
+                              DataCell(
+                                  StatusChip(member.role == 'Inventory Manager'
+                                      ? 'Active'
+                                      : member.role)),
+                              DataCell(
+                                IconButton(
+                                  icon: const Icon(Icons.remove_circle_outline,
+                                      color: AppColors.error),
+                                  tooltip: 'Remove from team',
+                                  onPressed: () => _removeMember(member),
+                                ),
+                              ),
+                            ]);
+                          }).toList(),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+            ),
+          ] else ...[
+            // ── IM view: show who they belong to ─────────────────────
+            if (currentUser?.ownerId != null)
+              Card(
+                elevation: 2,
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12)),
+                child: Padding(
+                  padding: const EdgeInsets.all(20),
+                  child: Row(
+                    children: [
+                      const Icon(Icons.business, color: AppColors.primary),
+                      const SizedBox(width: 12),
+                      Text('You are part of an owner\'s team.',
+                          style: AppTextStyles.body),
+                    ],
+                  ),
+                ),
+              ),
           ],
-        ),
+        ],
       ),
     );
   }
