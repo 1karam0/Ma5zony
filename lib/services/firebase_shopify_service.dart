@@ -163,4 +163,10 @@ class FirebaseShopifyService implements ShopifyIntegrationService {
     if (!conn.isConnected) return [];
     return importProductsFromShopify();
   }
+
+  /// Imports Shopify order history and converts line items into demand records.
+  /// Returns the count of newly imported demand records.
+  Future<Map<String, dynamic>> importOrderHistory() async {
+    return _callFunction('shopifyImportOrders');
+  }
 }

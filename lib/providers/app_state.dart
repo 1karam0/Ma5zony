@@ -489,6 +489,20 @@ class AppState extends ChangeNotifier {
     return _shopifyService!.fetchShopifyProducts();
   }
 
+  /// Imports Shopify order history as demand records.
+  /// Returns info map with totalOrders, newRecordsImported, skippedDuplicates.
+  Future<Map<String, dynamic>?> importShopifyOrders() async {
+    if (_shopifyService == null) return null;
+    final result = await _shopifyService!.importOrderHistory();
+    // Reload demand data to pick up new records
+    if (_repo != null) {
+      _demandByProduct = await _repo!.getDemandHistory();
+      _rebuildRecommendations();
+    }
+    notifyListeners();
+    return result;
+  }
+
   /// Loads Shopify connection state from Firestore.
   Future<void> _loadShopifyConnection() async {
     if (_shopifyService == null) return;

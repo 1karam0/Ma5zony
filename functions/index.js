@@ -97,7 +97,7 @@ exports.shopifyGetOAuthUrl = onRequest(
 
     const redirectUri = `https://shopifyoauthcallback-rjv64oud6a-uc.a.run.app`;
 
-    const scopes = "read_products,read_inventory";
+    const scopes = "read_products,read_inventory,read_orders";
     const authUrl =
       `https://${shopDomain}/admin/oauth/authorize` +
       `?client_id=${SHOPIFY_API_KEY.value()}` +
@@ -371,3 +371,130 @@ exports.shopifyDisconnectStore = onRequest(async (req, res) => {
 
   res.json({ result: { success: true } });
 });
+
+// ── 6. shopifyImportOrders ───────────────────────────────────────────────────
+// Fetches order history from Shopify and writes demand records to Firestore.
+
+exports.shopifyImportOrders = onRequest(
+  { secrets: [SHOPIFY_API_KEY, SHOPIFY_API_SECRET] },
+  async (req, res) => {
+    if (handleCors(req, res)) return;
+
+    const uid = await verifyAuth(req);
+    if (!uid) { res.status(401).json({ error: "Sign in required." }); return; }
+
+    const connDoc = await db
+      .collection("users")
+      .doc(uid)
+      .collection("shopify")
+      .doc("connection")
+      .get();
+
+    if (!connDoc.exists || !connDoc.data().isConnected) {
+      res.status(400).json({ error: "No active Shopify connection." });
+      return;
+    }
+
+    const { shopDomain, accessToken } = connDoc.data();
+
+    // Paginate through all orders
+    let allOrders = [];
+    let nextPageUrl = `/admin/api/2024-01/orders.json?limit=250&status=any`;
+
+    while (nextPageUrl) {
+      const orderRes = await httpsRequest({
+        hostname: shopDomain,
+        path: nextPageUrl,
+        method: "GET",
+        headers: { "X-Shopify-Access-Token": accessToken },
+      });
+
+      if (orderRes.statusCode !== 200) {
+        res.status(502).json({ error: "Shopify API error fetching orders." });
+        return;
+      }
+
+      const parsed = JSON.parse(orderRes.body);
+      allOrders = allOrders.concat(parsed.orders || []);
+
+      // Check for pagination via Link header (simplified: look for "next" in body)
+      // Shopify REST pagination: if fewer than limit returned, we're done.
+      if (!parsed.orders || parsed.orders.length < 250) {
+        nextPageUrl = null;
+      } else {
+        // For simplicity, stop after first page (250 orders).
+        // Full cursor-based pagination can be added later.
+        nextPageUrl = null;
+      }
+    }
+
+    // Deduplicate: check which Shopify order IDs already exist
+    const existingSnap = await db
+      .collection("users")
+      .doc(uid)
+      .collection("demandRecords")
+      .where("source", "==", "shopify")
+      .get();
+
+    const existingOrderIds = new Set(
+      existingSnap.docs
+        .map((d) => d.data().shopifyOrderId)
+        .filter(Boolean)
+    );
+
+    // Map line items to demand records
+    const batch = db.batch();
+    let imported = 0;
+
+    for (const order of allOrders) {
+      const orderId = String(order.id);
+      if (existingOrderIds.has(orderId)) continue;
+
+      const orderDate = order.created_at
+        ? new Date(order.created_at).toISOString()
+        : new Date().toISOString();
+
+      for (const item of order.line_items || []) {
+        const shopifyProductId = String(item.product_id || "");
+        if (!shopifyProductId || shopifyProductId === "null") continue;
+
+        // Look up internal product by shopifyProductId
+        const productRef = db
+          .collection("users")
+          .doc(uid)
+          .collection("products")
+          .doc(`shopify_${shopifyProductId}`);
+
+        const ref = db
+          .collection("users")
+          .doc(uid)
+          .collection("demandRecords")
+          .doc(); // auto-ID
+
+        batch.set(ref, {
+          productId: `shopify_${shopifyProductId}`,
+          periodStart: orderDate,
+          quantity: item.quantity || 0,
+          source: "shopify",
+          shopifyOrderId: orderId,
+        });
+
+        imported++;
+      }
+    }
+
+    if (imported > 0) {
+      await batch.commit();
+    }
+
+    res.json({
+      result: {
+        totalOrders: allOrders.length,
+        newRecordsImported: imported,
+        skippedDuplicates: allOrders.length > 0
+          ? existingOrderIds.size
+          : 0,
+      },
+    });
+  }
+);

@@ -122,8 +122,15 @@ class DemandDataScreen extends StatelessWidget {
   }
 }
 
-class _DemandHistoryTab extends StatelessWidget {
+class _DemandHistoryTab extends StatefulWidget {
   const _DemandHistoryTab();
+
+  @override
+  State<_DemandHistoryTab> createState() => _DemandHistoryTabState();
+}
+
+class _DemandHistoryTabState extends State<_DemandHistoryTab> {
+  String _sourceFilter = 'All'; // 'All', 'manual', 'shopify'
 
   @override
   Widget build(BuildContext context) {
@@ -131,9 +138,15 @@ class _DemandHistoryTab extends StatelessWidget {
     final productMap = {for (final p in state.products) p.id: p.name};
 
     // Flatten demand history into a sorted list
-    final allRecords =
+    var allRecords =
         state.demandByProduct.values.expand((list) => list).toList()
           ..sort((a, b) => b.periodStart.compareTo(a.periodStart));
+
+    // Apply source filter
+    if (_sourceFilter != 'All') {
+      allRecords =
+          allRecords.where((r) => r.source == _sourceFilter).toList();
+    }
 
     final totalDemand30d = state.demandByProduct.values
         .expand((list) => list)
@@ -182,7 +195,37 @@ class _DemandHistoryTab extends StatelessWidget {
               ),
             ],
           ),
-          const SizedBox(height: 24),
+          const SizedBox(height: 16),
+
+          // Source filter chips
+          Row(
+            children: [
+              const Text('Source: '),
+              const SizedBox(width: 8),
+              ChoiceChip(
+                label: const Text('All'),
+                selected: _sourceFilter == 'All',
+                onSelected: (_) => setState(() => _sourceFilter = 'All'),
+                selectedColor: AppColors.primary.withOpacity(0.2),
+              ),
+              const SizedBox(width: 8),
+              ChoiceChip(
+                label: const Text('Manual'),
+                selected: _sourceFilter == 'manual',
+                onSelected: (_) => setState(() => _sourceFilter = 'manual'),
+                selectedColor: AppColors.primary.withOpacity(0.2),
+              ),
+              const SizedBox(width: 8),
+              ChoiceChip(
+                label: const Text('Shopify'),
+                selected: _sourceFilter == 'shopify',
+                onSelected: (_) => setState(() => _sourceFilter = 'shopify'),
+                selectedColor: Colors.green.withOpacity(0.2),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+
           Card(
             elevation: 2,
             shape: RoundedRectangleBorder(
@@ -195,6 +238,7 @@ class _DemandHistoryTab extends StatelessWidget {
                   DataColumn(label: Text('Period')),
                   DataColumn(label: Text('Product')),
                   DataColumn(label: Text('Quantity')),
+                  DataColumn(label: Text('Source')),
                   DataColumn(label: Text('Status')),
                 ],
                 rows: allRecords.take(60).map((d) {
@@ -206,6 +250,9 @@ class _DemandHistoryTab extends StatelessWidget {
                       ),
                       DataCell(Text(productName)),
                       DataCell(Text('${d.quantity}')),
+                      DataCell(StatusChip(
+                        d.source == 'shopify' ? 'Shopify' : 'Manual',
+                      )),
                       const DataCell(StatusChip('OK')),
                     ],
                   );

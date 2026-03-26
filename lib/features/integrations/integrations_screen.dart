@@ -17,6 +17,7 @@ class _IntegrationsScreenState extends State<IntegrationsScreen> {
   bool _importing = false;
   bool _syncing = false;
   bool _connecting = false;
+  bool _importingOrders = false;
   final _domainController = TextEditingController();
 
   @override
@@ -286,6 +287,58 @@ class _IntegrationsScreenState extends State<IntegrationsScreen> {
                                       )
                                     : const Icon(Icons.sync),
                                 label: const Text('Sync Inventory'),
+                              ),
+                              const SizedBox(width: 12),
+                              OutlinedButton.icon(
+                                onPressed: _importingOrders
+                                    ? null
+                                    : () async {
+                                        final messenger = ScaffoldMessenger.of(
+                                          context,
+                                        );
+                                        setState(() => _importingOrders = true);
+                                        try {
+                                          final result = await context
+                                              .read<AppState>()
+                                              .importShopifyOrders();
+                                          if (mounted) {
+                                            final count =
+                                                result?['newRecordsImported'] ?? 0;
+                                            messenger.showSnackBar(
+                                              SnackBar(
+                                                content: Text(
+                                                  '$count demand record(s) imported from orders',
+                                                ),
+                                              ),
+                                            );
+                                          }
+                                        } catch (e) {
+                                          if (mounted) {
+                                            messenger.showSnackBar(
+                                              SnackBar(
+                                                content: Text(
+                                                  'Order import failed: $e',
+                                                ),
+                                              ),
+                                            );
+                                          }
+                                        } finally {
+                                          if (mounted) {
+                                            setState(
+                                                () => _importingOrders = false);
+                                          }
+                                        }
+                                      },
+                                icon: _importingOrders
+                                    ? const SizedBox(
+                                        width: 14,
+                                        height: 14,
+                                        child: CircularProgressIndicator(
+                                          strokeWidth: 2,
+                                        ),
+                                      )
+                                    : const Icon(Icons.history),
+                                label: const Text('Import Order History'),
                               ),
                             ],
                           ],

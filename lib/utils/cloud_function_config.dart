@@ -26,10 +26,10 @@ class CloudFunctionConfig {
   static const String shopifyDisconnectStore =
       '${_baseUrl}shopifydisconnectstore$_suffix';
 
-  // ── Future: Order Import ─────────────────────────────────────────────
-  // Will be added in Phase 4 when the Cloud Function is created.
-  // static const String shopifyImportOrders =
-  //     '${_baseUrl}shopifyimportorders$_suffix';
+  // ── Order Import ─────────────────────────────────────────────────────
+
+  static const String shopifyImportOrders =
+      '${_baseUrl}shopifyimportorders$_suffix';
 
   /// All Shopify function URLs in a map (for dynamic lookup).
   static const Map<String, String> shopifyFunctions = {
@@ -38,5 +38,6 @@ class CloudFunctionConfig {
     'shopifyImportProducts': shopifyImportProducts,
     'shopifySyncStock': shopifySyncStock,
     'shopifyDisconnectStore': shopifyDisconnectStore,
+    'shopifyImportOrders': shopifyImportOrders,
   };
 }
