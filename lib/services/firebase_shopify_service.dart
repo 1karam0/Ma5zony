@@ -7,6 +7,7 @@ import 'package:http/http.dart' as http;
 import 'package:ma5zony/models/product.dart';
 import 'package:ma5zony/models/shopify_store_connection.dart';
 import 'package:ma5zony/services/shopify_integration_service.dart';
+import 'package:ma5zony/utils/cloud_function_config.dart';
 
 /// Real Shopify integration service that calls Firebase Cloud Functions
 /// via direct HTTP (avoids the cloud_functions SDK Int64 dart2js bug).
@@ -16,15 +17,6 @@ import 'package:ma5zony/services/shopify_integration_service.dart';
 class FirebaseShopifyService implements ShopifyIntegrationService {
   final String uid;
   final FirebaseFirestore _firestore;
-
-  /// Function URLs from firebase deploy output.
-  static const _functionUrls = {
-    'shopifyGetOAuthUrl': 'https://shopifygetoauthurl-rjv64oud6a-uc.a.run.app',
-    'shopifyOAuthCallback': 'https://shopifyoauthcallback-rjv64oud6a-uc.a.run.app',
-    'shopifyImportProducts': 'https://shopifyimportproducts-rjv64oud6a-uc.a.run.app',
-    'shopifySyncStock': 'https://shopifysyncstock-rjv64oud6a-uc.a.run.app',
-    'shopifyDisconnectStore': 'https://shopifydisconnectstore-rjv64oud6a-uc.a.run.app',
-  };
 
   FirebaseShopifyService({required this.uid})
       : _firestore = FirebaseFirestore.instance;
@@ -41,7 +33,7 @@ class FirebaseShopifyService implements ShopifyIntegrationService {
     if (user == null) throw Exception('Not authenticated');
     final token = await user.getIdToken();
 
-    final url = _functionUrls[name];
+    final url = CloudFunctionConfig.shopifyFunctions[name];
     if (url == null) throw Exception('Unknown function: $name');
 
     final response = await http.post(

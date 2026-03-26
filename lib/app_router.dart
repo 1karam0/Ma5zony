@@ -13,6 +13,7 @@ import 'package:ma5zony/features/forecasts/forecasts_screen.dart';
 import 'package:ma5zony/features/replenishment/replenishment_screen.dart';
 import 'package:ma5zony/features/integrations/integrations_screen.dart';
 import 'package:ma5zony/features/settings/settings_screen.dart';
+import 'package:ma5zony/utils/role_guard.dart';
 
 // Private navigators
 final _rootNavigatorKey = GlobalKey<NavigatorState>();
@@ -89,6 +90,16 @@ GoRouter buildAppRouter(AppState appState) => GoRouter(
 
     if (!loggedIn && !loggingIn) return '/login';
     if (loggedIn && loggingIn) return '/dashboard';
+
+    // Role-based route guard: block owner-only routes for Inventory Managers
+    if (loggedIn) {
+      final path = state.uri.toString();
+      if (ownerOnlyRoutes.contains(path) &&
+          !isOwner(appState.currentUser)) {
+        return '/dashboard';
+      }
+    }
+
     return null;
   },
 );

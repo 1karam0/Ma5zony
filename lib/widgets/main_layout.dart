@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 import 'package:provider/provider.dart';
 import 'package:ma5zony/utils/constants.dart';
 import 'package:ma5zony/providers/app_state.dart';
+import 'package:ma5zony/utils/role_guard.dart';
 
 class MainLayout extends StatelessWidget {
   final Widget child;
@@ -39,6 +40,9 @@ class _Sidebar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final user = context.watch<AppState>().currentUser;
+    final userIsOwner = isOwner(user);
+
     return Container(
       width: isDesktop ? kSidebarWidth : kSidebarCollapsedWidth,
       color: Colors.white,
@@ -110,6 +114,14 @@ class _Sidebar extends StatelessWidget {
                   path: '/integrations',
                   isDesktop: isDesktop,
                 ),
+                if (userIsOwner) ...[
+                  _NavItem(
+                    icon: Icons.attach_money,
+                    label: 'Financial Analytics',
+                    path: '/financial-analytics',
+                    isDesktop: isDesktop,
+                  ),
+                ],
                 const Divider(),
                 _NavItem(
                   icon: Icons.settings,

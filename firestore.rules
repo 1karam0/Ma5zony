@@ -1,0 +1,70 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ── Deny all by default ──────────────────────────────────────────────
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // ── User profile ─────────────────────────────────────────────────────
+    // Each user can read/write their own profile document.
+    match /users/{userId} {
+      allow read, update: if request.auth != null && request.auth.uid == userId;
+      allow create: if request.auth != null && request.auth.uid == userId;
+      allow delete: if false; // Users cannot delete their own profile
+
+      // ── Products ─────────────────────────────────────────────────────
+      match /products/{productId} {
+        allow read, write: if request.auth != null && request.auth.uid == userId;
+      }
+
+      // ── Suppliers ────────────────────────────────────────────────────
+      match /suppliers/{supplierId} {
+        allow read, write: if request.auth != null && request.auth.uid == userId;
+      }
+
+      // ── Warehouses ───────────────────────────────────────────────────
+      match /warehouses/{warehouseId} {
+        allow read, write: if request.auth != null && request.auth.uid == userId;
+      }
+
+      // ── Demand Records ───────────────────────────────────────────────
+      match /demandRecords/{recordId} {
+        allow read, write: if request.auth != null && request.auth.uid == userId;
+      }
+
+      // ── Settings ─────────────────────────────────────────────────────
+      match /settings/{settingId} {
+        allow read, write: if request.auth != null && request.auth.uid == userId;
+      }
+
+      // ── Replenishment Approvals ──────────────────────────────────────
+      match /approvals/{approvalId} {
+        allow read, write: if request.auth != null && request.auth.uid == userId;
+      }
+
+      // ── Shopify Connection (read-only from client) ───────────────────
+      // Tokens are written by Cloud Functions (admin SDK bypasses rules).
+      // Client can only read connection status, not modify tokens.
+      match /shopify/{docId} {
+        allow read: if request.auth != null && request.auth.uid == userId;
+        // Allow client to write pending_oauth (nonce) but not connection doc
+        allow write: if request.auth != null
+                     && request.auth.uid == userId
+                     && docId == 'pending_oauth';
+      }
+
+      // ── Notifications ────────────────────────────────────────────────
+      match /notifications/{notifId} {
+        allow read, write: if request.auth != null && request.auth.uid == userId;
+      }
+
+      // ── Analytics Snapshots ──────────────────────────────────────────
+      match /analytics/{docId} {
+        allow read, write: if request.auth != null && request.auth.uid == userId;
+      }
+    }
+  }
+}
