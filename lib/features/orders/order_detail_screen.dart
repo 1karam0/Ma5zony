@@ -1,11 +1,14 @@
 // ignore_for_file: deprecated_member_use
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
+import 'package:http/http.dart' as http;
 import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 import 'package:ma5zony/models/purchase_order.dart';
 import 'package:ma5zony/models/supplier_order.dart';
 import 'package:ma5zony/providers/app_state.dart';
+import 'package:ma5zony/utils/cloud_function_config.dart';
 import 'package:ma5zony/utils/constants.dart';
 import 'package:ma5zony/widgets/shared_widgets.dart';
 
@@ -25,13 +28,43 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
     final messenger = ScaffoldMessenger.of(context);
     try {
       final appState = context.read<AppState>();
-      await appState.markOrderSent(widget.orderId);
-      messenger.showSnackBar(
-        const SnackBar(
-          content: Text('Order marked as sent. Supplier emails will be dispatched.'),
-          backgroundColor: Colors.green,
-        ),
+      final uid = appState.currentUser?.uid ?? '';
+
+      // Call Cloud Function to send emails
+      final response = await http.post(
+        Uri.parse(CloudFunctionConfig.sendSupplierEmails),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({
+          'uid': uid,
+          'purchaseOrderId': widget.orderId,
+        }),
       );
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        final results = data['results'] as List<dynamic>? ?? [];
+        final sent = results.where((r) => r['status'] == 'sent').length;
+        final failed = results.where((r) => r['status'] == 'failed').length;
+
+        await appState.markOrderSent(widget.orderId);
+
+        messenger.showSnackBar(
+          SnackBar(
+            content: Text(
+              'Emails sent to $sent supplier(s)'
+              '${failed > 0 ? ', $failed failed' : ''}',
+            ),
+            backgroundColor: failed > 0 ? Colors.orange : Colors.green,
+          ),
+        );
+      } else {
+        messenger.showSnackBar(
+          SnackBar(
+            content: Text('Email sending failed: ${response.body}'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
     } catch (e) {
       messenger.showSnackBar(
         SnackBar(content: Text('Failed: $e'), backgroundColor: Colors.red),
