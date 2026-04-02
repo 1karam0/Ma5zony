@@ -375,11 +375,19 @@ class _SupplierFormDialogState extends State<_SupplierFormDialog> {
                   int.tryParse(_leadTimeCtrl.text) ?? 0,
             );
             final appState = context.read<AppState>();
-            Navigator.pop(context);
-            if (isEdit) {
-              await appState.updateSupplier(supplier);
-            } else {
-              await appState.addSupplier(supplier);
+            final messenger = ScaffoldMessenger.of(context);
+            final nav = Navigator.of(context);
+            try {
+              if (isEdit) {
+                await appState.updateSupplier(supplier);
+              } else {
+                await appState.addSupplier(supplier);
+              }
+              nav.pop();
+            } catch (e) {
+              messenger.showSnackBar(
+                SnackBar(content: Text('Failed to save supplier: $e'), backgroundColor: Colors.red),
+              );
             }
           },
           child: Text(isEdit ? 'Save Changes' : 'Add Supplier'),

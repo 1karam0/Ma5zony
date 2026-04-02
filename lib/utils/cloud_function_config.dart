@@ -29,7 +29,7 @@ class CloudFunctionConfig {
   // ── Order Import ─────────────────────────────────────────────────────
 
   static const String shopifyImportOrders =
-      '${_baseUrl}shopifyimportorders$_suffix';
+      'https://us-central1-ma5zony.cloudfunctions.net/shopifyImportOrders';
 
   /// All Shopify function URLs in a map (for dynamic lookup).
   static const Map<String, String> shopifyFunctions = {

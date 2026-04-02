@@ -438,8 +438,16 @@ class _AddDemandRecordDialogState extends State<_AddDemandRecordDialog> {
                     quantity: int.parse(_qtyCtrl.text),
                   );
                   final appState = context.read<AppState>();
-                  Navigator.pop(context);
-                  await appState.addDemandRecord(record);
+                  final messenger = ScaffoldMessenger.of(context);
+                  final nav = Navigator.of(context);
+                  try {
+                    await appState.addDemandRecord(record);
+                    nav.pop();
+                  } catch (e) {
+                    messenger.showSnackBar(
+                      SnackBar(content: Text('Failed to add record: $e'), backgroundColor: Colors.red),
+                    );
+                  }
                 },
           child: const Text('Add Record'),
         ),

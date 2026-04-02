@@ -314,11 +314,19 @@ class WarehousesScreen extends StatelessWidget {
                 totalStock: existing?.totalStock ?? 0,
               );
               final appState = context.read<AppState>();
-              Navigator.pop(ctx);
-              if (isEdit) {
-                await appState.updateWarehouse(warehouse);
-              } else {
-                await appState.addWarehouse(warehouse);
+              final messenger = ScaffoldMessenger.of(context);
+              final nav = Navigator.of(ctx);
+              try {
+                if (isEdit) {
+                  await appState.updateWarehouse(warehouse);
+                } else {
+                  await appState.addWarehouse(warehouse);
+                }
+                nav.pop();
+              } catch (e) {
+                messenger.showSnackBar(
+                  SnackBar(content: Text('Failed to save warehouse: $e'), backgroundColor: Colors.red),
+                );
               }
             },
             child: Text(isEdit ? 'Save Changes' : 'Add Warehouse'),

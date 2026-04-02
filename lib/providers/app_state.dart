@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
@@ -7,9 +8,11 @@ import 'package:ma5zony/models/app_user.dart';
 import 'package:ma5zony/models/demand_record.dart';
 import 'package:ma5zony/models/forecast_result.dart';
 import 'package:ma5zony/models/product.dart';
+import 'package:ma5zony/models/purchase_order.dart';
 import 'package:ma5zony/models/replenishment_recommendation.dart';
 import 'package:ma5zony/models/shopify_store_connection.dart';
 import 'package:ma5zony/models/supplier.dart';
+import 'package:ma5zony/models/supplier_order.dart';
 import 'package:ma5zony/models/warehouse.dart';
 import 'package:ma5zony/services/firebase_auth_service.dart';
 import 'package:ma5zony/services/firestore_inventory_repository.dart';
@@ -73,28 +76,42 @@ class AppState extends ChangeNotifier {
   String? _errorMessage;
   String? get errorMessage => _errorMessage;
 
+  /// True while login() or register() is actively handling auth.
+  /// Prevents the authStateChanges listener from racing.
+  bool _handlingAuth = false;
+
   void _onAuthStateChanged(dynamic firebaseUser) async {
-    if (firebaseUser == null) {
-      _currentUser = null;
-      _repo = null;
-      _settingsService = null;
-      _shopifyService = null;
-      _clearDomainState();
-    } else {
-      // Fetch the Firestore user profile.
-      final profile = await _authService.getUserProfile(firebaseUser.uid);
-      if (profile != null) {
-        _currentUser = AppUser.fromFirestore(firebaseUser.uid, profile);
+    // If login() or register() is handling this, skip to avoid race condition.
+    if (_handlingAuth) return;
+
+    try {
+      if (firebaseUser == null) {
+        _currentUser = null;
+        _repo = null;
+        _settingsService = null;
+        _shopifyService = null;
+        _clearDomainState();
       } else {
-        // Fallback when profile doc hasn't been created yet.
-        _currentUser = AppUser(
-          uid: firebaseUser.uid,
-          name: firebaseUser.displayName ?? '',
-          email: firebaseUser.email ?? '',
-          role: 'Inventory Manager',
-        );
+        // Cold start / page reload with existing session.
+        if (_currentUser != null && _repo != null) return;
+        final profile = await _authService.getUserProfile(firebaseUser.uid);
+        if (profile != null) {
+          _currentUser = AppUser.fromFirestore(firebaseUser.uid, profile);
+        } else {
+          _currentUser = AppUser(
+            uid: firebaseUser.uid,
+            name: firebaseUser.displayName ?? '',
+            email: firebaseUser.email ?? '',
+            role: 'Inventory Manager',
+          );
+        }
+        _initRepo(firebaseUser.uid);
+        notifyListeners();
+        await loadAll();
+        return;
       }
-      _initRepo(firebaseUser.uid);
+    } catch (e) {
+      _authError = 'Failed to load user profile. Please try again.';
     }
     notifyListeners();
   }
@@ -113,17 +130,30 @@ class AppState extends ChangeNotifier {
     _approvedRecommendations = {};
     _notifications = [];
     _teamMembers = [];
+    _purchaseOrders = [];
+    _supplierOrders = [];
   }
 
   Future<bool> login(String email, String password) async {
     _authError = null;
+    _handlingAuth = true;
     try {
       final user = await _authService.login(email, password);
       if (user != null) {
-        final profile = await _authService.getUserProfile(user.uid);
-        if (profile != null) {
-          _currentUser = AppUser.fromFirestore(user.uid, profile);
-        } else {
+        try {
+          final profile = await _authService.getUserProfile(user.uid);
+          if (profile != null) {
+            _currentUser = AppUser.fromFirestore(user.uid, profile);
+          } else {
+            _currentUser = AppUser(
+              uid: user.uid,
+              name: user.displayName ?? '',
+              email: user.email ?? '',
+              role: 'Inventory Manager',
+            );
+          }
+        } catch (_) {
+          // Profile fetch may fail on web due to auth propagation delay.
           _currentUser = AppUser(
             uid: user.uid,
             name: user.displayName ?? '',
@@ -133,6 +163,7 @@ class AppState extends ChangeNotifier {
         }
         _initRepo(user.uid);
         notifyListeners();
+        await loadAll();
         return true;
       }
       return false;
@@ -140,6 +171,8 @@ class AppState extends ChangeNotifier {
       _authError = _parseFirebaseError(e);
       notifyListeners();
       return false;
+    } finally {
+      _handlingAuth = false;
     }
   }
 
@@ -160,6 +193,7 @@ class AppState extends ChangeNotifier {
     String role,
   ) async {
     _authError = null;
+    _handlingAuth = true;
     try {
       final user = await _authService.register(
         name: name,
@@ -174,7 +208,9 @@ class AppState extends ChangeNotifier {
           email: email,
           role: role,
         );
+        _initRepo(user.uid);
         notifyListeners();
+        await loadAll();
         return true;
       }
       return false;
@@ -182,6 +218,8 @@ class AppState extends ChangeNotifier {
       _authError = _parseFirebaseError(e);
       notifyListeners();
       return false;
+    } finally {
+      _handlingAuth = false;
     }
   }
 
@@ -197,6 +235,9 @@ class AppState extends ChangeNotifier {
     if (msg.contains('email-already-in-use')) return 'An account already exists with that email.';
     if (msg.contains('weak-password')) return 'Password must be at least 6 characters.';
     if (msg.contains('invalid-credential')) return 'Invalid email or password.';
+    if (msg.contains('INVALID_LOGIN_CREDENTIALS')) return 'Invalid email or password.';
+    if (msg.contains('too-many-requests')) return 'Too many attempts. Please try again later.';
+    if (msg.contains('network-request-failed')) return 'Network error. Check your connection.';
     return 'Authentication failed. Please try again.';
   }
 
@@ -214,6 +255,8 @@ class AppState extends ChangeNotifier {
   UserSettings _settings = const UserSettings();
   Set<String> _approvedRecommendations = {};
   List<AppUser> _teamMembers = [];
+  List<PurchaseOrder> _purchaseOrders = [];
+  List<SupplierOrder> _supplierOrders = [];
 
   List<Product> get products => _products;
   List<Warehouse> get warehouses => _warehouses;
@@ -225,6 +268,8 @@ class AppState extends ChangeNotifier {
   UserSettings get settings => _settings;
   Set<String> get approvedRecommendations => _approvedRecommendations;
   List<AppUser> get teamMembers => _teamMembers;
+  List<PurchaseOrder> get purchaseOrders => _purchaseOrders;
+  List<SupplierOrder> get supplierOrders => _supplierOrders;
 
   // ── Notifications ──────────────────────────────────────────────────────────
   List<AppNotification> _notifications = [];
@@ -569,6 +614,9 @@ class AppState extends ChangeNotifier {
       // Load team members for owners
       await loadTeamMembers();
 
+      // Load purchase orders
+      await loadPurchaseOrders();
+
       // Check for stock alerts (fire-and-forget)
       _checkStockAlerts();
     } finally {
@@ -703,5 +751,133 @@ class AppState extends ChangeNotifier {
   Future<void> _loadShopifyConnection() async {
     if (_shopifyService == null) return;
     _shopifyConnection = await _shopifyService!.getCurrentConnection();
+  }
+
+  // ── Purchase Order Management ──────────────────────────────────────────────
+
+  FirestoreInventoryRepository? get _firestoreRepo =>
+      _repo is FirestoreInventoryRepository
+          ? _repo as FirestoreInventoryRepository
+          : null;
+
+  Future<void> loadPurchaseOrders() async {
+    final repo = _firestoreRepo;
+    if (repo == null) return;
+    _purchaseOrders = await repo.getPurchaseOrders();
+    _supplierOrders = await repo.getAllSupplierOrders();
+    notifyListeners();
+  }
+
+  /// Build a draft PurchaseOrder from current replenishment recommendations.
+  PurchaseOrder buildOrderFromRecommendations(
+      {List<ReplenishmentRecommendation>? selectedRecs}) {
+    final recs = selectedRecs ??
+        _recommendations
+            .where((r) => r.status == 'Critical' || r.status == 'Order Now')
+            .toList();
+
+    final supplierMap = {for (final s in _suppliers) s.id: s};
+    final productMap = {for (final p in _products) p.id: p};
+
+    final items = recs.map((r) {
+      final product = productMap[r.productId];
+      final supplier =
+          product?.supplierId != null ? supplierMap[product!.supplierId] : null;
+      return PurchaseOrderItem(
+        productId: r.productId,
+        productName: r.productName,
+        sku: r.sku,
+        supplierId: supplier?.id,
+        supplierName: supplier?.name,
+        supplierEmail: supplier?.contactEmail,
+        quantity: r.suggestedOrderQty,
+        unitCost: product?.unitCost ?? 0,
+      );
+    }).toList();
+
+    return PurchaseOrder(
+      id: '',
+      status: OrderStatus.draft,
+      createdAt: DateTime.now(),
+      createdByUid: _currentUser?.uid ?? '',
+      createdByName: _currentUser?.name ?? '',
+      items: items,
+    );
+  }
+
+  /// Confirm and save a purchase order; creates supplier orders automatically.
+  Future<PurchaseOrder?> confirmPurchaseOrder(PurchaseOrder order) async {
+    final repo = _firestoreRepo;
+    if (repo == null) return null;
+
+    try {
+      order.status = OrderStatus.confirmed;
+      final saved = await repo.addPurchaseOrder(order);
+
+      // Split into supplier orders grouped by supplier
+      final bySupplier = saved.itemsBySupplier;
+      for (final entry in bySupplier.entries) {
+        final supplierId = entry.key;
+        final items = entry.value;
+        if (supplierId == null) continue; // skip items without a supplier
+
+        final token = _generateAccessToken();
+        final supplierOrder = SupplierOrder(
+          id: '${saved.id}_$supplierId',
+          purchaseOrderId: saved.id,
+          ownerUid: _currentUser!.uid,
+          supplierId: supplierId,
+          supplierName: items.first.supplierName ?? 'Unknown',
+          supplierEmail: items.first.supplierEmail ?? '',
+          status: 'pending',
+          createdAt: DateTime.now(),
+          items: items
+              .map((i) => SupplierOrderItem(
+                    productId: i.productId,
+                    productName: i.productName,
+                    sku: i.sku,
+                    quantity: i.quantity,
+                    unitCost: i.unitCost,
+                  ))
+              .toList(),
+          accessToken: token,
+        );
+        await repo.addSupplierOrder(supplierOrder);
+        _supplierOrders.add(supplierOrder);
+      }
+
+      _purchaseOrders.insert(0, saved);
+      notifyListeners();
+      return saved;
+    } catch (e) {
+      _errorMessage = 'Failed to create order: $e';
+      notifyListeners();
+      rethrow;
+    }
+  }
+
+  /// Mark a purchase order as sent (after emails are dispatched).
+  Future<void> markOrderSent(String orderId) async {
+    final repo = _firestoreRepo;
+    if (repo == null) return;
+    final idx = _purchaseOrders.indexWhere((o) => o.id == orderId);
+    if (idx == -1) return;
+    _purchaseOrders[idx].status = OrderStatus.sent;
+    await repo.updatePurchaseOrder(_purchaseOrders[idx]);
+    notifyListeners();
+  }
+
+  /// Get supplier orders for a specific purchase order.
+  List<SupplierOrder> getSupplierOrdersFor(String purchaseOrderId) {
+    return _supplierOrders
+        .where((o) => o.purchaseOrderId == purchaseOrderId)
+        .toList();
+  }
+
+  String _generateAccessToken() {
+    const chars =
+        'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+    final rng = Random.secure();
+    return List.generate(32, (_) => chars[rng.nextInt(chars.length)]).join();
   }
 }

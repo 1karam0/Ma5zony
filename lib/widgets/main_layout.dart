@@ -110,6 +110,12 @@ class _Sidebar extends StatelessWidget {
                   isDesktop: isDesktop,
                 ),
                 _NavItem(
+                  icon: Icons.receipt_long,
+                  label: 'Orders',
+                  path: '/orders',
+                  isDesktop: isDesktop,
+                ),
+                _NavItem(
                   icon: Icons.integration_instructions,
                   label: 'Integrations',
                   path: '/integrations',
@@ -275,6 +281,8 @@ class _TopBar extends StatelessWidget {
       title = 'Forecasts';
     else if (location.contains('replenishment'))
       title = 'Replenishment';
+    else if (location.contains('orders'))
+      title = 'Purchase Orders';
     else if (location.contains('integrations'))
       title = 'Integrations';
     else if (location.contains('settings'))

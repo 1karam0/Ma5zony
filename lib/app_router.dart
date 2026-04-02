@@ -15,6 +15,10 @@ import 'package:ma5zony/features/replenishment/replenishment_screen.dart';
 import 'package:ma5zony/features/integrations/integrations_screen.dart';
 import 'package:ma5zony/features/settings/settings_screen.dart';
 import 'package:ma5zony/features/financial_analytics/financial_analytics_screen.dart';
+import 'package:ma5zony/features/orders/orders_screen.dart';
+import 'package:ma5zony/features/orders/create_order_screen.dart';
+import 'package:ma5zony/features/orders/order_detail_screen.dart';
+import 'package:ma5zony/features/supplier_portal/supplier_portal_screen.dart';
 import 'package:ma5zony/utils/role_guard.dart';
 
 // Private navigators
@@ -30,6 +34,14 @@ GoRouter buildAppRouter(AppState appState) => GoRouter(
     GoRoute(
       path: '/register',
       builder: (context, state) => const RegisterScreen(),
+    ),
+    // Supplier portal — outside the auth shell (no login required)
+    GoRoute(
+      path: '/supplier-portal',
+      builder: (context, state) {
+        final token = state.uri.queryParameters['token'] ?? '';
+        return SupplierPortalScreen(accessToken: token);
+      },
     ),
     ShellRoute(
       navigatorKey: _shellNavigatorKey,
@@ -92,13 +104,35 @@ GoRouter buildAppRouter(AppState appState) => GoRouter(
           pageBuilder: (context, state) =>
               const NoTransitionPage(child: FinancialAnalyticsScreen()),
         ),
+        GoRoute(
+          path: '/orders',
+          pageBuilder: (context, state) =>
+              const NoTransitionPage(child: OrdersScreen()),
+        ),
+        GoRoute(
+          path: '/orders/create',
+          pageBuilder: (context, state) =>
+              const NoTransitionPage(child: CreateOrderScreen()),
+        ),
+        GoRoute(
+          path: '/orders/:id',
+          pageBuilder: (context, state) {
+            final id = state.pathParameters['id']!;
+            return NoTransitionPage(
+              child: OrderDetailScreen(orderId: id),
+            );
+          },
+        ),
       ],
     ),
   ],
   redirect: (context, state) {
     final loggedIn = appState.currentUser != null;
-    final loggingIn =
-        state.uri.toString() == '/login' || state.uri.toString() == '/register';
+    final path = state.uri.toString();
+    final loggingIn = path == '/login' || path == '/register';
+
+    // Supplier portal is public — no auth redirect
+    if (path.startsWith('/supplier-portal')) return null;
 
     if (!loggedIn && !loggingIn) return '/login';
     if (loggedIn && loggingIn) return '/dashboard';

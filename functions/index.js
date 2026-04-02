@@ -11,6 +11,7 @@
  */
 
 const { onRequest } = require("firebase-functions/v2/https");
+const { onDocumentUpdated } = require("firebase-functions/v2/firestore");
 const { defineSecret } = require("firebase-functions/params");
 const admin = require("firebase-admin");
 const crypto = require("crypto");
@@ -496,5 +497,168 @@ exports.shopifyImportOrders = onRequest(
           : 0,
       },
     });
+  }
+);
+
+// ── Email Secrets ────────────────────────────────────────────────────────────
+const SMTP_HOST = defineSecret("SMTP_HOST");
+const SMTP_PORT = defineSecret("SMTP_PORT");
+const SMTP_USER = defineSecret("SMTP_USER");
+const SMTP_PASS = defineSecret("SMTP_PASS");
+
+// ── Send Order Emails to Suppliers ───────────────────────────────────────────
+
+/**
+ * Called when a purchase order status changes to "sent".
+ * Looks up all supplier orders for this purchase order and sends
+ * an email to each supplier with their order details and a portal link.
+ *
+ * POST /sendSupplierEmails
+ * Body: { uid, purchaseOrderId, appUrl }
+ *
+ * SETUP:
+ *   firebase functions:secrets:set SMTP_HOST   (e.g. smtp.gmail.com)
+ *   firebase functions:secrets:set SMTP_PORT   (e.g. 587)
+ *   firebase functions:secrets:set SMTP_USER   (e.g. your@gmail.com)
+ *   firebase functions:secrets:set SMTP_PASS   (e.g. app password)
+ */
+exports.sendSupplierEmails = onRequest(
+  {
+    cors: true,
+    secrets: [SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS],
+  },
+  async (req, res) => {
+    if (req.method !== "POST") {
+      res.status(405).json({ error: "POST only" });
+      return;
+    }
+
+    const { uid, purchaseOrderId, appUrl } = req.body;
+    if (!uid || !purchaseOrderId) {
+      res.status(400).json({ error: "uid and purchaseOrderId required" });
+      return;
+    }
+
+    const siteUrl = appUrl || "https://ma5zony.web.app";
+
+    try {
+      // Fetch supplier orders for this purchase order
+      const supplierSnap = await db
+        .collection("supplierOrders")
+        .where("purchaseOrderId", "==", purchaseOrderId)
+        .where("ownerUid", "==", uid)
+        .get();
+
+      if (supplierSnap.empty) {
+        res.status(404).json({ error: "No supplier orders found" });
+        return;
+      }
+
+      // Set up email transport
+      const nodemailer = require("nodemailer");
+      const transporter = nodemailer.createTransport({
+        host: SMTP_HOST.value(),
+        port: parseInt(SMTP_PORT.value()) || 587,
+        secure: parseInt(SMTP_PORT.value()) === 465,
+        auth: {
+          user: SMTP_USER.value(),
+          pass: SMTP_PASS.value(),
+        },
+      });
+
+      const results = [];
+      for (const doc of supplierSnap.docs) {
+        const order = doc.data();
+        const portalUrl = `${siteUrl}/#/supplier-portal?token=${order.accessToken}`;
+
+        // Build items table HTML
+        const itemsHtml = order.items
+          .map(
+            (item) => `
+          <tr>
+            <td style="padding:8px;border:1px solid #ddd">${item.productName}</td>
+            <td style="padding:8px;border:1px solid #ddd">${item.sku}</td>
+            <td style="padding:8px;border:1px solid #ddd;text-align:center">${item.quantity}</td>
+            <td style="padding:8px;border:1px solid #ddd;text-align:right">$${(item.unitCost * item.quantity).toFixed(2)}</td>
+          </tr>`
+          )
+          .join("");
+
+        const totalCost = order.items
+          .reduce((sum, i) => sum + i.unitCost * i.quantity, 0)
+          .toFixed(2);
+
+        const html = `
+          <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto">
+            <div style="background:#1a73e8;color:white;padding:20px;border-radius:8px 8px 0 0">
+              <h2 style="margin:0">Ma5zony — New Purchase Order</h2>
+            </div>
+            <div style="padding:20px;border:1px solid #ddd;border-top:none;border-radius:0 0 8px 8px">
+              <p>Hello <strong>${order.supplierName}</strong>,</p>
+              <p>You have received a new purchase order. Please review the items below:</p>
+              
+              <table style="width:100%;border-collapse:collapse;margin:16px 0">
+                <tr style="background:#f5f5f5">
+                  <th style="padding:8px;border:1px solid #ddd;text-align:left">Product</th>
+                  <th style="padding:8px;border:1px solid #ddd;text-align:left">SKU</th>
+                  <th style="padding:8px;border:1px solid #ddd;text-align:center">Quantity</th>
+                  <th style="padding:8px;border:1px solid #ddd;text-align:right">Est. Cost</th>
+                </tr>
+                ${itemsHtml}
+                <tr style="background:#f5f5f5;font-weight:bold">
+                  <td colspan="3" style="padding:8px;border:1px solid #ddd;text-align:right">Total:</td>
+                  <td style="padding:8px;border:1px solid #ddd;text-align:right">$${totalCost}</td>
+                </tr>
+              </table>
+
+              <p><strong>Next Steps:</strong></p>
+              <ol>
+                <li>Click the button below to open your supplier portal</li>
+                <li>Enter your estimated delivery time</li>
+                <li>Provide your final cost quote</li>
+                <li>Add any notes or constraints</li>
+              </ol>
+
+              <div style="text-align:center;margin:24px 0">
+                <a href="${portalUrl}" 
+                   style="background:#1a73e8;color:white;padding:12px 32px;text-decoration:none;border-radius:6px;font-weight:bold;display:inline-block">
+                  Open Supplier Portal
+                </a>
+              </div>
+
+              <p style="color:#666;font-size:12px">
+                If the button doesn't work, copy and paste this link into your browser:<br>
+                <a href="${portalUrl}">${portalUrl}</a>
+              </p>
+            </div>
+          </div>`;
+
+        try {
+          await transporter.sendMail({
+            from: `"Ma5zony Orders" <${SMTP_USER.value()}>`,
+            to: order.supplierEmail,
+            subject: `New Purchase Order — ${order.items.length} item(s)`,
+            html: html,
+          });
+          results.push({
+            supplier: order.supplierName,
+            email: order.supplierEmail,
+            status: "sent",
+          });
+        } catch (emailErr) {
+          results.push({
+            supplier: order.supplierName,
+            email: order.supplierEmail,
+            status: "failed",
+            error: emailErr.message,
+          });
+        }
+      }
+
+      res.json({ results });
+    } catch (err) {
+      console.error("sendSupplierEmails error:", err);
+      res.status(500).json({ error: err.message });
+    }
   }
 );

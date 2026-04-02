@@ -1,7 +1,9 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:ma5zony/models/demand_record.dart';
 import 'package:ma5zony/models/product.dart';
+import 'package:ma5zony/models/purchase_order.dart';
 import 'package:ma5zony/models/supplier.dart';
+import 'package:ma5zony/models/supplier_order.dart';
 import 'package:ma5zony/models/warehouse.dart';
 import 'package:ma5zony/services/inventory_repository.dart';
 
@@ -164,5 +166,61 @@ class FirestoreInventoryRepository implements InventoryRepository {
   @override
   Future<void> deleteDemandRecord(String recordId) async {
     await _demandCol.doc(recordId).delete();
+  }
+
+  // ── Purchase Orders ──────────────────────────────────────────────────────
+
+  CollectionReference<Map<String, dynamic>> get _ordersCol =>
+      _db.collection('users').doc(uid).collection('purchaseOrders');
+
+  Future<List<PurchaseOrder>> getPurchaseOrders() async {
+    final snap = await _ordersCol.orderBy('createdAt', descending: true).get();
+    return snap.docs
+        .map((d) => PurchaseOrder.fromFirestore(d.id, d.data()))
+        .toList();
+  }
+
+  Future<PurchaseOrder> addPurchaseOrder(PurchaseOrder order) async {
+    final data = order.toFirestore();
+    final docRef = await _ordersCol.add(data);
+    return PurchaseOrder.fromFirestore(docRef.id, data);
+  }
+
+  Future<void> updatePurchaseOrder(PurchaseOrder order) async {
+    await _ordersCol.doc(order.id).update(order.toFirestore());
+  }
+
+  Future<void> deletePurchaseOrder(String orderId) async {
+    await _ordersCol.doc(orderId).delete();
+  }
+
+  // ── Supplier Orders (top-level collection for supplier portal access) ────
+
+  CollectionReference<Map<String, dynamic>> get _supplierOrdersCol =>
+      _db.collection('supplierOrders');
+
+  Future<void> addSupplierOrder(SupplierOrder order) async {
+    await _supplierOrdersCol.doc(order.id).set(order.toFirestore());
+  }
+
+  Future<List<SupplierOrder>> getSupplierOrdersForPurchase(
+      String purchaseOrderId) async {
+    final snap = await _supplierOrdersCol
+        .where('purchaseOrderId', isEqualTo: purchaseOrderId)
+        .where('ownerUid', isEqualTo: uid)
+        .get();
+    return snap.docs
+        .map((d) => SupplierOrder.fromFirestore(d.id, d.data()))
+        .toList();
+  }
+
+  Future<List<SupplierOrder>> getAllSupplierOrders() async {
+    final snap = await _supplierOrdersCol
+        .where('ownerUid', isEqualTo: uid)
+        .orderBy('createdAt', descending: true)
+        .get();
+    return snap.docs
+        .map((d) => SupplierOrder.fromFirestore(d.id, d.data()))
+        .toList();
   }
 }

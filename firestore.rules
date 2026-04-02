@@ -71,6 +71,23 @@ service cloud.firestore {
       match /analytics/{docId} {
         allow read, write: if request.auth != null && request.auth.uid == userId;
       }
+
+      // ── Purchase Orders ──────────────────────────────────────────────
+      match /purchaseOrders/{orderId} {
+        allow read, write: if request.auth != null && request.auth.uid == userId;
+      }
+    }
+
+    // ── Supplier Orders (top-level for portal access) ────────────────────
+    // Authenticated users can read/write their own supplier orders.
+    // Supplier portal reads/writes are done via Cloud Functions (admin SDK).
+    match /supplierOrders/{orderId} {
+      allow read: if request.auth != null
+                  && resource.data.ownerUid == request.auth.uid;
+      allow create: if request.auth != null
+                    && request.resource.data.ownerUid == request.auth.uid;
+      allow update: if request.auth != null
+                    && resource.data.ownerUid == request.auth.uid;
     }
   }
 }

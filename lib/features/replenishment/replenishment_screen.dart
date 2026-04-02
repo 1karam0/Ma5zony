@@ -1,6 +1,7 @@
 import 'package:csv/csv.dart' show CsvEncoder;
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
+import 'package:go_router/go_router.dart';
 import 'package:provider/provider.dart';
 import 'package:ma5zony/providers/app_state.dart';
 import 'package:ma5zony/models/replenishment_recommendation.dart';
@@ -191,6 +192,18 @@ class _ReplenishmentScreenState extends State<ReplenishmentScreen> {
                           foregroundColor: Colors.white,
                         ),
                       ),
+                      if (needingAction > 0) ...[
+                        const SizedBox(width: 16),
+                        ElevatedButton.icon(
+                          onPressed: () => context.go('/orders/create'),
+                          icon: const Icon(Icons.shopping_cart),
+                          label: const Text('Create Order'),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: AppColors.success,
+                            foregroundColor: Colors.white,
+                          ),
+                        ),
+                      ],
                     ],
                   ),
                   const SizedBox(height: 24),

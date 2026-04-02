@@ -1,5 +1,6 @@
 // ignore_for_file: deprecated_member_use
 import 'package:flutter/material.dart';
+import 'package:go_router/go_router.dart';
 import 'package:provider/provider.dart';
 import 'package:ma5zony/models/product.dart';
 import 'package:ma5zony/providers/app_state.dart';
@@ -38,6 +39,63 @@ class _ProductsScreenState extends State<ProductsScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          // Low-stock alert banner
+          Builder(builder: (context) {
+            final lowStockCount = state.recommendations
+                .where(
+                    (r) => r.status == 'Critical' || r.status == 'Order Now')
+                .length;
+            if (lowStockCount == 0) return const SizedBox.shrink();
+            return Padding(
+              padding: const EdgeInsets.only(bottom: 16),
+              child: Card(
+                color: Colors.red.shade50,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  side: BorderSide(color: Colors.red.shade200),
+                ),
+                child: Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: Row(
+                    children: [
+                      const Icon(Icons.warning_amber,
+                          color: Colors.red, size: 28),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              '$lowStockCount product(s) are running low on stock',
+                              style: const TextStyle(
+                                fontWeight: FontWeight.bold,
+                                color: Colors.red,
+                              ),
+                            ),
+                            const SizedBox(height: 4),
+                            const Text(
+                              'Create a purchase order to restock from your suppliers.',
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      ElevatedButton.icon(
+                        onPressed: () => context.go('/orders/create'),
+                        icon: const Icon(Icons.shopping_cart),
+                        label: const Text('Create Order'),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.red,
+                          foregroundColor: Colors.white,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            );
+          }),
+
           SectionHeader(
             title: 'Product Inventory',
             actions: [
@@ -568,11 +626,19 @@ class _AddProductDialogState extends State<_AddProductDialog> {
               supplierId: _selectedSupplierId,
             );
             final appState = context.read<AppState>();
-            Navigator.pop(context);
-            if (_isEdit) {
-              await appState.updateProduct(product);
-            } else {
-              await appState.addProduct(product);
+            final messenger = ScaffoldMessenger.of(context);
+            final nav = Navigator.of(context);
+            try {
+              if (_isEdit) {
+                await appState.updateProduct(product);
+              } else {
+                await appState.addProduct(product);
+              }
+              nav.pop();
+            } catch (e) {
+              messenger.showSnackBar(
+                SnackBar(content: Text('Failed to save product: $e'), backgroundColor: Colors.red),
+              );
             }
           },
           child: Text(_isEdit ? 'Save Changes' : 'Save Product'),
