@@ -16,6 +16,7 @@ class _CreateOrderScreenState extends State<CreateOrderScreen> {
   late PurchaseOrder _draftOrder;
   final _notesCtrl = TextEditingController();
   bool _saving = false;
+  bool _savingDraft = false;
   final Map<String, TextEditingController> _qtyControllers = {};
 
   @override
@@ -45,6 +46,44 @@ class _CreateOrderScreenState extends State<CreateOrderScreen> {
       _qtyControllers.remove(item.productId);
       _draftOrder.items.removeAt(index);
     });
+  }
+
+  Future<void> _saveDraft() async {
+    if (_draftOrder.items.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Add at least one item to the order.')),
+      );
+      return;
+    }
+    // Update quantities from controllers
+    for (final item in _draftOrder.items) {
+      final ctrl = _qtyControllers[item.productId];
+      if (ctrl != null) {
+        item.quantity = int.tryParse(ctrl.text) ?? item.quantity;
+      }
+    }
+    _draftOrder.items.removeWhere((i) => i.quantity <= 0);
+    _draftOrder.notes = _notesCtrl.text.trim().isEmpty ? null : _notesCtrl.text.trim();
+
+    setState(() => _savingDraft = true);
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      final saved = await context.read<AppState>().saveDraftOrder(_draftOrder);
+      if (saved != null && mounted) {
+        messenger.showSnackBar(
+          const SnackBar(
+            content: Text('Draft saved. You can edit it later from the Orders page.'),
+          ),
+        );
+        context.go('/orders');
+      }
+    } catch (e) {
+      messenger.showSnackBar(
+        SnackBar(content: Text('Failed to save draft: $e'), backgroundColor: Colors.red),
+      );
+    } finally {
+      if (mounted) setState(() => _savingDraft = false);
+    }
   }
 
   Future<void> _confirmOrder() async {
@@ -338,6 +377,18 @@ class _CreateOrderScreenState extends State<CreateOrderScreen> {
                 child: const Text('Cancel'),
               ),
               const SizedBox(width: 16),
+              OutlinedButton.icon(
+                onPressed: _savingDraft ? null : _saveDraft,
+                icon: _savingDraft
+                    ? const SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.save_outlined),
+                label: Text(_savingDraft ? 'Saving...' : 'Save as Draft'),
+              ),
+              const SizedBox(width: 16),
               ElevatedButton.icon(
                 onPressed: _saving ? null : _confirmOrder,
                 icon: _saving
@@ -350,7 +401,7 @@ class _CreateOrderScreenState extends State<CreateOrderScreen> {
                         ),
                       )
                     : const Icon(Icons.check_circle),
-                label: Text(_saving ? 'Creating...' : 'Confirm Order'),
+                label: Text(_saving ? 'Creating...' : 'Confirm & Send'),
                 style: ElevatedButton.styleFrom(
                   backgroundColor: AppColors.primary,
                   foregroundColor: Colors.white,

@@ -96,6 +96,7 @@ abstract class InventoryRepository {
 
   // ── Supplier Orders ──────────────────────────────────────────────────────
   Future<void> addSupplierOrder(SupplierOrder order);
+  Future<void> updateSupplierOrder(SupplierOrder order);
   Future<List<SupplierOrder>> getSupplierOrdersForPurchase(String purchaseOrderId);
   Future<List<SupplierOrder>> getAllSupplierOrders();
 }

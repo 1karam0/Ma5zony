@@ -451,6 +451,11 @@ class FirestoreInventoryRepository implements InventoryRepository {
   }
 
   @override
+  Future<void> updateSupplierOrder(SupplierOrder order) async {
+    await _supplierOrdersCol.doc(order.id).update(order.toFirestore());
+  }
+
+  @override
   Future<List<SupplierOrder>> getSupplierOrdersForPurchase(
       String purchaseOrderId) async {
     final snap = await _supplierOrdersCol

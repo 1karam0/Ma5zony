@@ -931,6 +931,22 @@ class AppState extends ChangeNotifier {
     );
   }
 
+  /// Save a purchase order as draft (not yet confirmed).
+  Future<PurchaseOrder?> saveDraftOrder(PurchaseOrder order) async {
+    if (_repo == null) return null;
+    try {
+      order.status = OrderStatus.draft;
+      final saved = await _repo!.addPurchaseOrder(order);
+      _purchaseOrders.insert(0, saved);
+      notifyListeners();
+      return saved;
+    } catch (e) {
+      _errorMessage = 'Failed to save draft: $e';
+      notifyListeners();
+      rethrow;
+    }
+  }
+
   /// Confirm and save a purchase order; creates supplier orders automatically.
   Future<PurchaseOrder?> confirmPurchaseOrder(PurchaseOrder order) async {
     if (_repo == null) return null;
@@ -1009,6 +1025,67 @@ class AppState extends ChangeNotifier {
     return _supplierOrders
         .where((o) => o.purchaseOrderId == purchaseOrderId)
         .toList();
+  }
+
+  /// Mark a supplier order as received: update status, increment raw material
+  /// stock for each line item, and auto-complete the parent purchase order if
+  /// all supplier orders are done.
+  Future<void> receiveSupplierOrder(String supplierOrderId) async {
+    if (_repo == null || _currentUser == null) return;
+
+    final soIdx = _supplierOrders.indexWhere((o) => o.id == supplierOrderId);
+    if (soIdx == -1) return;
+    final so = _supplierOrders[soIdx];
+
+    // 1. Mark supplier order as delivered
+    so.status = 'delivered';
+    await _repo!.updateSupplierOrder(so);
+
+    // 2. Update product stock for each line item
+    for (final item in so.items) {
+      final pIdx = _products.indexWhere((p) => p.id == item.productId);
+      if (pIdx != -1) {
+        _products[pIdx].currentStock += item.quantity;
+        await _repo!.updateProduct(_products[pIdx]);
+      }
+    }
+
+    // 3. Log the receipt
+    final logId = '${supplierOrderId}_received_${DateTime.now().millisecondsSinceEpoch}';
+    await _repo!.addWorkflowLog(WorkflowLog(
+      id: logId,
+      entityType: 'supplierOrder',
+      entityId: supplierOrderId,
+      action: 'received',
+      performedBy: _currentUser!.uid,
+      timestamp: DateTime.now(),
+      details: 'Received ${so.items.length} item(s) from ${so.supplierName}. '
+          'Stock updated for ${so.items.map((i) => i.productName).join(", ")}.',
+    ));
+
+    // 4. Check if all supplier orders for this purchase order are delivered
+    final purchaseOrderId = so.purchaseOrderId;
+    final siblings = _supplierOrders
+        .where((o) => o.purchaseOrderId == purchaseOrderId)
+        .toList();
+    final allDelivered = siblings.every((o) => o.status == 'delivered');
+
+    if (allDelivered) {
+      final poIdx = _purchaseOrders.indexWhere((o) => o.id == purchaseOrderId);
+      if (poIdx != -1) {
+        _purchaseOrders[poIdx].status = OrderStatus.completed;
+        await _repo!.updatePurchaseOrder(_purchaseOrders[poIdx]);
+      }
+    } else {
+      final poIdx = _purchaseOrders.indexWhere((o) => o.id == purchaseOrderId);
+      if (poIdx != -1 && _purchaseOrders[poIdx].status != OrderStatus.partiallyFulfilled) {
+        _purchaseOrders[poIdx].status = OrderStatus.partiallyFulfilled;
+        await _repo!.updatePurchaseOrder(_purchaseOrders[poIdx]);
+      }
+    }
+
+    _rebuildRecommendations();
+    notifyListeners();
   }
 
   String _generateAccessToken() {

@@ -353,14 +353,22 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
   }
 }
 
-class _SupplierOrderCard extends StatelessWidget {
+class _SupplierOrderCard extends StatefulWidget {
   final SupplierOrder supplierOrder;
   const _SupplierOrderCard({required this.supplierOrder});
 
   @override
+  State<_SupplierOrderCard> createState() => _SupplierOrderCardState();
+}
+
+class _SupplierOrderCardState extends State<_SupplierOrderCard> {
+  bool _receiving = false;
+
+  @override
   Widget build(BuildContext context) {
-    final so = supplierOrder;
+    final so = widget.supplierOrder;
     final hasResponse = so.response != null;
+    final isDelivered = so.status == 'delivered';
 
     return Card(
       elevation: 2,
@@ -384,11 +392,13 @@ class _SupplierOrderCard extends StatelessWidget {
                 ),
                 Text(so.supplierEmail, style: AppTextStyles.label),
                 const SizedBox(width: 12),
-                StatusChip(so.status == 'pending'
-                    ? 'Pending'
-                    : so.status == 'acknowledged'
-                        ? 'Acknowledged'
-                        : so.status),
+                StatusChip(isDelivered
+                    ? 'Received'
+                    : so.status == 'pending'
+                        ? 'Pending'
+                        : so.status == 'acknowledged'
+                            ? 'Acknowledged'
+                            : so.status),
               ],
             ),
             const Divider(height: 16),
@@ -416,7 +426,14 @@ class _SupplierOrderCard extends StatelessWidget {
                   ),
                 ),
                 const Spacer(),
-                if (hasResponse) ...[
+                if (isDelivered) ...[
+                  const Icon(Icons.check_circle,
+                      color: AppColors.success, size: 16),
+                  const SizedBox(width: 4),
+                  Text('Received & Stock Updated',
+                      style: AppTextStyles.label
+                          .copyWith(color: AppColors.success)),
+                ] else if (hasResponse) ...[
                   const Icon(Icons.check_circle,
                       color: AppColors.success, size: 16),
                   const SizedBox(width: 4),
@@ -427,14 +444,100 @@ class _SupplierOrderCard extends StatelessWidget {
                       color: AppColors.success,
                     ),
                   ),
-                ] else
+                  const SizedBox(width: 12),
+                  ElevatedButton.icon(
+                    onPressed: _receiving ? null : () => _markReceived(context, so),
+                    icon: _receiving
+                        ? const SizedBox(
+                            width: 14,
+                            height: 14,
+                            child: CircularProgressIndicator(
+                                strokeWidth: 2, color: Colors.white),
+                          )
+                        : const Icon(Icons.inventory, size: 16),
+                    label: Text(_receiving ? 'Updating...' : 'Mark as Received'),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: AppColors.success,
+                      foregroundColor: Colors.white,
+                    ),
+                  ),
+                ] else ...[
                   Text('Awaiting supplier response',
                       style: AppTextStyles.label),
+                  const SizedBox(width: 12),
+                  OutlinedButton.icon(
+                    onPressed: _receiving ? null : () => _markReceived(context, so),
+                    icon: _receiving
+                        ? const SizedBox(
+                            width: 14,
+                            height: 14,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.inventory, size: 16),
+                    label: Text(_receiving ? 'Updating...' : 'Mark as Received'),
+                  ),
+                ],
               ],
             ),
           ],
         ),
       ),
     );
+  }
+
+  Future<void> _markReceived(BuildContext context, SupplierOrder so) async {
+    // Confirm dialog
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Confirm Receipt'),
+        content: Text(
+          'Mark all ${so.items.length} item(s) from ${so.supplierName} as received?\n\n'
+          'This will update stock levels for:\n'
+          '${so.items.map((i) => "• ${i.productName}: +${i.quantity} units").join("\n")}',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppColors.success,
+              foregroundColor: Colors.white,
+            ),
+            child: const Text('Confirm Receipt'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true || !mounted) return;
+
+    setState(() => _receiving = true);
+    final messenger = ScaffoldMessenger.of(context);
+    final appState = context.read<AppState>();
+    try {
+      await appState.receiveSupplierOrder(so.id);
+      if (mounted) {
+        messenger.showSnackBar(
+          SnackBar(
+            content: Text(
+              'Received ${so.items.length} item(s) from ${so.supplierName}. Stock updated!',
+            ),
+            backgroundColor: AppColors.success,
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        messenger.showSnackBar(
+          SnackBar(content: Text('Failed: $e'), backgroundColor: Colors.red),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _receiving = false);
+    }
   }
 }
