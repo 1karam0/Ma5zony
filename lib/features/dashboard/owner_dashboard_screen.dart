@@ -2,6 +2,7 @@ import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:provider/provider.dart';
+import 'package:ma5zony/models/production_order.dart';
 import 'package:ma5zony/providers/app_state.dart';
 import 'package:ma5zony/utils/constants.dart';
 import 'package:ma5zony/widgets/shared_widgets.dart';
@@ -224,6 +225,56 @@ class _OwnerDashboardScreenState extends State<OwnerDashboardScreen> {
               color: AppColors.success,
             ),
           ]),
+
+          const SizedBox(height: 24),
+
+          // ── Manufacturing Readiness KPIs ─────────────────────────────
+          Text('Manufacturing Readiness', style: AppTextStyles.h2),
+          const SizedBox(height: 16),
+          Builder(builder: (context) {
+            final pendingMaterialOrders = state.rawMaterialOrders
+                .where((o) => o.status != 'completed')
+                .length;
+            final activeProductionOrders = state.productionOrders
+                .where((o) =>
+                    o.status != ProductionOrderStatus.completed &&
+                    o.status != ProductionOrderStatus.draft)
+                .length;
+            final budgetRemaining =
+                state.latestCashFlow?.totalAvailable ?? 0;
+            final allocatedBudget =
+                state.latestCashFlow?.allocatedToProduction ?? 0;
+
+            return _buildKPIGrid([
+              KPICard(
+                title: 'Pending Material Orders',
+                value: '$pendingMaterialOrders',
+                icon: Icons.local_shipping,
+                isAlert: pendingMaterialOrders > 0,
+                color: AppColors.warning,
+              ),
+              KPICard(
+                title: 'Active Production Orders',
+                value: '$activeProductionOrders',
+                icon: Icons.precision_manufacturing,
+                color: AppColors.accent,
+              ),
+              KPICard(
+                title: 'Budget Remaining',
+                value:
+                    '\$${(budgetRemaining - allocatedBudget).toStringAsFixed(0)}',
+                icon: Icons.account_balance,
+                isAlert: (budgetRemaining - allocatedBudget) < 0,
+                color: AppColors.success,
+              ),
+              KPICard(
+                title: 'Allocated to Production',
+                value: '\$${allocatedBudget.toStringAsFixed(0)}',
+                icon: Icons.payments,
+                color: AppColors.primary,
+              ),
+            ]);
+          }),
 
           const SizedBox(height: 24),
 

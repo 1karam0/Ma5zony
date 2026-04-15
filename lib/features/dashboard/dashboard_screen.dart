@@ -15,6 +15,7 @@ class DashboardScreen extends StatefulWidget {
 
 class _DashboardScreenState extends State<DashboardScreen> {
   bool _showBanner = true;
+  bool _syncing = false;
 
   @override
   Widget build(BuildContext context) {
@@ -124,6 +125,122 @@ class _DashboardScreenState extends State<DashboardScreen> {
               );
             },
           ),
+
+          // ── Suggestion Action Buttons ──────────────────────────────
+          if (state.lowStockItems > 0 || state.openRecommendations > 0)
+            Padding(
+              padding: const EdgeInsets.only(top: 16),
+              child: Card(
+                color: Colors.orange.shade50,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  side: BorderSide(color: Colors.orange.shade200),
+                ),
+                child: Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: Row(
+                    children: [
+                      const Icon(Icons.lightbulb_outline,
+                          color: Colors.orange, size: 28),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              '${state.lowStockItems} item(s) need attention',
+                              style: const TextStyle(
+                                fontWeight: FontWeight.bold,
+                                color: Colors.deepOrange,
+                              ),
+                            ),
+                            const SizedBox(height: 4),
+                            const Text(
+                              'Review replenishment or manufacturing suggestions to keep stock healthy.',
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      ElevatedButton.icon(
+                        onPressed: () => context.go('/replenishment'),
+                        icon: const Icon(Icons.shopping_cart, size: 18),
+                        label: const Text('Purchase Suggestions'),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.orange,
+                          foregroundColor: Colors.white,
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      OutlinedButton.icon(
+                        onPressed: () => context.go('/recommendations'),
+                        icon: const Icon(Icons.precision_manufacturing,
+                            size: 18),
+                        label: const Text('Manufacturing Suggestions'),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+
+          // ── Shopify Sync Controls ─────────────────────────────────
+          if (state.shopifyConnection?.isConnected == true)
+            Padding(
+              padding: const EdgeInsets.only(top: 16),
+              child: Card(
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 16, vertical: 12),
+                  child: Row(
+                    children: [
+                      const Icon(Icons.store,
+                          color: AppColors.success, size: 24),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'Shopify Connected: ${state.shopifyConnection!.shopDomain}',
+                              style: AppTextStyles.body
+                                  .copyWith(fontWeight: FontWeight.w600),
+                            ),
+                            Text(
+                              state.shopifyConnection!.lastSyncAt != null
+                                  ? 'Last synced: ${_formatTimestamp(state.shopifyConnection!.lastSyncAt!)}'
+                                  : 'Not synced yet',
+                              style: AppTextStyles.label,
+                            ),
+                          ],
+                        ),
+                      ),
+                      ElevatedButton.icon(
+                        onPressed: _syncing
+                            ? null
+                            : () => _syncShopify(context, state),
+                        icon: _syncing
+                            ? const SizedBox(
+                                width: 16,
+                                height: 16,
+                                child: CircularProgressIndicator(
+                                    strokeWidth: 2, color: Colors.white),
+                              )
+                            : const Icon(Icons.sync, size: 18),
+                        label: Text(_syncing ? 'Syncing...' : 'Sync Now'),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: AppColors.primary,
+                          foregroundColor: Colors.white,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
 
           const SizedBox(height: 24),
 
@@ -330,6 +447,41 @@ class _DashboardScreenState extends State<DashboardScreen> {
         ],
       ),
     );
+  }
+
+  Future<void> _syncShopify(BuildContext context, AppState state) async {
+    setState(() => _syncing = true);
+    try {
+      await state.syncShopifyInventory();
+      final orderResult = await state.importShopifyOrders();
+      if (context.mounted) {
+        final imported = orderResult?['newRecordsImported'] ?? 0;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Shopify synced! Inventory updated, $imported new demand records imported.',
+            ),
+          ),
+        );
+      }
+    } catch (e) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Sync failed: $e'), backgroundColor: Colors.red),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _syncing = false);
+    }
+  }
+
+  String _formatTimestamp(DateTime dt) {
+    final now = DateTime.now();
+    final diff = now.difference(dt);
+    if (diff.inMinutes < 1) return 'just now';
+    if (diff.inMinutes < 60) return '${diff.inMinutes}m ago';
+    if (diff.inHours < 24) return '${diff.inHours}h ago';
+    return '${dt.day}/${dt.month}/${dt.year}';
   }
 
   Widget _buildDemandForecastChart(AppState state) {

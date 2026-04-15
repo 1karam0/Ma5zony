@@ -735,7 +735,7 @@ class _AddProductDialogState extends State<_AddProductDialog> {
                 const SizedBox(height: 16),
                 DropdownButtonFormField<String>(
                   decoration: const InputDecoration(labelText: 'Default Manufacturer'),
-                  value: _selectedManufacturerId,
+                  initialValue: _selectedManufacturerId,
                   items: widget.manufacturers
                       .map<DropdownMenuItem<String>>(
                         (m) => DropdownMenuItem<String>(
