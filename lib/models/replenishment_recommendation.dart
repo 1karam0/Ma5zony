@@ -27,6 +27,19 @@ class ReplenishmentRecommendation {
 
   double estimatedCost(double unitCost) => suggestedOrderQty * unitCost;
 
+  ReplenishmentRecommendation copyWith({int? suggestedOrderQty}) {
+    return ReplenishmentRecommendation(
+      productId: productId,
+      productName: productName,
+      sku: sku,
+      currentStock: currentStock,
+      forecastNextPeriod: forecastNextPeriod,
+      reorderPoint: reorderPoint,
+      suggestedOrderQty: suggestedOrderQty ?? this.suggestedOrderQty,
+      recommendedOrderDate: recommendedOrderDate,
+    );
+  }
+
   factory ReplenishmentRecommendation.fromJson(Map<String, dynamic> json) {
     return ReplenishmentRecommendation(
       productId: json['productId'] as String,
