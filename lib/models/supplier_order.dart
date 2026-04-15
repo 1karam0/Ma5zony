@@ -80,6 +80,7 @@ class SupplierOrder {
   final List<SupplierOrderItem> items;
   SupplierResponse? response;
   final String accessToken;
+  final DateTime? expiresAt;
 
   SupplierOrder({
     required this.id,
@@ -93,10 +94,11 @@ class SupplierOrder {
     required this.items,
     this.response,
     required this.accessToken,
+    this.expiresAt,
   });
 
   double get totalEstimatedCost =>
-      items.fold(0.0, (sum, i) => sum + i.estimatedCost);
+      items.fold(0.0, (acc, i) => acc + i.estimatedCost);
 
   factory SupplierOrder.fromFirestore(String id, Map<String, dynamic> data) {
     final itemsList = (data['items'] as List<dynamic>?)
@@ -121,6 +123,9 @@ class SupplierOrder {
               data['response'] as Map<String, dynamic>)
           : null,
       accessToken: data['accessToken'] as String,
+      expiresAt: data['expiresAt'] is Timestamp
+          ? (data['expiresAt'] as Timestamp).toDate()
+          : null,
     );
   }
 
@@ -135,5 +140,6 @@ class SupplierOrder {
         'items': items.map((i) => i.toJson()).toList(),
         'response': response?.toJson(),
         'accessToken': accessToken,
+        'expiresAt': expiresAt != null ? Timestamp.fromDate(expiresAt!) : null,
       };
 }

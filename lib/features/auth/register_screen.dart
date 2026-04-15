@@ -1,4 +1,3 @@
-// ignore_for_file: deprecated_member_use
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:provider/provider.dart';
@@ -181,6 +180,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
       _passwordController.text,
       _selectedRole,
     );
+    if (!mounted) return;
     setState(() => _isLoading = false);
 
     if (success && mounted) {
@@ -219,7 +219,7 @@ class _RoleCard extends StatelessWidget {
           ),
           borderRadius: BorderRadius.circular(8),
           color: isSelected
-              ? AppColors.primary.withOpacity(0.05)
+              ? AppColors.primary.withValues(alpha: 0.05)
               : Colors.white,
         ),
         child: Column(

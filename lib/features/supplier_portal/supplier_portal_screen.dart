@@ -1,4 +1,3 @@
-// ignore_for_file: deprecated_member_use
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
@@ -58,6 +57,15 @@ class _SupplierPortalScreenState extends State<SupplierPortalScreen> {
 
       final doc = snap.docs.first;
       final order = SupplierOrder.fromFirestore(doc.id, doc.data());
+
+      // Check token expiration
+      if (order.expiresAt != null && order.expiresAt!.isBefore(DateTime.now())) {
+        setState(() {
+          _error = 'This access link has expired. Please contact the buyer for a new link.';
+          _loading = false;
+        });
+        return;
+      }
 
       // Pre-fill response fields if already responded
       if (order.response != null) {
@@ -178,10 +186,10 @@ class _SupplierPortalScreenState extends State<SupplierPortalScreen> {
             children: [
               // Welcome header
               Card(
-                color: AppColors.primary.withOpacity(0.05),
+                color: AppColors.primary.withValues(alpha: 0.05),
                 shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(12),
-                  side: BorderSide(color: AppColors.primary.withOpacity(0.2)),
+                  side: BorderSide(color: AppColors.primary.withValues(alpha: 0.2)),
                 ),
                 child: Padding(
                   padding: const EdgeInsets.all(20),

@@ -206,21 +206,21 @@ class _DemandHistoryTabState extends State<_DemandHistoryTab> {
                 label: const Text('All'),
                 selected: _sourceFilter == 'All',
                 onSelected: (_) => setState(() => _sourceFilter = 'All'),
-                selectedColor: AppColors.primary.withOpacity(0.2),
+                selectedColor: AppColors.primary.withValues(alpha: 0.2),
               ),
               const SizedBox(width: 8),
               ChoiceChip(
                 label: const Text('Manual'),
                 selected: _sourceFilter == 'manual',
                 onSelected: (_) => setState(() => _sourceFilter = 'manual'),
-                selectedColor: AppColors.primary.withOpacity(0.2),
+                selectedColor: AppColors.primary.withValues(alpha: 0.2),
               ),
               const SizedBox(width: 8),
               ChoiceChip(
                 label: const Text('Shopify'),
                 selected: _sourceFilter == 'shopify',
                 onSelected: (_) => setState(() => _sourceFilter = 'shopify'),
-                selectedColor: Colors.green.withOpacity(0.2),
+                selectedColor: Colors.green.withValues(alpha: 0.2),
               ),
             ],
           ),
@@ -373,6 +373,7 @@ class _AddDemandRecordDialogState extends State<_AddDemandRecordDialog> {
                   labelText: 'Product',
                   border: OutlineInputBorder(),
                 ),
+                // ignore: deprecated_member_use
                 value: _selectedProductId,
                 items: products
                     .map((p) => DropdownMenuItem(value: p.id, child: Text(p.name)))

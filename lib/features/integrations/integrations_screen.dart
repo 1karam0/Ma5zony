@@ -229,18 +229,33 @@ class _IntegrationsScreenState extends State<IntegrationsScreen> {
                                           context,
                                         );
                                         setState(() => _importing = true);
-                                        await context
-                                            .read<AppState>()
-                                            .importShopifyProducts();
-                                        setState(() => _importing = false);
-                                        if (mounted) {
-                                          messenger.showSnackBar(
-                                            const SnackBar(
-                                              content: Text(
-                                                'Products imported!',
+                                        try {
+                                          await context
+                                              .read<AppState>()
+                                              .importShopifyProducts();
+                                          if (mounted) {
+                                            messenger.showSnackBar(
+                                              const SnackBar(
+                                                content: Text(
+                                                  'Products imported!',
+                                                ),
                                               ),
-                                            ),
-                                          );
+                                            );
+                                          }
+                                        } catch (e) {
+                                          if (mounted) {
+                                            messenger.showSnackBar(
+                                              SnackBar(
+                                                content: Text(
+                                                  'Import failed: $e',
+                                                ),
+                                              ),
+                                            );
+                                          }
+                                        } finally {
+                                          if (mounted) {
+                                            setState(() => _importing = false);
+                                          }
                                         }
                                       },
                                 icon: _importing
@@ -263,18 +278,33 @@ class _IntegrationsScreenState extends State<IntegrationsScreen> {
                                           context,
                                         );
                                         setState(() => _syncing = true);
-                                        await context
-                                            .read<AppState>()
-                                            .syncShopifyInventory();
-                                        setState(() => _syncing = false);
-                                        if (mounted) {
-                                          messenger.showSnackBar(
-                                            const SnackBar(
-                                              content: Text(
-                                                'Inventory synced!',
+                                        try {
+                                          await context
+                                              .read<AppState>()
+                                              .syncShopifyInventory();
+                                          if (mounted) {
+                                            messenger.showSnackBar(
+                                              const SnackBar(
+                                                content: Text(
+                                                  'Inventory synced!',
+                                                ),
                                               ),
-                                            ),
-                                          );
+                                            );
+                                          }
+                                        } catch (e) {
+                                          if (mounted) {
+                                            messenger.showSnackBar(
+                                              SnackBar(
+                                                content: Text(
+                                                  'Sync failed: $e',
+                                                ),
+                                              ),
+                                            );
+                                          }
+                                        } finally {
+                                          if (mounted) {
+                                            setState(() => _syncing = false);
+                                          }
                                         }
                                       },
                                 icon: _syncing
@@ -358,7 +388,7 @@ class _IntegrationsScreenState extends State<IntegrationsScreen> {
             decoration: BoxDecoration(
               color: AppColors.secondary,
               borderRadius: BorderRadius.circular(8),
-              border: Border.all(color: AppColors.primary.withOpacity(0.2)),
+              border: Border.all(color: AppColors.primary.withValues(alpha: 0.2)),
             ),
             child: Row(
               children: [

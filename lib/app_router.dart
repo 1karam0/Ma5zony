@@ -19,6 +19,15 @@ import 'package:ma5zony/features/orders/orders_screen.dart';
 import 'package:ma5zony/features/orders/create_order_screen.dart';
 import 'package:ma5zony/features/orders/order_detail_screen.dart';
 import 'package:ma5zony/features/supplier_portal/supplier_portal_screen.dart';
+import 'package:ma5zony/features/raw_materials/raw_materials_screen.dart';
+import 'package:ma5zony/features/bom/bom_screen.dart';
+import 'package:ma5zony/features/manufacturers/manufacturers_screen.dart';
+import 'package:ma5zony/features/manufacturing/recommendations_screen.dart';
+import 'package:ma5zony/features/manufacturing/production_orders_screen.dart';
+import 'package:ma5zony/features/manufacturing/production_order_detail_screen.dart';
+import 'package:ma5zony/features/cash_flow/cash_flow_screen.dart';
+import 'package:ma5zony/features/manufacturer_portal/manufacturer_portal_screen.dart';
+import 'package:ma5zony/features/factory_portal/factory_portal_screen.dart';
 import 'package:ma5zony/utils/role_guard.dart';
 
 // Private navigators
@@ -41,6 +50,22 @@ GoRouter buildAppRouter(AppState appState) => GoRouter(
       builder: (context, state) {
         final token = state.uri.queryParameters['token'] ?? '';
         return SupplierPortalScreen(accessToken: token);
+      },
+    ),
+    // Manufacturer portal — outside the auth shell (no login required)
+    GoRoute(
+      path: '/manufacturer-portal',
+      builder: (context, state) {
+        final token = state.uri.queryParameters['token'] ?? '';
+        return ManufacturerPortalScreen(accessToken: token);
+      },
+    ),
+    // Factory portal — outside the auth shell (no login required)
+    GoRoute(
+      path: '/factory-portal',
+      builder: (context, state) {
+        final token = state.uri.queryParameters['token'] ?? '';
+        return FactoryPortalScreen(accessToken: token);
       },
     ),
     ShellRoute(
@@ -123,6 +148,45 @@ GoRouter buildAppRouter(AppState appState) => GoRouter(
             );
           },
         ),
+        GoRoute(
+          path: '/raw-materials',
+          pageBuilder: (context, state) =>
+              const NoTransitionPage(child: RawMaterialsScreen()),
+        ),
+        GoRoute(
+          path: '/bom',
+          pageBuilder: (context, state) =>
+              const NoTransitionPage(child: BomScreen()),
+        ),
+        GoRoute(
+          path: '/manufacturers',
+          pageBuilder: (context, state) =>
+              const NoTransitionPage(child: ManufacturersScreen()),
+        ),
+        GoRoute(
+          path: '/recommendations',
+          pageBuilder: (context, state) =>
+              const NoTransitionPage(child: RecommendationsScreen()),
+        ),
+        GoRoute(
+          path: '/production-orders',
+          pageBuilder: (context, state) =>
+              const NoTransitionPage(child: ProductionOrdersScreen()),
+        ),
+        GoRoute(
+          path: '/production-orders/:id',
+          pageBuilder: (context, state) {
+            final id = state.pathParameters['id']!;
+            return NoTransitionPage(
+              child: ProductionOrderDetailScreen(orderId: id),
+            );
+          },
+        ),
+        GoRoute(
+          path: '/cash-flow',
+          pageBuilder: (context, state) =>
+              const NoTransitionPage(child: CashFlowScreen()),
+        ),
       ],
     ),
   ],
@@ -131,8 +195,12 @@ GoRouter buildAppRouter(AppState appState) => GoRouter(
     final path = state.uri.toString();
     final loggingIn = path == '/login' || path == '/register';
 
-    // Supplier portal is public — no auth redirect
-    if (path.startsWith('/supplier-portal')) return null;
+    // Portals are public — no auth redirect
+    if (path.startsWith('/supplier-portal') ||
+        path.startsWith('/manufacturer-portal') ||
+        path.startsWith('/factory-portal')) {
+      return null;
+    }
 
     if (!loggedIn && !loggingIn) return '/login';
     if (loggedIn && loggingIn) return '/dashboard';

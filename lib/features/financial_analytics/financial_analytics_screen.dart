@@ -1,4 +1,3 @@
-// ignore_for_file: deprecated_member_use
 import 'dart:math';
 
 import 'package:fl_chart/fl_chart.dart';
@@ -409,7 +408,7 @@ class _CostAnalysisTab extends StatelessWidget {
                     dotData: const FlDotData(show: true),
                     belowBarData: BarAreaData(
                       show: true,
-                      color: AppColors.primary.withOpacity(0.1),
+                      color: AppColors.primary.withValues(alpha: 0.1),
                     ),
                   ),
                 ],

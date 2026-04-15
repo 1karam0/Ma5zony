@@ -51,6 +51,16 @@ service cloud.firestore {
         allow read, write: if request.auth != null && request.auth.uid == userId;
       }
 
+      // ── Forecast Results (written by backend, read by client) ────────
+      match /forecastResults/{docId} {
+        allow read, write: if request.auth != null && request.auth.uid == userId;
+      }
+
+      // ── Replenishment Recommendations (written by backend) ───────────
+      match /replenishmentRecommendations/{docId} {
+        allow read, write: if request.auth != null && request.auth.uid == userId;
+      }
+
       // ── Shopify Connection (read-only from client) ───────────────────
       // Tokens are written by Cloud Functions (admin SDK bypasses rules).
       // Client can only read connection status, not modify tokens.
@@ -76,18 +86,90 @@ service cloud.firestore {
       match /purchaseOrders/{orderId} {
         allow read, write: if request.auth != null && request.auth.uid == userId;
       }
+
+      // ── Raw Materials ────────────────────────────────────────────────
+      match /rawMaterials/{materialId} {
+        allow read, write: if request.auth != null && request.auth.uid == userId;
+      }
+
+      // ── Bill of Materials ────────────────────────────────────────────
+      match /boms/{bomId} {
+        allow read, write: if request.auth != null && request.auth.uid == userId;
+      }
+
+      // ── Manufacturers ────────────────────────────────────────────────
+      match /manufacturers/{manufacturerId} {
+        allow read, write: if request.auth != null && request.auth.uid == userId;
+      }
+
+      // ── Production Orders ────────────────────────────────────────────
+      match /productionOrders/{orderId} {
+        allow read, write: if request.auth != null && request.auth.uid == userId;
+      }
+
+      // ── Raw Material Orders ──────────────────────────────────────────
+      match /rawMaterialOrders/{orderId} {
+        allow read, write: if request.auth != null && request.auth.uid == userId;
+      }
+
+      // ── Manufacturing Recommendations ────────────────────────────────
+      match /recommendations/{recId} {
+        allow read, write: if request.auth != null && request.auth.uid == userId;
+      }
+
+      // ── Cash Flow Snapshots ──────────────────────────────────────────
+      match /cashFlowSnapshots/{snapshotId} {
+        allow read, write: if request.auth != null && request.auth.uid == userId;
+      }
+
+      // ── Workflow Logs ────────────────────────────────────────────────
+      match /workflowLogs/{logId} {
+        allow read, write: if request.auth != null && request.auth.uid == userId;
+      }
     }
 
     // ── Supplier Orders (top-level for portal access) ────────────────────
-    // Authenticated users can read/write their own supplier orders.
-    // Supplier portal reads/writes are done via Cloud Functions (admin SDK).
+    // Portal users (suppliers) access by unguessable 32-char access token.
+    // Read is open (access control is via the token's secrecy).
+    // Update is restricted to portal-safe fields only.
+    // Only authenticated owners can create. Deletes disallowed.
     match /supplierOrders/{orderId} {
-      allow read: if request.auth != null
-                  && resource.data.ownerUid == request.auth.uid;
+      allow read: if true;
+      allow update: if true
+                    && (!resource.data.keys().hasAny(['expiresAt'])
+                        || resource.data.expiresAt > request.time)
+                    && request.resource.data.diff(resource.data).affectedKeys()
+                       .hasOnly(['response', 'status']);
       allow create: if request.auth != null
                     && request.resource.data.ownerUid == request.auth.uid;
-      allow update: if request.auth != null
-                    && resource.data.ownerUid == request.auth.uid;
+      allow delete: if false;
+    }
+
+    // ── Manufacturer Orders (top-level for portal access) ────────────────
+    match /manufacturerOrders/{orderId} {
+      allow read: if true;
+      allow update: if true
+                    && (!resource.data.keys().hasAny(['expiresAt'])
+                        || resource.data.expiresAt > request.time)
+                    && request.resource.data.diff(resource.data).affectedKeys()
+                       .hasOnly(['status', 'manufacturerNotes', 'completedAt']);
+      allow create: if request.auth != null
+                    && request.resource.data.ownerUid == request.auth.uid;
+      allow delete: if false;
+    }
+
+    // ── Factory Orders (top-level for portal access) ─────────────────────
+    match /factoryOrders/{orderId} {
+      allow read: if true;
+      allow update: if true
+                    && (!resource.data.keys().hasAny(['expiresAt'])
+                        || resource.data.expiresAt > request.time)
+                    && request.resource.data.diff(resource.data).affectedKeys()
+                       .hasOnly(['status', 'factoryNotes', 'estimatedDeliveryDays',
+                                 'completedDate']);
+      allow create: if request.auth != null
+                    && request.resource.data.ownerUid == request.auth.uid;
+      allow delete: if false;
     }
   }
 }

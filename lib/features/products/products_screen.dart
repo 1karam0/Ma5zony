@@ -1,4 +1,3 @@
-// ignore_for_file: deprecated_member_use
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:provider/provider.dart';
@@ -585,6 +584,7 @@ class _AddProductDialogState extends State<_AddProductDialog> {
                     Expanded(
                       child: DropdownButtonFormField<String>(
                         decoration: const InputDecoration(labelText: 'Supplier'),
+                        // ignore: deprecated_member_use
                         value: _selectedSupplierId,
                         items: widget.suppliers
                             .map<DropdownMenuItem<String>>(

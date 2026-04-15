@@ -29,12 +29,18 @@ class CloudFunctionConfig {
   // ── Order Import ─────────────────────────────────────────────────────
 
   static const String shopifyImportOrders =
-      'https://us-central1-ma5zony.cloudfunctions.net/shopifyImportOrders';
+      '${_baseUrl}shopifyimportorders$_suffix';
 
-  // ── Supplier Email ───────────────────────────────────────────────────
+  // ── Emails ───────────────────────────────────────────────────────────
 
   static const String sendSupplierEmails =
-      'https://us-central1-ma5zony.cloudfunctions.net/sendSupplierEmails';
+      '${_baseUrl}sendsupplieremails$_suffix';
+
+  static const String sendFactoryEmails =
+      '${_baseUrl}sendfactoryemails$_suffix';
+
+  static const String sendManufacturerEmails =
+      '${_baseUrl}sendmanufactureremails$_suffix';
 
   /// All Shopify function URLs in a map (for dynamic lookup).
   static const Map<String, String> shopifyFunctions = {

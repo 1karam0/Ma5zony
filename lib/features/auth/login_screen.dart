@@ -16,7 +16,6 @@ class _LoginScreenState extends State<LoginScreen> {
   final _emailController = TextEditingController();
   final _passwordController = TextEditingController();
   bool _isLoading = false;
-  bool _rememberMe = true;
 
   @override
   Widget build(BuildContext context) {
@@ -80,19 +79,12 @@ class _LoginScreenState extends State<LoginScreen> {
                   },
                 ),
                 const SizedBox(height: 16),
-                Row(
-                  children: [
-                    Checkbox(
-                      value: _rememberMe,
-                      onChanged: (v) => setState(() => _rememberMe = v ?? true),
-                    ),
-                    const Text('Remember me'),
-                    const Spacer(),
-                    TextButton(
-                      onPressed: _handleForgotPassword,
-                      child: const Text('Forgot password?'),
-                    ),
-                  ],
+                Align(
+                  alignment: Alignment.centerRight,
+                  child: TextButton(
+                    onPressed: _handleForgotPassword,
+                    child: const Text('Forgot password?'),
+                  ),
                 ),
                 const SizedBox(height: 24),
                 ElevatedButton(

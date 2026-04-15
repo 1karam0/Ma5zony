@@ -70,11 +70,11 @@ class PurchaseOrder {
   });
 
   double get totalEstimatedCost =>
-      items.fold(0.0, (sum, i) => sum + i.estimatedCost);
+      items.fold(0.0, (acc, i) => acc + i.estimatedCost);
 
   int get totalItems => items.length;
 
-  int get totalQuantity => items.fold(0, (sum, i) => sum + i.quantity);
+  int get totalQuantity => items.fold(0, (acc, i) => acc + i.quantity);
 
   /// Group items by supplierId for splitting into supplier orders.
   Map<String?, List<PurchaseOrderItem>> get itemsBySupplier {

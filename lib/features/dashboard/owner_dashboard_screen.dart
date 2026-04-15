@@ -1,4 +1,3 @@
-// ignore_for_file: deprecated_member_use
 import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
@@ -382,7 +381,7 @@ class _OwnerDashboardScreenState extends State<OwnerDashboardScreen> {
       decoration: BoxDecoration(
         color: AppColors.secondary,
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: AppColors.primary.withOpacity(0.3)),
+        border: Border.all(color: AppColors.primary.withValues(alpha: 0.3)),
       ),
       child: Row(
         children: [
@@ -634,7 +633,7 @@ class _OwnerDashboardScreenState extends State<OwnerDashboardScreen> {
                 dotData: const FlDotData(show: false),
                 belowBarData: BarAreaData(
                   show: true,
-                  color: AppColors.primary.withOpacity(0.1),
+                  color: AppColors.primary.withValues(alpha: 0.1),
                 ),
               ),
           ],
@@ -683,7 +682,7 @@ class _OwnerDashboardScreenState extends State<OwnerDashboardScreen> {
               dotData: const FlDotData(show: false),
               belowBarData: BarAreaData(
                 show: true,
-                color: AppColors.primary.withOpacity(0.05),
+                color: AppColors.primary.withValues(alpha: 0.05),
               ),
             ),
           if (forecastSpots.isNotEmpty)

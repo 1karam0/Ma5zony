@@ -1,10 +1,22 @@
 /// Application-level user profile backed by Firestore `users/{uid}`.
 class AppUser {
+  static const String roleSmeOwner = 'SME Owner';
+  static const String roleInventoryManager = 'Inventory Manager';
+  static const String roleManufacturer = 'Manufacturer';
+  static const String roleRawMaterialFactory = 'Raw Material Factory';
+
+  static const List<String> allRoles = [
+    roleSmeOwner,
+    roleInventoryManager,
+    roleManufacturer,
+    roleRawMaterialFactory,
+  ];
+
   final String uid;
   final String name;
   final String email;
-  final String role; // 'SME Owner', 'Inventory Manager'
-  /// For Inventory Managers: the uid of the SME Owner they belong to.
+  final String role;
+  /// For non-owner roles: the uid of the SME Owner they belong to.
   final String? ownerId;
 
   AppUser({
@@ -14,6 +26,11 @@ class AppUser {
     required this.role,
     this.ownerId,
   });
+
+  bool get isSmeOwner => role == roleSmeOwner;
+  bool get isInventoryManager => role == roleInventoryManager;
+  bool get isManufacturer => role == roleManufacturer;
+  bool get isRawMaterialFactory => role == roleRawMaterialFactory;
 
   factory AppUser.fromFirestore(String uid, Map<String, dynamic> data) {
     return AppUser(

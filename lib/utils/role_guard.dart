@@ -13,12 +13,15 @@ enum Permission {
 /// Owner-only routes that Inventory Managers cannot access.
 const ownerOnlyRoutes = <String>{
   '/financial-analytics',
+  '/cash-flow',
 };
 
 /// All roles recognised by the system.
 abstract class UserRole {
   static const owner = 'SME Owner';
   static const inventoryManager = 'Inventory Manager';
+  static const manufacturer = 'Manufacturer';
+  static const rawMaterialFactory = 'Raw Material Factory';
 }
 
 /// Returns true when [user] holds the given [permission].

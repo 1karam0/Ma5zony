@@ -22,7 +22,6 @@ class Ma5zonyApp extends StatelessWidget {
           primary: AppColors.primary,
           secondary: AppColors.secondary,
           surface: AppColors.surface,
-          background: AppColors.background,
         ),
         useMaterial3: true,
         textTheme: GoogleFonts.interTextTheme(),

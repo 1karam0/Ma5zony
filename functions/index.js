@@ -11,7 +11,7 @@
  */
 
 const { onRequest } = require("firebase-functions/v2/https");
-const { onDocumentUpdated } = require("firebase-functions/v2/firestore");
+const { onDocumentUpdated, onDocumentCreated } = require("firebase-functions/v2/firestore");
 const { defineSecret } = require("firebase-functions/params");
 const admin = require("firebase-admin");
 const crypto = require("crypto");
@@ -33,7 +33,7 @@ function httpsRequest(options, postData) {
       res.on("data", (d) => chunks.push(d));
       res.on("end", () => {
         const body = Buffer.concat(chunks).toString();
-        resolve({ statusCode: res.statusCode, body });
+        resolve({ statusCode: res.statusCode, body, headers: res.headers });
       });
     });
     req.on("error", reject);
@@ -47,9 +47,22 @@ function isValidShopDomain(shop) {
   return /^[a-zA-Z0-9][a-zA-Z0-9-]*\.myshopify\.com$/.test(shop);
 }
 
+/** Allowed origins for CORS. */
+const ALLOWED_ORIGINS = [
+  "https://ma5zony.web.app",
+  "https://ma5zony.firebaseapp.com",
+  "http://localhost:5000",
+  "http://localhost:8080",
+];
+
 /** Set CORS headers and handle preflight. Returns true if preflight handled. */
 function handleCors(req, res) {
-  res.set("Access-Control-Allow-Origin", "*");
+  const origin = req.headers.origin || "";
+  if (ALLOWED_ORIGINS.includes(origin) || /^http:\/\/localhost(:\d+)?$/.test(origin)) {
+    res.set("Access-Control-Allow-Origin", origin);
+  } else {
+    res.set("Access-Control-Allow-Origin", ALLOWED_ORIGINS[0]);
+  }
   res.set("Access-Control-Allow-Methods", "POST, OPTIONS");
   res.set("Access-Control-Allow-Headers", "Content-Type, Authorization");
   if (req.method === "OPTIONS") {
@@ -101,7 +114,7 @@ exports.shopifyGetOAuthUrl = onRequest(
     const scopes = "read_products,read_inventory,read_orders";
     const authUrl =
       `https://${shopDomain}/admin/oauth/authorize` +
-      `?client_id=${SHOPIFY_API_KEY.value()}` +
+      `?client_id=${SHOPIFY_API_KEY.value().trim()}` +
       `&scope=${scopes}` +
       `&redirect_uri=${encodeURIComponent(redirectUri)}` +
       `&state=${uid}:${nonce}`;
@@ -137,7 +150,7 @@ exports.shopifyOAuthCallback = onRequest(
       .map((k) => `${k}=${queryParams[k]}`)
       .join("&");
     const digest = crypto
-      .createHmac("sha256", SHOPIFY_API_SECRET.value())
+      .createHmac("sha256", SHOPIFY_API_SECRET.value().trim())
       .update(sorted)
       .digest("hex");
     if (
@@ -168,8 +181,8 @@ exports.shopifyOAuthCallback = onRequest(
 
     // --- exchange code for permanent access token ---
     const postData = JSON.stringify({
-      client_id: SHOPIFY_API_KEY.value(),
-      client_secret: SHOPIFY_API_SECRET.value(),
+      client_id: SHOPIFY_API_KEY.value().trim(),
+      client_secret: SHOPIFY_API_SECRET.value().trim(),
       code,
     });
 
@@ -337,9 +350,9 @@ exports.shopifySyncStock = onRequest(
         .doc(uid)
         .collection("products")
         .doc(`shopify_${sp.id}`);
-      batch.update(ref, {
+      batch.set(ref, {
         currentStock: variant.inventory_quantity ?? 0,
-      });
+      }, { merge: true });
       synced++;
     }
     await batch.commit();
@@ -418,14 +431,24 @@ exports.shopifyImportOrders = onRequest(
       const parsed = JSON.parse(orderRes.body);
       allOrders = allOrders.concat(parsed.orders || []);
 
-      // Check for pagination via Link header (simplified: look for "next" in body)
-      // Shopify REST pagination: if fewer than limit returned, we're done.
+      // Shopify REST cursor-based pagination via Link header.
       if (!parsed.orders || parsed.orders.length < 250) {
         nextPageUrl = null;
       } else {
-        // For simplicity, stop after first page (250 orders).
-        // Full cursor-based pagination can be added later.
-        nextPageUrl = null;
+        // Parse Link header for next page URL
+        const linkHeader = orderRes.headers && orderRes.headers.link;
+        if (linkHeader) {
+          const nextMatch = linkHeader.match(/<([^>]+)>;\s*rel="next"/);
+          if (nextMatch) {
+            // Extract path from full URL
+            const nextUrl = new URL(nextMatch[1]);
+            nextPageUrl = nextUrl.pathname + nextUrl.search;
+          } else {
+            nextPageUrl = null;
+          }
+        } else {
+          nextPageUrl = null;
+        }
       }
     }
 
@@ -506,6 +529,24 @@ const SMTP_PORT = defineSecret("SMTP_PORT");
 const SMTP_USER = defineSecret("SMTP_USER");
 const SMTP_PASS = defineSecret("SMTP_PASS");
 
+/** Create a nodemailer transporter using SMTP secrets. */
+function createMailTransporter() {
+  const nodemailer = require("nodemailer");
+  const host = SMTP_HOST.value().trim();
+  const port = parseInt(SMTP_PORT.value().trim()) || 587;
+  const user = SMTP_USER.value().trim();
+  const pass = SMTP_PASS.value().trim();
+  return {
+    transporter: nodemailer.createTransport({
+      host,
+      port,
+      secure: port === 465,
+      auth: { user, pass },
+    }),
+    fromAddress: `"Ma5zony Orders" <${user}>`,
+  };
+}
+
 // ── Send Order Emails to Suppliers ───────────────────────────────────────────
 
 /**
@@ -533,7 +574,12 @@ exports.sendSupplierEmails = onRequest(
       return;
     }
 
+    const callerUid = await verifyAuth(req);
     const { uid, purchaseOrderId, appUrl } = req.body;
+    if (!callerUid || callerUid !== uid) {
+      res.status(401).json({ error: "Unauthorized" });
+      return;
+    }
     if (!uid || !purchaseOrderId) {
       res.status(400).json({ error: "uid and purchaseOrderId required" });
       return;
@@ -555,16 +601,7 @@ exports.sendSupplierEmails = onRequest(
       }
 
       // Set up email transport
-      const nodemailer = require("nodemailer");
-      const transporter = nodemailer.createTransport({
-        host: SMTP_HOST.value(),
-        port: parseInt(SMTP_PORT.value()) || 587,
-        secure: parseInt(SMTP_PORT.value()) === 465,
-        auth: {
-          user: SMTP_USER.value(),
-          pass: SMTP_PASS.value(),
-        },
-      });
+      const { transporter, fromAddress } = createMailTransporter();
 
       const results = [];
       for (const doc of supplierSnap.docs) {
@@ -635,7 +672,7 @@ exports.sendSupplierEmails = onRequest(
 
         try {
           await transporter.sendMail({
-            from: `"Ma5zony Orders" <${SMTP_USER.value()}>`,
+            from: fromAddress,
             to: order.supplierEmail,
             subject: `New Purchase Order — ${order.items.length} item(s)`,
             html: html,
@@ -659,6 +696,457 @@ exports.sendSupplierEmails = onRequest(
     } catch (err) {
       console.error("sendSupplierEmails error:", err);
       res.status(500).json({ error: err.message });
+    }
+  }
+);
+
+// ── Send Emails to Factories (Raw Material Orders) ──────────────────────────
+
+/**
+ * Called when raw material orders are created for a production order.
+ * Sends an email to each factory/supplier with their material order details
+ * and a portal link.
+ *
+ * POST /sendFactoryEmails
+ * Body: { uid, productionOrderId, appUrl }
+ */
+exports.sendFactoryEmails = onRequest(
+  {
+    cors: true,
+    secrets: [SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS],
+  },
+  async (req, res) => {
+    if (req.method !== "POST") {
+      res.status(405).json({ error: "POST only" });
+      return;
+    }
+
+    const callerUid = await verifyAuth(req);
+    const { uid, productionOrderId, appUrl } = req.body;
+    if (!callerUid || callerUid !== uid) {
+      res.status(401).json({ error: "Unauthorized" });
+      return;
+    }
+    if (!uid || !productionOrderId) {
+      res.status(400).json({ error: "uid and productionOrderId required" });
+      return;
+    }
+
+    const siteUrl = appUrl || "https://ma5zony.web.app";
+
+    try {
+      // Fetch factory orders for this production order
+      const orderSnap = await db
+        .collection("factoryOrders")
+        .where("productionOrderId", "==", productionOrderId)
+        .where("ownerUid", "==", uid)
+        .get();
+
+      if (orderSnap.empty) {
+        res.status(404).json({ error: "No factory orders found" });
+        return;
+      }
+
+      const { transporter, fromAddress } = createMailTransporter();
+
+      const results = [];
+      for (const doc of orderSnap.docs) {
+        const order = doc.data();
+        const portalUrl = `${siteUrl}/#/factory-portal?token=${order.accessToken}`;
+
+        const html = `
+          <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto">
+            <div style="background:#1a73e8;color:white;padding:20px;border-radius:8px 8px 0 0">
+              <h2 style="margin:0">Ma5zony — Raw Material Order</h2>
+            </div>
+            <div style="padding:20px;border:1px solid #ddd;border-top:none;border-radius:0 0 8px 8px">
+              <p>Hello <strong>${order.supplierName || "Supplier"}</strong>,</p>
+              <p>You have received a new raw material order:</p>
+
+              <table style="width:100%;border-collapse:collapse;margin:16px 0">
+                <tr style="background:#f5f5f5">
+                  <th style="padding:8px;border:1px solid #ddd;text-align:left">Material</th>
+                  <th style="padding:8px;border:1px solid #ddd;text-align:center">Quantity</th>
+                  <th style="padding:8px;border:1px solid #ddd;text-align:left">Unit</th>
+                </tr>
+                <tr>
+                  <td style="padding:8px;border:1px solid #ddd">${order.materialName || "—"}</td>
+                  <td style="padding:8px;border:1px solid #ddd;text-align:center">${order.quantity || 0}</td>
+                  <td style="padding:8px;border:1px solid #ddd">${order.unit || "pcs"}</td>
+                </tr>
+              </table>
+
+              <p><strong>Next Steps:</strong></p>
+              <ol>
+                <li>Click the button below to open your factory portal</li>
+                <li>Accept the order</li>
+                <li>Provide estimated delivery time</li>
+                <li>Mark as completed when shipped</li>
+              </ol>
+
+              <div style="text-align:center;margin:24px 0">
+                <a href="${portalUrl}"
+                   style="background:#1a73e8;color:white;padding:12px 32px;text-decoration:none;border-radius:6px;font-weight:bold;display:inline-block">
+                  Open Factory Portal
+                </a>
+              </div>
+
+              <p style="color:#666;font-size:12px">
+                If the button doesn't work, copy and paste this link:<br>
+                <a href="${portalUrl}">${portalUrl}</a>
+              </p>
+            </div>
+          </div>`;
+
+        try {
+          await transporter.sendMail({
+            from: fromAddress,
+            to: order.supplierEmail || order.factoryEmail,
+            subject: `Raw Material Order — ${order.materialName || "Material"}`,
+            html: html,
+          });
+          results.push({
+            supplier: order.supplierName,
+            email: order.supplierEmail || order.factoryEmail,
+            status: "sent",
+          });
+        } catch (emailErr) {
+          results.push({
+            supplier: order.supplierName,
+            email: order.supplierEmail || order.factoryEmail,
+            status: "failed",
+            error: emailErr.message,
+          });
+        }
+      }
+
+      res.json({ results });
+    } catch (err) {
+      console.error("sendFactoryEmails error:", err);
+      res.status(500).json({ error: err.message });
+    }
+  }
+);
+
+// ── Send Emails to Manufacturers (Production Orders) ─────────────────────────
+
+/**
+ * Called when a production order transitions to materials_ready.
+ * Sends an email to the assigned manufacturer with production order details
+ * and a portal link.
+ *
+ * POST /sendManufacturerEmails
+ * Body: { uid, productionOrderId, appUrl }
+ */
+exports.sendManufacturerEmails = onRequest(
+  {
+    cors: true,
+    secrets: [SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS],
+  },
+  async (req, res) => {
+    if (req.method !== "POST") {
+      res.status(405).json({ error: "POST only" });
+      return;
+    }
+
+    const callerUid = await verifyAuth(req);
+    const { uid, productionOrderId, appUrl } = req.body;
+    if (!callerUid || callerUid !== uid) {
+      res.status(401).json({ error: "Unauthorized" });
+      return;
+    }
+    if (!uid || !productionOrderId) {
+      res.status(400).json({ error: "uid and productionOrderId required" });
+      return;
+    }
+
+    const siteUrl = appUrl || "https://ma5zony.web.app";
+
+    try {
+      // Fetch the manufacturer order for this production order
+      const orderSnap = await db
+        .collection("manufacturerOrders")
+        .where("productionOrderId", "==", productionOrderId)
+        .where("ownerUid", "==", uid)
+        .limit(1)
+        .get();
+
+      if (orderSnap.empty) {
+        res.status(404).json({ error: "No manufacturer order found" });
+        return;
+      }
+
+      const { transporter, fromAddress } = createMailTransporter();
+
+      const results = [];
+      for (const doc of orderSnap.docs) {
+        const order = doc.data();
+        const portalUrl = `${siteUrl}/#/manufacturer-portal?token=${order.accessToken}`;
+
+        // Build materials table if available
+        let materialsHtml = "";
+        if (order.rawMaterialOrders && order.rawMaterialOrders.length > 0) {
+          const rows = order.rawMaterialOrders
+            .map(
+              (rm) => `
+            <tr>
+              <td style="padding:8px;border:1px solid #ddd">${rm.materialName || "—"}</td>
+              <td style="padding:8px;border:1px solid #ddd;text-align:center">${rm.quantity || 0}</td>
+              <td style="padding:8px;border:1px solid #ddd">${rm.status || "pending"}</td>
+            </tr>`
+            )
+            .join("");
+
+          materialsHtml = `
+            <h3 style="margin:16px 0 8px">Required Materials</h3>
+            <table style="width:100%;border-collapse:collapse;margin:0 0 16px">
+              <tr style="background:#f5f5f5">
+                <th style="padding:8px;border:1px solid #ddd;text-align:left">Material</th>
+                <th style="padding:8px;border:1px solid #ddd;text-align:center">Quantity</th>
+                <th style="padding:8px;border:1px solid #ddd;text-align:left">Status</th>
+              </tr>
+              ${rows}
+            </table>`;
+        }
+
+        const html = `
+          <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto">
+            <div style="background:#1a73e8;color:white;padding:20px;border-radius:8px 8px 0 0">
+              <h2 style="margin:0">Ma5zony — Production Order Ready</h2>
+            </div>
+            <div style="padding:20px;border:1px solid #ddd;border-top:none;border-radius:0 0 8px 8px">
+              <p>Hello <strong>${order.manufacturerName || "Manufacturer"}</strong>,</p>
+              <p>All materials are ready for your production order:</p>
+
+              <table style="width:100%;border-collapse:collapse;margin:16px 0">
+                <tr style="background:#f5f5f5">
+                  <th style="padding:8px;border:1px solid #ddd;text-align:left">Product</th>
+                  <th style="padding:8px;border:1px solid #ddd;text-align:center">Quantity</th>
+                  <th style="padding:8px;border:1px solid #ddd;text-align:right">Est. Cost</th>
+                </tr>
+                <tr>
+                  <td style="padding:8px;border:1px solid #ddd">${order.productName || "—"}</td>
+                  <td style="padding:8px;border:1px solid #ddd;text-align:center">${order.quantity || 0}</td>
+                  <td style="padding:8px;border:1px solid #ddd;text-align:right">$${(order.estimatedCost || 0).toFixed(2)}</td>
+                </tr>
+              </table>
+
+              ${materialsHtml}
+
+              <p><strong>Next Steps:</strong></p>
+              <ol>
+                <li>Click the button below to open your manufacturer portal</li>
+                <li>Start production when ready</li>
+                <li>Mark as completed when finished</li>
+              </ol>
+
+              <div style="text-align:center;margin:24px 0">
+                <a href="${portalUrl}"
+                   style="background:#1a73e8;color:white;padding:12px 32px;text-decoration:none;border-radius:6px;font-weight:bold;display:inline-block">
+                  Open Manufacturer Portal
+                </a>
+              </div>
+
+              <p style="color:#666;font-size:12px">
+                If the button doesn't work, copy and paste this link:<br>
+                <a href="${portalUrl}">${portalUrl}</a>
+              </p>
+            </div>
+          </div>`;
+
+        try {
+          await transporter.sendMail({
+            from: fromAddress,
+            to: order.manufacturerEmail,
+            subject: `Production Order Ready — ${order.productName || "Product"}`,
+            html: html,
+          });
+          results.push({
+            manufacturer: order.manufacturerName,
+            email: order.manufacturerEmail,
+            status: "sent",
+          });
+        } catch (emailErr) {
+          results.push({
+            manufacturer: order.manufacturerName,
+            email: order.manufacturerEmail,
+            status: "failed",
+            error: emailErr.message,
+          });
+        }
+      }
+
+      res.json({ results });
+    } catch (err) {
+      console.error("sendManufacturerEmails error:", err);
+      res.status(500).json({ error: err.message });
+    }
+  }
+);
+
+// ══════════════════════════════════════════════════════════════════════════════
+// Phase 5: Portal Response Notification Triggers
+// ══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * When a supplier responds via the portal (updates response fields),
+ * create an in-app notification for the order owner.
+ */
+exports.onSupplierOrderUpdate = onDocumentUpdated(
+  "supplierOrders/{orderId}",
+  async (event) => {
+    const before = event.data.before.data();
+    const after = event.data.after.data();
+    if (!after.ownerUid) return;
+
+    // Only notify if response changed
+    const responseBefore = before.response || {};
+    const responseAfter = after.response || {};
+    if (
+      responseBefore.deliveryDays === responseAfter.deliveryDays &&
+      responseBefore.quotedCost === responseAfter.quotedCost &&
+      responseBefore.notes === responseAfter.notes
+    ) {
+      return;
+    }
+
+    await db
+      .collection("users")
+      .doc(after.ownerUid)
+      .collection("notifications")
+      .add({
+        type: "supplier_response",
+        title: `Supplier ${after.supplierName || "Unknown"} responded`,
+        message: `${after.supplierName} provided a quote of $${responseAfter.quotedCost || "—"} with ${responseAfter.deliveryDays || "—"} day delivery.`,
+        entityType: "supplierOrder",
+        entityId: event.params.orderId,
+        read: false,
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+  }
+);
+
+/**
+ * When a factory order status changes (accepted, completed),
+ * notify the order owner.
+ */
+exports.onFactoryOrderUpdate = onDocumentUpdated(
+  "factoryOrders/{orderId}",
+  async (event) => {
+    const before = event.data.before.data();
+    const after = event.data.after.data();
+    if (!after.ownerUid || before.status === after.status) return;
+
+    const statusLabel = (after.status || "").replace(/_/g, " ");
+    await db
+      .collection("users")
+      .doc(after.ownerUid)
+      .collection("notifications")
+      .add({
+        type: "factory_status",
+        title: `Factory order ${statusLabel}`,
+        message: `${after.supplierName || "Factory"} marked material "${after.materialName || ""}" as ${statusLabel}.`,
+        entityType: "factoryOrder",
+        entityId: event.params.orderId,
+        read: false,
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+
+    // If factory completed → check if all materials for this PO are done
+    if (after.status === "completed" && after.productionOrderId) {
+      const allFactory = await db
+        .collection("factoryOrders")
+        .where("productionOrderId", "==", after.productionOrderId)
+        .where("ownerUid", "==", after.ownerUid)
+        .get();
+
+      const allDone = allFactory.docs.every(
+        (d) => d.data().status === "completed"
+      );
+
+      if (allDone) {
+        // Auto-transition production order to materials_ready
+        const poRef = db
+          .collection("users")
+          .doc(after.ownerUid)
+          .collection("productionOrders")
+          .doc(after.productionOrderId);
+        const poSnap = await poRef.get();
+        if (poSnap.exists && poSnap.data().status === "materials_ordered") {
+          await poRef.update({ status: "materials_ready" });
+
+          await db
+            .collection("users")
+            .doc(after.ownerUid)
+            .collection("notifications")
+            .add({
+              type: "materials_ready",
+              title: "All materials ready!",
+              message: `All raw materials for production order are complete. Ready for manufacturing.`,
+              entityType: "productionOrder",
+              entityId: after.productionOrderId,
+              read: false,
+              createdAt: admin.firestore.FieldValue.serverTimestamp(),
+            });
+        }
+      }
+    }
+  }
+);
+
+/**
+ * When a manufacturer order status changes,
+ * notify the order owner. If completed → increase stock.
+ */
+exports.onManufacturerOrderUpdate = onDocumentUpdated(
+  "manufacturerOrders/{orderId}",
+  async (event) => {
+    const before = event.data.before.data();
+    const after = event.data.after.data();
+    if (!after.ownerUid || before.status === after.status) return;
+
+    const statusLabel = (after.status || "").replace(/_/g, " ");
+    await db
+      .collection("users")
+      .doc(after.ownerUid)
+      .collection("notifications")
+      .add({
+        type: "manufacturer_status",
+        title: `Production ${statusLabel}`,
+        message: `${after.manufacturerName || "Manufacturer"} marked "${after.productName || ""}" as ${statusLabel}.`,
+        entityType: "manufacturerOrder",
+        entityId: event.params.orderId,
+        read: false,
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+
+    // If manufacturer completed production → update production order + increase stock
+    if (after.status === "completed" && after.productionOrderId) {
+      const poRef = db
+        .collection("users")
+        .doc(after.ownerUid)
+        .collection("productionOrders")
+        .doc(after.productionOrderId);
+      const poSnap = await poRef.get();
+      if (poSnap.exists) {
+        await poRef.update({ status: "completed" });
+
+        // Increase product stock
+        const prodId = poSnap.data().finalProductId;
+        const qty = poSnap.data().quantity || 0;
+        if (prodId && qty > 0) {
+          const prodRef = db
+            .collection("users")
+            .doc(after.ownerUid)
+            .collection("products")
+            .doc(prodId);
+          const prodSnap = await prodRef.get();
+          if (prodSnap.exists) {
+            const currentStock = prodSnap.data().currentStock || 0;
+            await prodRef.update({ currentStock: currentStock + qty });
+          }
+        }
+      }
     }
   }
 );

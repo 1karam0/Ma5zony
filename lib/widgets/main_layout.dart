@@ -1,4 +1,3 @@
-// ignore_for_file: deprecated_member_use
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:provider/provider.dart';
@@ -7,14 +6,44 @@ import 'package:ma5zony/utils/constants.dart';
 import 'package:ma5zony/providers/app_state.dart';
 import 'package:ma5zony/utils/role_guard.dart';
 
-class MainLayout extends StatelessWidget {
+class MainLayout extends StatefulWidget {
   final Widget child;
 
   const MainLayout({super.key, required this.child});
 
   @override
+  State<MainLayout> createState() => _MainLayoutState();
+}
+
+class _MainLayoutState extends State<MainLayout> {
+  String? _lastError;
+
+  @override
   Widget build(BuildContext context) {
     final isDesktop = MediaQuery.of(context).size.width >= 800;
+    final state = context.watch<AppState>();
+
+    // Show error snackbar when errorMessage changes
+    final error = state.errorMessage;
+    if (error != null && error != _lastError) {
+      _lastError = error;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(error),
+              backgroundColor: Colors.red[700],
+              behavior: SnackBarBehavior.floating,
+              action: SnackBarAction(
+                label: 'Dismiss',
+                textColor: Colors.white,
+                onPressed: () => state.clearError(),
+              ),
+            ),
+          );
+        }
+      });
+    }
 
     return Scaffold(
       body: Row(
@@ -24,7 +53,7 @@ class MainLayout extends StatelessWidget {
             child: Column(
               children: [
                 const _TopBar(),
-                Expanded(child: child),
+                Expanded(child: widget.child),
               ],
             ),
           ),
@@ -121,7 +150,44 @@ class _Sidebar extends StatelessWidget {
                   path: '/integrations',
                   isDesktop: isDesktop,
                 ),
+                const Divider(),
+                _NavItem(
+                  icon: Icons.category,
+                  label: 'Raw Materials',
+                  path: '/raw-materials',
+                  isDesktop: isDesktop,
+                ),
+                _NavItem(
+                  icon: Icons.list_alt,
+                  label: 'Bill of Materials',
+                  path: '/bom',
+                  isDesktop: isDesktop,
+                ),
+                _NavItem(
+                  icon: Icons.factory,
+                  label: 'Manufacturers',
+                  path: '/manufacturers',
+                  isDesktop: isDesktop,
+                ),
+                _NavItem(
+                  icon: Icons.auto_awesome,
+                  label: 'Recommendations',
+                  path: '/recommendations',
+                  isDesktop: isDesktop,
+                ),
+                _NavItem(
+                  icon: Icons.precision_manufacturing,
+                  label: 'Production Orders',
+                  path: '/production-orders',
+                  isDesktop: isDesktop,
+                ),
                 if (userIsOwner) ...[
+                  _NavItem(
+                    icon: Icons.account_balance_wallet,
+                    label: 'Cash Flow',
+                    path: '/cash-flow',
+                    isDesktop: isDesktop,
+                  ),
                   _NavItem(
                     icon: Icons.attach_money,
                     label: 'Financial Analytics',
@@ -172,7 +238,7 @@ class _NavItem extends StatelessWidget {
         margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
         decoration: BoxDecoration(
           color: isSelected
-              ? AppColors.primary.withOpacity(0.1)
+              ? AppColors.primary.withValues(alpha: 0.1)
               : Colors.transparent,
           borderRadius: BorderRadius.circular(8),
         ),
@@ -271,22 +337,23 @@ class _TopBar extends StatelessWidget {
     String title = 'Dashboard';
     if (location.contains('products')) {
       title = 'Products';
-    } else if (location.contains('suppliers'))
+    } else if (location.contains('suppliers')) {
       title = 'Suppliers';
-    else if (location.contains('warehouses'))
+    } else if (location.contains('warehouses')) {
       title = 'Warehouses';
-    else if (location.contains('demand'))
+    } else if (location.contains('demand')) {
       title = 'Demand Data';
-    else if (location.contains('forecasts'))
+    } else if (location.contains('forecasts')) {
       title = 'Forecasts';
-    else if (location.contains('replenishment'))
+    } else if (location.contains('replenishment')) {
       title = 'Replenishment';
-    else if (location.contains('orders'))
+    } else if (location.contains('orders')) {
       title = 'Purchase Orders';
-    else if (location.contains('integrations'))
+    } else if (location.contains('integrations')) {
       title = 'Integrations';
-    else if (location.contains('settings'))
+    } else if (location.contains('settings')) {
       title = 'Settings';
+    }
 
     return Container(
       height: 64,
@@ -393,7 +460,7 @@ class _NotificationTile extends StatelessWidget {
       decoration: BoxDecoration(
         color: notification.isRead
             ? Colors.transparent
-            : AppColors.secondary.withOpacity(0.5),
+            : AppColors.secondary.withValues(alpha: 0.5),
         borderRadius: BorderRadius.circular(8),
       ),
       child: Row(
@@ -534,7 +601,9 @@ class _GlobalSearchBoxState extends State<_GlobalSearchBox> {
 
     if (matchedProducts.isEmpty &&
         matchedSuppliers.isEmpty &&
-        matchedWarehouses.isEmpty) return;
+        matchedWarehouses.isEmpty) {
+      return;
+    }
 
     final renderBox = context.findRenderObject() as RenderBox;
     final offset = renderBox.localToGlobal(Offset.zero);

@@ -15,8 +15,8 @@ class ShopifyStoreConnection {
 
   factory ShopifyStoreConnection.fromJson(Map<String, dynamic> json) {
     return ShopifyStoreConnection(
-      id: json['id'] as String,
-      shopDomain: json['shopDomain'] as String,
+      id: json['id'] as String? ?? '',
+      shopDomain: json['shopDomain'] as String? ?? '',
       isConnected: json['isConnected'] as bool? ?? false,
       lastSyncAt: json['lastSyncAt'] != null
           ? DateTime.parse(json['lastSyncAt'] as String)

@@ -1,28 +1,45 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:math';
+import 'dart:typed_data';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
 import 'package:ma5zony/models/app_notification.dart';
 import 'package:ma5zony/models/app_user.dart';
+import 'package:ma5zony/models/bill_of_materials.dart';
+import 'package:ma5zony/models/cash_flow_snapshot.dart';
 import 'package:ma5zony/models/demand_record.dart';
 import 'package:ma5zony/models/forecast_result.dart';
+import 'package:ma5zony/models/manufacturer.dart';
+import 'package:ma5zony/models/manufacturing_recommendation.dart';
 import 'package:ma5zony/models/product.dart';
+import 'package:ma5zony/models/production_order.dart';
 import 'package:ma5zony/models/purchase_order.dart';
+import 'package:ma5zony/models/raw_material.dart';
+import 'package:ma5zony/models/raw_material_order.dart';
 import 'package:ma5zony/models/replenishment_recommendation.dart';
 import 'package:ma5zony/models/shopify_store_connection.dart';
 import 'package:ma5zony/models/supplier.dart';
 import 'package:ma5zony/models/supplier_order.dart';
 import 'package:ma5zony/models/warehouse.dart';
+import 'package:ma5zony/models/workflow_log.dart';
+import 'package:ma5zony/services/cash_flow_service.dart';
 import 'package:ma5zony/services/firebase_auth_service.dart';
 import 'package:ma5zony/services/firestore_inventory_repository.dart';
 import 'package:ma5zony/services/forecasting_service.dart';
 import 'package:ma5zony/services/inventory_policy_service.dart';
 import 'package:ma5zony/services/inventory_repository.dart';
+import 'package:ma5zony/services/manufacturing_service.dart';
+import 'package:ma5zony/services/recommendation_engine_service.dart';
 import 'package:ma5zony/services/replenishment_service.dart';
 import 'package:ma5zony/services/settings_service.dart';
 import 'package:ma5zony/services/firebase_shopify_service.dart';
 import 'package:ma5zony/services/notification_service.dart';
+import 'package:ma5zony/services/workflow_service.dart';
+import 'package:ma5zony/services/backend_api_service.dart';
+import 'package:ma5zony/utils/cloud_function_config.dart';
 
 /// Central application state ChangeNotifier.
 /// Composes all domain services and exposes reactive state to the UI.
@@ -37,6 +54,11 @@ class AppState extends ChangeNotifier {
   late final InventoryPolicyService _policyService;
   late final ReplenishmentService _replenishmentService;
   late final FirebaseAuthService _authService;
+  late final RecommendationEngineService _recEngine;
+  ManufacturingService? _manufacturingService;
+  WorkflowService? _workflowService;
+  CashFlowService? _cashFlowService;
+  final BackendApiService _backendApi = BackendApiService();
 
   AppState() {
     _forecastingService = ForecastingService();
@@ -46,6 +68,7 @@ class AppState extends ChangeNotifier {
       policyService: _policyService,
     );
     _authService = FirebaseAuthService();
+    _recEngine = RecommendationEngineService();
 
     // Listen to Firebase auth state changes and sync our AppUser.
     _authService.authStateChanges.listen(_onAuthStateChanged);
@@ -63,6 +86,9 @@ class AppState extends ChangeNotifier {
     _settingsService = SettingsService(uid: uid);
     _shopifyService = FirebaseShopifyService(uid: uid);
     _notificationService = NotificationService(uid: uid);
+    _manufacturingService = ManufacturingService(repo: _repo!);
+    _workflowService = WorkflowService(repo: _repo!);
+    _cashFlowService = CashFlowService(repo: _repo!);
     _startNotificationListener();
   }
 
@@ -75,6 +101,11 @@ class AppState extends ChangeNotifier {
 
   String? _errorMessage;
   String? get errorMessage => _errorMessage;
+
+  void clearError() {
+    _errorMessage = null;
+    notifyListeners();
+  }
 
   /// True while login() or register() is actively handling auth.
   /// Prevents the authStateChanges listener from racing.
@@ -132,6 +163,14 @@ class AppState extends ChangeNotifier {
     _teamMembers = [];
     _purchaseOrders = [];
     _supplierOrders = [];
+    _rawMaterials = [];
+    _boms = [];
+    _manufacturers = [];
+    _productionOrders = [];
+    _rawMaterialOrders = [];
+    _mfgRecommendations = [];
+    _cashFlowSnapshots = [];
+    _workflowLogs = [];
   }
 
   Future<bool> login(String email, String password) async {
@@ -258,6 +297,16 @@ class AppState extends ChangeNotifier {
   List<PurchaseOrder> _purchaseOrders = [];
   List<SupplierOrder> _supplierOrders = [];
 
+  // Supply-chain state (Phase 1–3)
+  List<RawMaterial> _rawMaterials = [];
+  List<BillOfMaterials> _boms = [];
+  List<Manufacturer> _manufacturers = [];
+  List<ProductionOrder> _productionOrders = [];
+  List<RawMaterialOrder> _rawMaterialOrders = [];
+  List<ManufacturingRecommendation> _mfgRecommendations = [];
+  List<CashFlowSnapshot> _cashFlowSnapshots = [];
+  List<WorkflowLog> _workflowLogs = [];
+
   List<Product> get products => _products;
   List<Warehouse> get warehouses => _warehouses;
   List<Supplier> get suppliers => _suppliers;
@@ -270,6 +319,18 @@ class AppState extends ChangeNotifier {
   List<AppUser> get teamMembers => _teamMembers;
   List<PurchaseOrder> get purchaseOrders => _purchaseOrders;
   List<SupplierOrder> get supplierOrders => _supplierOrders;
+
+  // Supply-chain getters
+  List<RawMaterial> get rawMaterials => _rawMaterials;
+  List<BillOfMaterials> get boms => _boms;
+  List<Manufacturer> get manufacturers => _manufacturers;
+  List<ProductionOrder> get productionOrders => _productionOrders;
+  List<RawMaterialOrder> get rawMaterialOrders => _rawMaterialOrders;
+  List<ManufacturingRecommendation> get mfgRecommendations => _mfgRecommendations;
+  List<CashFlowSnapshot> get cashFlowSnapshots => _cashFlowSnapshots;
+  CashFlowSnapshot? get latestCashFlow =>
+      _cashFlowSnapshots.isNotEmpty ? _cashFlowSnapshots.first : null;
+  List<WorkflowLog> get workflowLogs => _workflowLogs;
 
   // ── Notifications ──────────────────────────────────────────────────────────
   List<AppNotification> _notifications = [];
@@ -557,7 +618,7 @@ class AppState extends ChangeNotifier {
 
   /// Total inventory value = Σ(currentStock × unitCost)
   double get totalStockValue =>
-      _products.fold(0, (sum, p) => sum + (p.currentStock * p.unitCost));
+      _products.fold(0, (acc, p) => acc + (p.currentStock * p.unitCost));
 
   /// Number of products at or below their computed reorder point.
   int get lowStockItems => _recommendations.length;
@@ -617,6 +678,9 @@ class AppState extends ChangeNotifier {
       // Load purchase orders
       await loadPurchaseOrders();
 
+      // Load supply-chain data in parallel
+      await loadManufacturingData();
+
       // Check for stock alerts (fire-and-forget)
       _checkStockAlerts();
     } finally {
@@ -633,6 +697,21 @@ class AppState extends ChangeNotifier {
     int smaWindow,
     double alpha,
   ) async {
+    // Try backend first
+    try {
+      final result = await _backendApi.runForecast(
+        productId: productId,
+        method: algorithm,
+        windowSize: algorithm == 'SMA' ? smaWindow : null,
+        alpha: algorithm == 'SES' ? alpha : null,
+      );
+      _currentForecast = ForecastResult.fromJson(result);
+      notifyListeners();
+      return;
+    } catch (_) {
+      // Backend unavailable — fall back to local
+    }
+
     final records = _demandByProduct[productId] ?? [];
     if (records.isEmpty) return;
 
@@ -739,7 +818,7 @@ class AppState extends ChangeNotifier {
       _rebuildRecommendations();
     }
     // Notify about the import
-    final imported = result['imported'] as int? ?? 0;
+    final imported = result['newRecordsImported'] as int? ?? 0;
     if (imported > 0) {
       await _notificationService?.notifyShopifySync(imported);
     }
@@ -761,10 +840,9 @@ class AppState extends ChangeNotifier {
           : null;
 
   Future<void> loadPurchaseOrders() async {
-    final repo = _firestoreRepo;
-    if (repo == null) return;
-    _purchaseOrders = await repo.getPurchaseOrders();
-    _supplierOrders = await repo.getAllSupplierOrders();
+    if (_repo == null) return;
+    _purchaseOrders = await _repo!.getPurchaseOrders();
+    _supplierOrders = await _repo!.getAllSupplierOrders();
     notifyListeners();
   }
 
@@ -807,12 +885,11 @@ class AppState extends ChangeNotifier {
 
   /// Confirm and save a purchase order; creates supplier orders automatically.
   Future<PurchaseOrder?> confirmPurchaseOrder(PurchaseOrder order) async {
-    final repo = _firestoreRepo;
-    if (repo == null) return null;
+    if (_repo == null) return null;
 
     try {
       order.status = OrderStatus.confirmed;
-      final saved = await repo.addPurchaseOrder(order);
+      final saved = await _repo!.addPurchaseOrder(order);
 
       // Split into supplier orders grouped by supplier
       final bySupplier = saved.itemsBySupplier;
@@ -841,8 +918,9 @@ class AppState extends ChangeNotifier {
                   ))
               .toList(),
           accessToken: token,
+          expiresAt: DateTime.now().add(const Duration(days: 30)),
         );
-        await repo.addSupplierOrder(supplierOrder);
+        await _repo!.addSupplierOrder(supplierOrder);
         _supplierOrders.add(supplierOrder);
       }
 
@@ -856,14 +934,25 @@ class AppState extends ChangeNotifier {
     }
   }
 
-  /// Mark a purchase order as sent (after emails are dispatched).
+  /// Mark a purchase order as sent and trigger supplier emails.
   Future<void> markOrderSent(String orderId) async {
-    final repo = _firestoreRepo;
-    if (repo == null) return;
+    if (_repo == null) return;
     final idx = _purchaseOrders.indexWhere((o) => o.id == orderId);
     if (idx == -1) return;
     _purchaseOrders[idx].status = OrderStatus.sent;
-    await repo.updatePurchaseOrder(_purchaseOrders[idx]);
+    await _repo!.updatePurchaseOrder(_purchaseOrders[idx]);
+
+    // Trigger supplier emails via Cloud Function
+    if (_currentUser != null) {
+      _callCloudFunction(
+        CloudFunctionConfig.sendSupplierEmails,
+        {
+          'uid': _currentUser!.uid,
+          'purchaseOrderId': orderId,
+        },
+      );
+    }
+
     notifyListeners();
   }
 
@@ -879,5 +968,504 @@ class AppState extends ChangeNotifier {
         'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
     final rng = Random.secure();
     return List.generate(32, (_) => chars[rng.nextInt(chars.length)]).join();
+  }
+
+  // ── Supply-Chain Data Loading ──────────────────────────────────────────────
+
+  Future<void> loadManufacturingData() async {
+    if (_repo == null) return;
+    try {
+      final results = await Future.wait([
+        _repo!.getRawMaterials(),
+        _repo!.getBOMs(),
+        _repo!.getManufacturers(),
+        _repo!.getProductionOrders(),
+        _repo!.getRawMaterialOrders(),
+        _repo!.getManufacturingRecommendations(),
+        _repo!.getCashFlowSnapshots(),
+      ]);
+      _rawMaterials = results[0] as List<RawMaterial>;
+      _boms = results[1] as List<BillOfMaterials>;
+      _manufacturers = results[2] as List<Manufacturer>;
+      _productionOrders = results[3] as List<ProductionOrder>;
+      _rawMaterialOrders = results[4] as List<RawMaterialOrder>;
+      _mfgRecommendations = results[5] as List<ManufacturingRecommendation>;
+      _cashFlowSnapshots = results[6] as List<CashFlowSnapshot>;
+      notifyListeners();
+    } catch (e) {
+      _errorMessage = 'Failed to load manufacturing data: $e';
+      notifyListeners();
+    }
+  }
+
+  // ── Raw Material CRUD ──────────────────────────────────────────────────────
+
+  Future<void> addRawMaterial(RawMaterial material) async {
+    final saved = await _repo!.addRawMaterial(material);
+    _rawMaterials.add(saved);
+    notifyListeners();
+  }
+
+  Future<void> updateRawMaterial(RawMaterial material) async {
+    await _repo!.updateRawMaterial(material);
+    final idx = _rawMaterials.indexWhere((m) => m.id == material.id);
+    if (idx != -1) _rawMaterials[idx] = material;
+    notifyListeners();
+  }
+
+  Future<void> deleteRawMaterial(String materialId) async {
+    await _repo!.deleteRawMaterial(materialId);
+    _rawMaterials.removeWhere((m) => m.id == materialId);
+    notifyListeners();
+  }
+
+  // ── BOM CRUD ───────────────────────────────────────────────────────────────
+
+  Future<void> addBOM(BillOfMaterials bom) async {
+    final saved = await _repo!.addBOM(bom);
+    _boms.add(saved);
+    notifyListeners();
+  }
+
+  Future<void> updateBOM(BillOfMaterials bom) async {
+    await _repo!.updateBOM(bom);
+    final idx = _boms.indexWhere((b) => b.id == bom.id);
+    if (idx != -1) _boms[idx] = bom;
+    notifyListeners();
+  }
+
+  Future<void> deleteBOM(String bomId) async {
+    await _repo!.deleteBOM(bomId);
+    _boms.removeWhere((b) => b.id == bomId);
+    notifyListeners();
+  }
+
+  // ── Manufacturer CRUD ──────────────────────────────────────────────────────
+
+  Future<void> addManufacturer(Manufacturer manufacturer) async {
+    final saved = await _repo!.addManufacturer(manufacturer);
+    _manufacturers.add(saved);
+    notifyListeners();
+  }
+
+  Future<void> updateManufacturer(Manufacturer manufacturer) async {
+    await _repo!.updateManufacturer(manufacturer);
+    final idx = _manufacturers.indexWhere((m) => m.id == manufacturer.id);
+    if (idx != -1) _manufacturers[idx] = manufacturer;
+    notifyListeners();
+  }
+
+  Future<void> deleteManufacturer(String manufacturerId) async {
+    await _repo!.deleteManufacturer(manufacturerId);
+    _manufacturers.removeWhere((m) => m.id == manufacturerId);
+    notifyListeners();
+  }
+
+  // ── Manufacturing Recommendations ──────────────────────────────────────────
+
+  Future<void> generateMfgRecommendations() async {
+    // Try backend first; fall back to local computation
+    try {
+      final result = await _backendApi.generateRecommendations();
+      _mfgRecommendations = result
+          .map((json) => ManufacturingRecommendation.fromFirestore(
+              json['id'] as String? ?? '', json as Map<String, dynamic>))
+          .toList();
+      notifyListeners();
+      return;
+    } catch (_) {
+      // Backend unavailable — use local engine
+    }
+
+    final recs = _recEngine.generate(
+      products: _products,
+      boms: _boms,
+      rawMaterials: _rawMaterials,
+      demandByProduct: _demandByProduct,
+      latestCashFlow: latestCashFlow,
+    );
+    _mfgRecommendations = recs;
+    if (_repo != null) {
+      await _repo!.saveManufacturingRecommendations(recs);
+    }
+    notifyListeners();
+  }
+
+  /// Approve a manufacturing recommendation → create a production order.
+  Future<ProductionOrder?> approveMfgRecommendation(
+    ManufacturingRecommendation rec,
+    String manufacturerId,
+  ) async {
+    if (_currentUser == null) return null;
+
+    rec.status = RecommendationStatus.approved;
+    await _repo!.updateManufacturingRecommendation(rec);
+
+    // Try backend-driven atomic workflow first
+    try {
+      final poJson = await _backendApi.createProductionOrder(
+        finalProductId: rec.productId,
+        quantity: rec.suggestedQty,
+        manufacturerId: manufacturerId,
+        estimatedCost: rec.estimatedCost,
+      );
+      final orderId = poJson['id'] as String;
+
+      // Approve + auto-create raw material orders atomically on the backend
+      final approvedJson = await _backendApi.approveProductionOrder(orderId);
+      final order = ProductionOrder.fromFirestore(
+        approvedJson['id'] as String,
+        approvedJson,
+      );
+      _productionOrders.insert(0, order);
+
+      // Reload raw material orders created by backend
+      _rawMaterialOrders = await _repo!.getRawMaterialOrders();
+
+      // Create portal orders and trigger emails (frontend-side)
+      await _createFactoryPortalOrders(order);
+
+      notifyListeners();
+      return order;
+    } catch (_) {
+      // Backend unavailable — fall back to local workflow
+    }
+
+    // Fallback: local workflow
+    if (_manufacturingService == null) return null;
+
+    final order = await _manufacturingService!.createProductionOrder(
+      finalProductId: rec.productId,
+      quantity: rec.suggestedQty,
+      manufacturerId: manufacturerId,
+      estimatedCost: rec.estimatedCost,
+    );
+    _productionOrders.insert(0, order);
+
+    // Auto-generate raw-material orders if BOM exists
+    final bom = _boms.where((b) => b.finalProductId == rec.productId).firstOrNull;
+    if (bom != null) {
+      final rmOrders = await _manufacturingService!.generateRawMaterialOrders(
+        productionOrder: order,
+        bom: bom,
+        rawMaterials: _rawMaterials,
+      );
+      _rawMaterialOrders.addAll(rmOrders);
+      await _createFactoryPortalOrders(order);
+
+      // Transition to materials_ordered
+      await _workflowService!.transitionProductionOrder(
+        order,
+        ProductionOrderStatus.materialsOrdered,
+        _currentUser!.uid,
+      );
+    }
+
+    notifyListeners();
+    return order;
+  }
+
+  /// Creates top-level factoryOrders for portal access and triggers emails.
+  Future<void> _createFactoryPortalOrders(ProductionOrder order) async {
+    final firestoreRepo = _firestoreRepo;
+    if (firestoreRepo == null || _currentUser == null) return;
+
+    final orderRmOrders = _rawMaterialOrders
+        .where((o) => o.productionOrderId == order.id)
+        .toList();
+
+    for (final rmo in orderRmOrders) {
+      final rm = _rawMaterials
+          .where((r) => r.id == rmo.rawMaterialId)
+          .firstOrNull;
+      final supplier = _suppliers
+          .where((s) => s.id == rmo.supplierId)
+          .firstOrNull;
+
+      await firestoreRepo.addFactoryOrder({
+        'productionOrderId': order.id,
+        'rawMaterialOrderId': rmo.id,
+        'rawMaterialId': rmo.rawMaterialId,
+        'materialName': rm?.name ?? '',
+        'quantity': rmo.quantity,
+        'unit': rm?.unit ?? 'pcs',
+        'supplierId': rmo.supplierId,
+        'supplierName': supplier?.name ?? '',
+        'supplierEmail': supplier?.contactEmail ?? '',
+        'status': 'pending',
+        'requestedDate': Timestamp.fromDate(rmo.requestedDate),
+        'accessToken': rmo.accessToken,
+        'expiresAt': Timestamp.fromDate(
+            DateTime.now().add(const Duration(days: 30))),
+      });
+    }
+
+    // Fire-and-forget: send factory emails
+    _callCloudFunction(
+      CloudFunctionConfig.sendFactoryEmails,
+      {'uid': _currentUser!.uid, 'productionOrderId': order.id},
+    );
+  }
+
+  Future<void> rejectMfgRecommendation(ManufacturingRecommendation rec) async {
+    rec.status = RecommendationStatus.rejected;
+    await _repo!.updateManufacturingRecommendation(rec);
+    notifyListeners();
+  }
+
+  /// Delete a draft production order.
+  Future<void> deleteProductionOrder(String orderId) async {
+    if (_repo == null) return;
+    try {
+      await _backendApi.deleteProductionOrder(orderId);
+    } catch (_) {
+      // Fallback: delete directly from Firestore
+      await _repo!.deleteProductionOrder(orderId);
+    }
+    _productionOrders.removeWhere((o) => o.id == orderId);
+    notifyListeners();
+  }
+
+  /// Cancel an active production order.
+  Future<void> cancelProductionOrder(String orderId) async {
+    if (_repo == null) return;
+    final idx = _productionOrders.indexWhere((o) => o.id == orderId);
+    if (idx == -1) return;
+    // Delete it (backend endpoint) — production orders have no "cancelled" status
+    try {
+      await _backendApi.deleteProductionOrder(orderId);
+    } catch (_) {
+      await _repo!.deleteProductionOrder(orderId);
+    }
+    _productionOrders.removeAt(idx);
+    notifyListeners();
+  }
+
+  // ── Production Order Status ────────────────────────────────────────────────
+
+  /// Convert camelCase enum name to snake_case for backend API.
+  static String _toSnake(String camel) =>
+      camel.replaceAllMapped(RegExp('[A-Z]'), (m) => '_${m[0]!.toLowerCase()}');
+
+  Future<void> updateProductionOrderStatus(
+    ProductionOrder order,
+    ProductionOrderStatus newStatus,
+  ) async {
+    if (_currentUser == null) return;
+
+    // Try backend first
+    try {
+      await _backendApi.updateProductionOrderStatus(
+        order.id,
+        _toSnake(newStatus.name),
+      );
+      order.status = newStatus;
+      if (newStatus == ProductionOrderStatus.completed) {
+        final product = _products.where((p) => p.id == order.finalProductId).firstOrNull;
+        if (product != null) {
+          product.currentStock += order.quantity;
+        }
+      }
+      notifyListeners();
+      return;
+    } catch (_) {
+      // Backend unavailable — fall back to local workflow
+    }
+
+    // Fallback: local workflow
+    if (_workflowService == null) return;
+    await _workflowService!.transitionProductionOrder(
+      order,
+      newStatus,
+      _currentUser!.uid,
+    );
+
+    if (newStatus == ProductionOrderStatus.completed) {
+      final product = _products.where((p) => p.id == order.finalProductId).firstOrNull;
+      if (product != null) {
+        product.currentStock += order.quantity;
+        await _repo!.updateProduct(product);
+      }
+    }
+
+    notifyListeners();
+  }
+
+  // ── Raw Material Order Status ──────────────────────────────────────────────
+
+  Future<void> updateRawMaterialOrderStatus(
+    RawMaterialOrder order,
+    String newStatus,
+  ) async {
+    if (_currentUser == null) return;
+
+    // Try backend first
+    try {
+      await _backendApi.updateRawMaterialOrderStatus(order.id, newStatus);
+      order.status = newStatus;
+
+      // Backend auto-transitions PO when all materials complete
+      if (newStatus == 'completed') {
+        _productionOrders = await _repo!.getProductionOrders();
+        final po = _productionOrders
+            .where((o) => o.id == order.productionOrderId)
+            .firstOrNull;
+        if (po != null && po.status == ProductionOrderStatus.materialsReady) {
+          await _createManufacturerPortalOrder(po);
+        }
+      }
+
+      notifyListeners();
+      return;
+    } catch (_) {
+      // Backend unavailable — fall back to local workflow
+    }
+
+    // Fallback: local workflow
+    if (_workflowService == null) return;
+    await _workflowService!.updateRawMaterialOrderStatus(
+      order,
+      newStatus,
+      _currentUser!.uid,
+    );
+
+    if (newStatus == 'completed') {
+      final allReady =
+          await _workflowService!.areAllMaterialsReady(order.productionOrderId);
+      if (allReady) {
+        final po = _productionOrders
+            .where((o) => o.id == order.productionOrderId)
+            .firstOrNull;
+        if (po != null && po.status == ProductionOrderStatus.materialsOrdered) {
+          await _workflowService!.transitionProductionOrder(
+            po,
+            ProductionOrderStatus.materialsReady,
+            'system',
+          );
+          await _createManufacturerPortalOrder(po);
+        }
+      }
+    }
+
+    notifyListeners();
+  }
+
+  /// Creates a top-level manufacturer portal order and triggers notification emails.
+  Future<void> _createManufacturerPortalOrder(ProductionOrder po) async {
+    final firestoreRepo = _firestoreRepo;
+    if (firestoreRepo == null || _currentUser == null) return;
+
+    final rng = Random.secure();
+    final token = List.generate(
+      32,
+      (_) => 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'[
+          rng.nextInt(62)],
+    ).join();
+
+    final product = _products
+        .where((p) => p.id == po.finalProductId)
+        .firstOrNull;
+    final mfr = _manufacturers
+        .where((m) => m.id == po.manufacturerId)
+        .firstOrNull;
+
+    final siblingRmos = _rawMaterialOrders
+        .where((o) => o.productionOrderId == po.id)
+        .toList();
+    final rmOrdersData = siblingRmos.map((rmo) {
+      final rm = _rawMaterials
+          .where((r) => r.id == rmo.rawMaterialId)
+          .firstOrNull;
+      return {
+        'materialName': rm?.name ?? '',
+        'quantity': rmo.quantity,
+        'status': rmo.status,
+      };
+    }).toList();
+
+    await firestoreRepo.addManufacturerOrder({
+      'productionOrderId': po.id,
+      'productName': product?.name ?? '',
+      'quantity': po.quantity,
+      'estimatedCost': po.estimatedCost,
+      'manufacturerId': po.manufacturerId,
+      'manufacturerName': mfr?.name ?? '',
+      'manufacturerEmail': mfr?.contactEmail ?? '',
+      'status': 'pending',
+      'accessToken': token,
+      'rawMaterialOrders': rmOrdersData,
+      'expiresAt': Timestamp.fromDate(
+          DateTime.now().add(const Duration(days: 30))),
+    });
+
+    _callCloudFunction(
+      CloudFunctionConfig.sendManufacturerEmails,
+      {'uid': _currentUser!.uid, 'productionOrderId': po.id},
+    );
+  }
+
+  // ── Cash Flow ──────────────────────────────────────────────────────────────
+
+  Future<CashFlowSnapshot?> importCashFlowFromRows(
+    List<Map<String, dynamic>> rows,
+  ) async {
+    if (_cashFlowService == null) return null;
+    final snapshot = await _cashFlowService!.importFromRows(rows);
+    _cashFlowSnapshots.insert(0, snapshot);
+
+    // Also upload to backend for workflow logging
+    try {
+      await _backendApi.uploadCashFlowSnapshot(snapshot.toFirestore());
+    } catch (_) {
+      // Backend unavailable — local save already handled by service
+    }
+
+    notifyListeners();
+    return snapshot;
+  }
+
+  Future<CashFlowSnapshot?> importCashFlowFromExcel(Uint8List bytes) async {
+    if (_cashFlowService == null) return null;
+    final snapshot = await _cashFlowService!.importFromExcelBytes(bytes);
+    _cashFlowSnapshots.insert(0, snapshot);
+
+    // Also upload to backend for workflow logging
+    try {
+      await _backendApi.uploadCashFlowSnapshot(snapshot.toFirestore());
+    } catch (_) {
+      // Backend unavailable — local save already handled by service
+    }
+
+    notifyListeners();
+    return snapshot;
+  }
+
+  // ── Workflow Logs ──────────────────────────────────────────────────────────
+
+  Future<void> loadWorkflowLogs({String? entityType, String? entityId}) async {
+    if (_repo == null) return;
+    _workflowLogs = await _repo!.getWorkflowLogs(
+      entityType: entityType,
+      entityId: entityId,
+    );
+    notifyListeners();
+  }
+
+  // ── Cloud Function Helpers ─────────────────────────────────────────────────
+
+  /// Fire-and-forget call to a Cloud Function endpoint.
+  void _callCloudFunction(String url, Map<String, dynamic> body) {
+    Future(() async {
+      final user = _authService.currentUser;
+      final token = await user?.getIdToken();
+      await http.post(
+        Uri.parse(url),
+        headers: {
+          'Content-Type': 'application/json',
+          if (token != null) 'Authorization': 'Bearer $token',
+        },
+        body: jsonEncode(body),
+      );
+    }).catchError((_) {});
   }
 }
