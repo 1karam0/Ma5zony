@@ -426,6 +426,7 @@ class AppState extends ChangeNotifier {
             unitCost: _products[i].unitCost,
             currentStock: _products[i].currentStock,
             supplierId: null,
+            manufacturerId: _products[i].manufacturerId,
           );
           await _repo!.updateProduct(updated);
           _products[i] = updated;

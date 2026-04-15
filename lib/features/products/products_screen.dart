@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:provider/provider.dart';
 import 'package:ma5zony/models/product.dart';
+import 'package:ma5zony/models/bill_of_materials.dart';
 import 'package:ma5zony/providers/app_state.dart';
 import 'package:ma5zony/utils/constants.dart';
 import 'package:ma5zony/widgets/shared_widgets.dart';
@@ -20,6 +21,8 @@ class _ProductsScreenState extends State<ProductsScreen> {
   Widget build(BuildContext context) {
     final state = context.watch<AppState>();
     final suppliers = {for (final s in state.suppliers) s.id: s.name};
+    final manufacturers = {for (final m in state.manufacturers) m.id: m.name};
+    final bomMap = {for (final b in state.boms) b.finalProductId: b};
 
     final products = state.products.where((p) {
       if (_search.isEmpty) return true;
@@ -168,12 +171,18 @@ class _ProductsScreenState extends State<ProductsScreen> {
                     DataColumn(label: Text('Unit Cost')),
                     DataColumn(label: Text('Stock')),
                     DataColumn(label: Text('Supplier')),
+                    DataColumn(label: Text('Manufacturer')),
+                    DataColumn(label: Text('BOM')),
                     DataColumn(label: Text('Status')),
                     DataColumn(label: Text('Actions')),
                   ],
                   source: _ProductDataSource(
                     products: products,
                     supplierMap: suppliers,
+                    manufacturerMap: manufacturers,
+                    bomMap: bomMap,
+                    rawMaterials: state.rawMaterials,
+                    rawMaterialSupplierMap: suppliers,
                     context: context,
                   ),
                   rowsPerPage: 10,
@@ -194,7 +203,10 @@ class _ProductsScreenState extends State<ProductsScreen> {
   void _showAddProductDialog(BuildContext context, AppState state) {
     showDialog(
       context: context,
-      builder: (ctx) => _AddProductDialog(suppliers: state.suppliers),
+      builder: (ctx) => _AddProductDialog(
+        suppliers: state.suppliers,
+        manufacturers: state.manufacturers,
+      ),
     );
   }
 }
@@ -204,11 +216,19 @@ class _ProductsScreenState extends State<ProductsScreen> {
 class _ProductDataSource extends DataTableSource {
   final List<Product> products;
   final Map<String, String> supplierMap;
+  final Map<String, String> manufacturerMap;
+  final Map<String, BillOfMaterials> bomMap;
+  final List rawMaterials;
+  final Map<String, String> rawMaterialSupplierMap;
   final BuildContext context;
 
   _ProductDataSource({
     required this.products,
     required this.supplierMap,
+    required this.manufacturerMap,
+    required this.bomMap,
+    required this.rawMaterials,
+    required this.rawMaterialSupplierMap,
     required this.context,
   });
 
@@ -227,6 +247,10 @@ class _ProductDataSource extends DataTableSource {
         ? 'Critical'
         : (recs != null ? 'Low' : 'OK');
 
+    final mfrName = manufacturerMap[p.manufacturerId ?? ''] ?? '—';
+    final bom = bomMap[p.id];
+    final bomLabel = bom != null ? '${bom.materials.length} material(s)' : 'Not defined';
+
     return DataRow(
       cells: [
         DataCell(Text(p.sku)),
@@ -240,6 +264,30 @@ class _ProductDataSource extends DataTableSource {
         DataCell(Text('\$${p.unitCost.toStringAsFixed(2)}')),
         DataCell(Text('${p.currentStock} units')),
         DataCell(Text(supplierMap[p.supplierId ?? ''] ?? '—')),
+        DataCell(Text(mfrName)),
+        DataCell(
+          bom != null
+              ? InkWell(
+                  onTap: () => _showBomPreview(context, p, bom),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Icon(Icons.list_alt, size: 16, color: AppColors.primary),
+                      const SizedBox(width: 4),
+                      Text(bomLabel,
+                          style: const TextStyle(
+                            color: AppColors.primary,
+                            decoration: TextDecoration.underline,
+                          )),
+                    ],
+                  ),
+                )
+              : InkWell(
+                  onTap: () => _showBomPreview(context, p, null),
+                  child: Text(bomLabel,
+                      style: const TextStyle(color: AppColors.textSecondary)),
+                ),
+        ),
         DataCell(StatusChip(status)),
         DataCell(
           Row(
@@ -253,6 +301,7 @@ class _ProductDataSource extends DataTableSource {
                     context: context,
                     builder: (_) => _AddProductDialog(
                       suppliers: state.suppliers,
+                      manufacturers: state.manufacturers,
                       existingProduct: p,
                     ),
                   );
@@ -311,6 +360,87 @@ class _ProductDataSource extends DataTableSource {
   int get rowCount => products.length;
   @override
   int get selectedRowCount => 0;
+
+  void _showBomPreview(BuildContext context, Product product, BillOfMaterials? bom) {
+    final rmMap = {for (final m in rawMaterials) m.id: m};
+    showDialog(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: Row(
+          children: [
+            const Icon(Icons.list_alt, color: AppColors.primary),
+            const SizedBox(width: 8),
+            Expanded(child: Text('BOM — ${product.name}')),
+          ],
+        ),
+        content: SizedBox(
+          width: 550,
+          child: bom == null || bom.materials.isEmpty
+              ? Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(Icons.info_outline,
+                        size: 48, color: AppColors.textSecondary),
+                    const SizedBox(height: 12),
+                    const Text('No Bill of Materials defined for this product.'),
+                    const SizedBox(height: 16),
+                    ElevatedButton.icon(
+                      icon: const Icon(Icons.add),
+                      label: const Text('Define BOM'),
+                      onPressed: () {
+                        Navigator.pop(context);
+                        GoRouter.of(context).go('/bom');
+                      },
+                    ),
+                  ],
+                )
+              : SingleChildScrollView(
+                  child: DataTable(
+                    columns: const [
+                      DataColumn(label: Text('Material')),
+                      DataColumn(label: Text('Supplier')),
+                      DataColumn(label: Text('Qty / Unit')),
+                      DataColumn(label: Text('Unit Cost')),
+                      DataColumn(label: Text('Line Cost')),
+                    ],
+                    rows: bom.materials.map((line) {
+                      final rm = rmMap[line.rawMaterialId];
+                      final unitCost = rm?.unitCost ?? 0.0;
+                      final lineCost = line.quantityPerUnit * unitCost;
+                      final supplierName =
+                          rawMaterialSupplierMap[rm?.supplierId ?? ''] ?? '—';
+                      return DataRow(cells: [
+                        DataCell(Text(rm?.name ?? line.rawMaterialId)),
+                        DataCell(Text(supplierName)),
+                        DataCell(Text(
+                            '${line.quantityPerUnit} ${rm?.unit ?? ''}')),
+                        DataCell(
+                            Text('\$${unitCost.toStringAsFixed(2)}')),
+                        DataCell(
+                            Text('\$${lineCost.toStringAsFixed(2)}')),
+                      ]);
+                    }).toList(),
+                  ),
+                ),
+        ),
+        actions: [
+          if (bom != null)
+            TextButton.icon(
+              icon: const Icon(Icons.edit),
+              label: const Text('Edit BOM'),
+              onPressed: () {
+                Navigator.pop(context);
+                GoRouter.of(context).go('/bom');
+              },
+            ),
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Close'),
+          ),
+        ],
+      ),
+    );
+  }
 }
 
 // ─── Import Dialog ────────────────────────────────────────────────────────────
@@ -471,8 +601,9 @@ class _ImportDialogState extends State<_ImportDialog> {
 
 class _AddProductDialog extends StatefulWidget {
   final List suppliers;
+  final List manufacturers;
   final Product? existingProduct;
-  const _AddProductDialog({required this.suppliers, this.existingProduct});
+  const _AddProductDialog({required this.suppliers, required this.manufacturers, this.existingProduct});
 
   @override
   State<_AddProductDialog> createState() => _AddProductDialogState();
@@ -486,6 +617,7 @@ class _AddProductDialogState extends State<_AddProductDialog> {
   final _costCtrl = TextEditingController(text: '0.00');
   final _stockCtrl = TextEditingController(text: '0');
   String? _selectedSupplierId;
+  String? _selectedManufacturerId;
 
   bool get _isEdit => widget.existingProduct != null;
 
@@ -500,6 +632,7 @@ class _AddProductDialogState extends State<_AddProductDialog> {
       _costCtrl.text = p.unitCost.toStringAsFixed(2);
       _stockCtrl.text = '${p.currentStock}';
       _selectedSupplierId = p.supplierId;
+      _selectedManufacturerId = p.manufacturerId;
     }
   }
 
@@ -599,6 +732,20 @@ class _AddProductDialogState extends State<_AddProductDialog> {
                     ),
                   ],
                 ),
+                const SizedBox(height: 16),
+                DropdownButtonFormField<String>(
+                  decoration: const InputDecoration(labelText: 'Default Manufacturer'),
+                  value: _selectedManufacturerId,
+                  items: widget.manufacturers
+                      .map<DropdownMenuItem<String>>(
+                        (m) => DropdownMenuItem<String>(
+                          value: m.id as String,
+                          child: Text(m.name as String),
+                        ),
+                      )
+                      .toList(),
+                  onChanged: (v) => setState(() => _selectedManufacturerId = v),
+                ),
               ],
             ),
           ),
@@ -624,6 +771,7 @@ class _AddProductDialogState extends State<_AddProductDialog> {
               unitCost: double.tryParse(_costCtrl.text) ?? 0,
               currentStock: int.tryParse(_stockCtrl.text) ?? 0,
               supplierId: _selectedSupplierId,
+              manufacturerId: _selectedManufacturerId,
             );
             final appState = context.read<AppState>();
             final messenger = ScaffoldMessenger.of(context);

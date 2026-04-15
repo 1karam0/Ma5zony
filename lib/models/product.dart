@@ -6,6 +6,7 @@ class Product {
   final double unitCost;
   int currentStock;
   final String? supplierId;
+  final String? manufacturerId;
   final String? warehouseId;
   final bool isActive;
 
@@ -17,6 +18,7 @@ class Product {
     required this.unitCost,
     this.currentStock = 0,
     this.supplierId,
+    this.manufacturerId,
     this.warehouseId,
     this.isActive = true,
   });
@@ -30,6 +32,7 @@ class Product {
       unitCost: (json['unitCost'] as num?)?.toDouble() ?? 0.0,
       currentStock: (json['currentStock'] as num?)?.toInt() ?? 0,
       supplierId: json['supplierId'] as String?,
+      manufacturerId: json['manufacturerId'] as String?,
       warehouseId: json['warehouseId'] as String?,
       isActive: json['isActive'] as bool? ?? true,
     );
@@ -44,6 +47,7 @@ class Product {
       'unitCost': unitCost,
       'currentStock': currentStock,
       'supplierId': supplierId,
+      'manufacturerId': manufacturerId,
       'warehouseId': warehouseId,
       'isActive': isActive,
     };
