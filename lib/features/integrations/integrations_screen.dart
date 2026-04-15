@@ -230,14 +230,16 @@ class _IntegrationsScreenState extends State<IntegrationsScreen> {
                                         );
                                         setState(() => _importing = true);
                                         try {
-                                          await context
+                                          final result = await context
                                               .read<AppState>()
                                               .importShopifyProducts();
                                           if (mounted) {
+                                            final newC = result['newCount'] ?? 0;
+                                            final merged = result['mergedCount'] ?? 0;
                                             messenger.showSnackBar(
-                                              const SnackBar(
+                                              SnackBar(
                                                 content: Text(
-                                                  'Products imported!',
+                                                  '$newC new product(s) added, $merged existing updated',
                                                 ),
                                               ),
                                             );

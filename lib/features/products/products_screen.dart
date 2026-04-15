@@ -581,11 +581,13 @@ class _ImportDialogState extends State<_ImportDialog> {
               : () async {
                   final messenger = ScaffoldMessenger.of(context);
                   Navigator.pop(context);
-                  await context.read<AppState>().importShopifyProducts();
+                  final result = await context.read<AppState>().importShopifyProducts();
+                  final newC = result['newCount'] ?? 0;
+                  final merged = result['mergedCount'] ?? 0;
                   messenger.showSnackBar(
                     SnackBar(
                       content: Text(
-                        '${_selectedIds.length} product(s) imported from Shopify',
+                        '$newC new, $merged updated from Shopify',
                       ),
                     ),
                   );

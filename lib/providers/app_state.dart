@@ -774,20 +774,67 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> importShopifyProducts() async {
-    if (_shopifyService == null) return;
+  /// Imports products from Shopify with SKU-based deduplication.
+  /// Returns a summary: {newCount, mergedCount, totalImported}.
+  Future<Map<String, int>> importShopifyProducts() async {
+    if (_shopifyService == null) return {'newCount': 0, 'mergedCount': 0, 'totalImported': 0};
     final imported = await _shopifyService!.importProductsFromShopify();
-    // Merge into local state
+    int newCount = 0;
+    int mergedCount = 0;
+
     for (final p in imported) {
-      final idx = _products.indexWhere((e) => e.id == p.id);
-      if (idx != -1) {
-        _products[idx] = p;
+      // 1. Try matching by SKU first (handles locally-created products)
+      final skuIdx = p.sku.isNotEmpty
+          ? _products.indexWhere((e) => e.sku == p.sku && e.id != p.id)
+          : -1;
+      // 2. Fall back to matching by ID
+      final idIdx = _products.indexWhere((e) => e.id == p.id);
+
+      if (skuIdx != -1) {
+        // SKU match found — merge: update stock from Shopify, keep local links
+        final existing = _products[skuIdx];
+        _products[skuIdx] = Product(
+          id: existing.id,
+          sku: existing.sku,
+          name: existing.name.isNotEmpty ? existing.name : p.name,
+          category: existing.category.isNotEmpty ? existing.category : p.category,
+          unitCost: existing.unitCost > 0 ? existing.unitCost : p.unitCost,
+          currentStock: p.currentStock, // Shopify is source of truth for stock
+          supplierId: existing.supplierId,
+          manufacturerId: existing.manufacturerId,
+          warehouseId: existing.warehouseId,
+          isActive: existing.isActive,
+        );
+        mergedCount++;
+      } else if (idIdx != -1) {
+        // Same Shopify ID — re-import, keep local links
+        final existing = _products[idIdx];
+        _products[idIdx] = Product(
+          id: existing.id,
+          sku: p.sku.isNotEmpty ? p.sku : existing.sku,
+          name: p.name.isNotEmpty ? p.name : existing.name,
+          category: p.category.isNotEmpty ? p.category : existing.category,
+          unitCost: p.unitCost > 0 ? p.unitCost : existing.unitCost,
+          currentStock: p.currentStock,
+          supplierId: existing.supplierId ?? p.supplierId,
+          manufacturerId: existing.manufacturerId ?? p.manufacturerId,
+          warehouseId: existing.warehouseId ?? p.warehouseId,
+          isActive: existing.isActive,
+        );
+        mergedCount++;
       } else {
+        // New product
         _products.add(p);
+        newCount++;
       }
     }
     _rebuildRecommendations();
     notifyListeners();
+    return {
+      'newCount': newCount,
+      'mergedCount': mergedCount,
+      'totalImported': imported.length,
+    };
   }
 
   Future<void> syncShopifyInventory() async {
