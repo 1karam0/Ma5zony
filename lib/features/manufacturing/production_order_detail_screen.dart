@@ -256,38 +256,157 @@ class _ProductionOrderDetailScreenState
       '${_formatDate(d)} ${d.hour.toString().padLeft(2, '0')}:${d.minute.toString().padLeft(2, '0')}';
 }
 
-class _ActionButtons extends StatelessWidget {
+class _ActionButtons extends StatefulWidget {
   final ProductionOrder order;
   final AppState state;
   const _ActionButtons({required this.order, required this.state});
 
   @override
+  State<_ActionButtons> createState() => _ActionButtonsState();
+}
+
+class _ActionButtonsState extends State<_ActionButtons> {
+  bool _advancing = false;
+
+  @override
   Widget build(BuildContext context) {
-    final nextStatus = _nextStatus(order.status);
-    if (nextStatus == null) return const SizedBox.shrink();
+    final nextStatus = _nextStatus(widget.order.status);
+    if (nextStatus == null) {
+      if (widget.order.status == ProductionOrderStatus.completed) {
+        return Row(
+          children: [
+            const Icon(Icons.check_circle, color: AppColors.success),
+            const SizedBox(width: 8),
+            Text('Production complete — stock updated',
+                style: AppTextStyles.body.copyWith(color: AppColors.success)),
+          ],
+        );
+      }
+      return const SizedBox.shrink();
+    }
+
+    final isStart = nextStatus == ProductionOrderStatus.inProduction;
+    final isComplete = nextStatus == ProductionOrderStatus.completed;
 
     return ElevatedButton.icon(
-      icon: const Icon(Icons.arrow_forward, size: 18),
-      label: Text('Advance to ${_statusLabel(nextStatus)}'),
-      onPressed: () async {
-        try {
-          await state.updateProductionOrderStatus(order, nextStatus);
-          if (context.mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(
-                  content:
-                      Text('Status updated to ${_statusLabel(nextStatus)}')),
-            );
-          }
-        } catch (e) {
-          if (context.mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(content: Text('Error: $e')),
-            );
-          }
-        }
-      },
+      icon: _advancing
+          ? const SizedBox(
+              width: 18,
+              height: 18,
+              child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+            )
+          : Icon(isComplete ? Icons.check_circle : Icons.arrow_forward, size: 18),
+      label: Text(_advancing ? 'Updating...' : 'Advance to ${_statusLabel(nextStatus)}'),
+      style: isComplete
+          ? ElevatedButton.styleFrom(
+              backgroundColor: AppColors.success,
+              foregroundColor: Colors.white,
+            )
+          : isStart
+              ? ElevatedButton.styleFrom(
+                  backgroundColor: Colors.deepPurple,
+                  foregroundColor: Colors.white,
+                )
+              : null,
+      onPressed: _advancing ? null : () => _onAdvance(context, nextStatus),
     );
+  }
+
+  Future<void> _onAdvance(BuildContext context, ProductionOrderStatus nextStatus) async {
+    final order = widget.order;
+    final state = widget.state;
+
+    // Confirmation dialog for starting production
+    if (nextStatus == ProductionOrderStatus.inProduction) {
+      final rmOrders = state.rawMaterialOrders
+          .where((o) => o.productionOrderId == order.id)
+          .toList();
+      final materialLines = rmOrders.map((rmo) {
+        final rm = state.rawMaterials.where((r) => r.id == rmo.rawMaterialId).firstOrNull;
+        return '• ${rm?.name ?? rmo.rawMaterialId}: −${rmo.quantity} ${rm?.unit ?? "units"}';
+      }).join('\n');
+
+      final productName = state.products
+          .where((p) => p.id == order.finalProductId)
+          .firstOrNull
+          ?.name ?? 'Unknown';
+      final mfgName = state.manufacturers
+          .where((m) => m.id == order.manufacturerId)
+          .firstOrNull
+          ?.name ?? 'Unknown';
+
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('Start Production?'),
+          content: Text(
+            'This will:\n\n'
+            '1. Deduct raw materials from stock:\n$materialLines\n\n'
+            '2. Send an email to manufacturer: $mfgName\n\n'
+            '3. Start production for ${order.quantity} units of $productName',
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+            ElevatedButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              style: ElevatedButton.styleFrom(backgroundColor: Colors.deepPurple, foregroundColor: Colors.white),
+              child: const Text('Start Production'),
+            ),
+          ],
+        ),
+      );
+      if (confirmed != true || !mounted) return;
+    }
+
+    // Confirmation dialog for completing production
+    if (nextStatus == ProductionOrderStatus.completed) {
+      final productName = state.products
+          .where((p) => p.id == order.finalProductId)
+          .firstOrNull
+          ?.name ?? 'Unknown';
+
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('Mark as Complete?'),
+          content: Text(
+            'This will add ${order.quantity} units to "$productName" inventory.\n\n'
+            'This action cannot be undone.',
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+            ElevatedButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              style: ElevatedButton.styleFrom(backgroundColor: AppColors.success, foregroundColor: Colors.white),
+              child: const Text('Complete Production'),
+            ),
+          ],
+        ),
+      );
+      if (confirmed != true || !mounted) return;
+    }
+
+    setState(() => _advancing = true);
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      await state.updateProductionOrderStatus(order, nextStatus);
+      if (mounted) {
+        final extra = nextStatus == ProductionOrderStatus.inProduction
+            ? ' — email sent to manufacturer'
+            : nextStatus == ProductionOrderStatus.completed
+                ? ' — stock updated'
+                : '';
+        messenger.showSnackBar(
+          SnackBar(content: Text('Status updated to ${_statusLabel(nextStatus)}$extra')),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        messenger.showSnackBar(SnackBar(content: Text('Error: $e')));
+      }
+    } finally {
+      if (mounted) setState(() => _advancing = false);
+    }
   }
 
   ProductionOrderStatus? _nextStatus(ProductionOrderStatus current) =>
@@ -297,7 +416,7 @@ class _ActionButtons extends StatelessWidget {
           ProductionOrderStatus.inProduction,
         ProductionOrderStatus.inProduction =>
           ProductionOrderStatus.completed,
-        _ => null, // Other transitions are automated
+        _ => null,
       };
 
   String _statusLabel(ProductionOrderStatus s) => switch (s) {

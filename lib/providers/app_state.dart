@@ -1385,10 +1385,20 @@ class AppState extends ChangeNotifier {
         _toSnake(newStatus.name),
       );
       order.status = newStatus;
+
+      if (newStatus == ProductionOrderStatus.inProduction) {
+        // Deduct raw materials consumed by manufacturing
+        await _deductRawMaterialsForProduction(order);
+        // Send email to manufacturer
+        _sendManufacturerEmail(order);
+      }
+
       if (newStatus == ProductionOrderStatus.completed) {
+        order.completedAt = DateTime.now();
         final product = _products.where((p) => p.id == order.finalProductId).firstOrNull;
         if (product != null) {
           product.currentStock += order.quantity;
+          await _repo?.updateProduct(product);
         }
       }
       notifyListeners();
@@ -1405,7 +1415,13 @@ class AppState extends ChangeNotifier {
       _currentUser!.uid,
     );
 
+    if (newStatus == ProductionOrderStatus.inProduction) {
+      await _deductRawMaterialsForProduction(order);
+      _sendManufacturerEmail(order);
+    }
+
     if (newStatus == ProductionOrderStatus.completed) {
+      order.completedAt = DateTime.now();
       final product = _products.where((p) => p.id == order.finalProductId).firstOrNull;
       if (product != null) {
         product.currentStock += order.quantity;
@@ -1414,6 +1430,55 @@ class AppState extends ChangeNotifier {
     }
 
     notifyListeners();
+  }
+
+  /// Deduct raw material stock when production starts.
+  Future<void> _deductRawMaterialsForProduction(ProductionOrder order) async {
+    final rmOrders = _rawMaterialOrders
+        .where((o) => o.productionOrderId == order.id)
+        .toList();
+
+    for (final rmo in rmOrders) {
+      final rmIdx = _rawMaterials.indexWhere((r) => r.id == rmo.rawMaterialId);
+      if (rmIdx != -1) {
+        _rawMaterials[rmIdx].currentStock -= rmo.quantity;
+        if (_rawMaterials[rmIdx].currentStock < 0) {
+          _rawMaterials[rmIdx].currentStock = 0;
+        }
+        await _repo?.updateRawMaterial(_rawMaterials[rmIdx]);
+      }
+    }
+
+    // Log consumption
+    if (_repo != null && _currentUser != null) {
+      final materialNames = rmOrders.map((rmo) {
+        final rm = _rawMaterials.where((r) => r.id == rmo.rawMaterialId).firstOrNull;
+        return '${rm?.name ?? rmo.rawMaterialId}: ${rmo.quantity} ${rm?.unit ?? "units"}';
+      }).join(', ');
+
+      await _repo!.addWorkflowLog(WorkflowLog(
+        id: '${order.id}_materials_consumed_${DateTime.now().millisecondsSinceEpoch}',
+        entityType: 'ProductionOrder',
+        entityId: order.id,
+        action: 'raw_materials_consumed',
+        performedBy: _currentUser!.uid,
+        timestamp: DateTime.now(),
+        details: 'Raw materials consumed for production: $materialNames',
+      ));
+    }
+  }
+
+  /// Send email notification to manufacturer when production starts.
+  void _sendManufacturerEmail(ProductionOrder order) {
+    if (_currentUser == null) return;
+    _callCloudFunction(
+      CloudFunctionConfig.sendManufacturerEmails,
+      {
+        'uid': _currentUser!.uid,
+        'productionOrderId': order.id,
+        'manufacturerId': order.manufacturerId,
+      },
+    );
   }
 
   // ── Raw Material Order Status ──────────────────────────────────────────────
