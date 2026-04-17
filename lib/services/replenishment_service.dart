@@ -71,12 +71,29 @@ class ReplenishmentService {
 
       // Only include products at or below ROP
       if (product.currentStock <= policy.reorderPoint) {
+        // Resolve effective lead time: product-level overrides supplier default
+        final effectiveLeadTimeDays = product.leadTimeDays > 0
+            ? product.leadTimeDays
+            : supplier.typicalLeadTimeDays;
+
         // Forecast next period demand using SMA(3)
         final nextForecast = _forecastingService
             .simpleMovingAverage(demandSeries, 3)
             .toInt();
 
         final suggestedQty = policy.eoq.ceil().clamp(1, 99999);
+
+        // Compute order date: if stock covers demand during lead time we can
+        // wait; otherwise order immediately. Days of stock remaining =
+        // currentStock / (avgDailyDemand). Order must arrive by that day.
+        final avgMonthlyDemand = demandSeries.reduce((a, b) => a + b) /
+            demandSeries.length;
+        final avgDailyDemand = avgMonthlyDemand / 30.0;
+        final daysOfStockLeft = avgDailyDemand > 0
+            ? (product.currentStock / avgDailyDemand).floor()
+            : 0;
+        final latestOrderDay = daysOfStockLeft - effectiveLeadTimeDays;
+        final orderInDays = latestOrderDay > 1 ? latestOrderDay : 1;
 
         recommendations.add(
           ReplenishmentRecommendation(
@@ -87,7 +104,9 @@ class ReplenishmentService {
             forecastNextPeriod: nextForecast,
             reorderPoint: policy.reorderPoint,
             suggestedOrderQty: suggestedQty,
-            recommendedOrderDate: DateTime.now().add(const Duration(days: 1)),
+            recommendedOrderDate: DateTime.now().add(
+              Duration(days: orderInDays),
+            ),
           ),
         );
       }

@@ -6,6 +6,10 @@ class ForecastResult {
   final double? mae;
   final double? mape;
   final String algorithm; // 'SMA' or 'SES'
+  final int? leadTimeDays;
+  final double? demandDuringLeadTime;
+  final int? safetyStockForecast;
+  final int? reorderPointForecast;
 
   ForecastResult({
     required this.productId,
@@ -15,6 +19,10 @@ class ForecastResult {
     this.mae,
     this.mape,
     required this.algorithm,
+    this.leadTimeDays,
+    this.demandDuringLeadTime,
+    this.safetyStockForecast,
+    this.reorderPointForecast,
   });
 
   /// Next-period forecast (last value in the forecast list).
@@ -35,6 +43,10 @@ class ForecastResult {
       mae: (json['mae'] as num?)?.toDouble(),
       mape: (json['mape'] as num?)?.toDouble(),
       algorithm: json['algorithm'] as String,
+      leadTimeDays: (json['leadTimeDays'] as num?)?.toInt(),
+      demandDuringLeadTime: (json['demandDuringLeadTime'] as num?)?.toDouble(),
+      safetyStockForecast: (json['safetyStockForecast'] as num?)?.toInt(),
+      reorderPointForecast: (json['reorderPointForecast'] as num?)?.toInt(),
     );
   }
 
@@ -47,6 +59,10 @@ class ForecastResult {
       'mae': mae,
       'mape': mape,
       'algorithm': algorithm,
+      'leadTimeDays': leadTimeDays,
+      'demandDuringLeadTime': demandDuringLeadTime,
+      'safetyStockForecast': safetyStockForecast,
+      'reorderPointForecast': reorderPointForecast,
     };
   }
 }

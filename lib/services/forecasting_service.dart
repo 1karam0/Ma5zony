@@ -1,3 +1,5 @@
+import 'dart:math';
+
 import 'package:ma5zony/models/forecast_result.dart';
 
 /// Pure-Dart forecasting service. No Flutter dependencies.
@@ -60,6 +62,11 @@ class ForecastingService {
 
   /// Generates a [ForecastResult] from historical demand.
   /// Appends one future-period forecast at the end.
+  ///
+  /// When [leadTimeDays] > 0, also computes:
+  /// - [demandDuringLeadTime]: next-period forecast scaled to lead time
+  /// - [safetyStockForecast]: z × σ × √(LT in periods)
+  /// - [reorderPointForecast]: demand during LT + safety stock
   ForecastResult generateForecast({
     required String productId,
     required List<DateTime> periods,
@@ -67,6 +74,8 @@ class ForecastingService {
     required String algorithm,
     int smaWindow = 3,
     double alpha = 0.3,
+    int leadTimeDays = 0,
+    double serviceLevelZ = 1.65,
   }) {
     if (demand.isEmpty) {
       return ForecastResult(
@@ -123,6 +132,28 @@ class ForecastingService {
           pairs.length;
     }
 
+    // ── Lead-time-adjusted metrics ──────────────────────────────────────────
+    int? ltDays;
+    double? demandDuringLT;
+    int? safetyStockFC;
+    int? ropFC;
+
+    if (leadTimeDays > 0 && nextForecast > 0) {
+      ltDays = leadTimeDays;
+      final ltInPeriods = leadTimeDays / 30.0; // periods are ~monthly
+      demandDuringLT = nextForecast * ltInPeriods;
+
+      // Std deviation of historical demand
+      final avg = demand.reduce((a, b) => a + b) / demand.length;
+      final variance =
+          demand.map((d) => (d - avg) * (d - avg)).reduce((a, b) => a + b) /
+          demand.length;
+      final stdDev = sqrt(variance);
+
+      safetyStockFC = (serviceLevelZ * stdDev * sqrt(ltInPeriods)).round();
+      ropFC = demandDuringLT.round() + safetyStockFC;
+    }
+
     return ForecastResult(
       productId: productId,
       periods: allPeriods,
@@ -131,6 +162,10 @@ class ForecastingService {
       mae: mae,
       mape: mape,
       algorithm: algorithm,
+      leadTimeDays: ltDays,
+      demandDuringLeadTime: demandDuringLT,
+      safetyStockForecast: safetyStockFC,
+      reorderPointForecast: ropFC,
     );
   }
 }

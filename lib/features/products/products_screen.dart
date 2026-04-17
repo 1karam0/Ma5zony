@@ -618,6 +618,7 @@ class _AddProductDialogState extends State<_AddProductDialog> {
   final _categoryCtrl = TextEditingController();
   final _costCtrl = TextEditingController(text: '0.00');
   final _stockCtrl = TextEditingController(text: '0');
+  final _leadTimeCtrl = TextEditingController(text: '0');
   String? _selectedSupplierId;
   String? _selectedManufacturerId;
 
@@ -633,6 +634,7 @@ class _AddProductDialogState extends State<_AddProductDialog> {
       _categoryCtrl.text = p.category;
       _costCtrl.text = p.unitCost.toStringAsFixed(2);
       _stockCtrl.text = '${p.currentStock}';
+      _leadTimeCtrl.text = '${p.leadTimeDays}';
       _selectedSupplierId = p.supplierId;
       _selectedManufacturerId = p.manufacturerId;
     }
@@ -735,18 +737,40 @@ class _AddProductDialogState extends State<_AddProductDialog> {
                   ],
                 ),
                 const SizedBox(height: 16),
-                DropdownButtonFormField<String>(
-                  decoration: const InputDecoration(labelText: 'Default Manufacturer'),
-                  initialValue: _selectedManufacturerId,
-                  items: widget.manufacturers
-                      .map<DropdownMenuItem<String>>(
-                        (m) => DropdownMenuItem<String>(
-                          value: m.id as String,
-                          child: Text(m.name as String),
+                Row(
+                  children: [
+                    Expanded(
+                      child: TextFormField(
+                        controller: _leadTimeCtrl,
+                        decoration: const InputDecoration(
+                          labelText: 'Lead Time (Days)',
+                          helperText: '0 = use supplier default',
                         ),
-                      )
-                      .toList(),
-                  onChanged: (v) => setState(() => _selectedManufacturerId = v),
+                        keyboardType: TextInputType.number,
+                        validator: (v) {
+                          final val = int.tryParse(v ?? '');
+                          if (val == null || val < 0) return 'Enter a valid number';
+                          return null;
+                        },
+                      ),
+                    ),
+                    const SizedBox(width: 16),
+                    Expanded(
+                      child: DropdownButtonFormField<String>(
+                        decoration: const InputDecoration(labelText: 'Default Manufacturer'),
+                        initialValue: _selectedManufacturerId,
+                        items: widget.manufacturers
+                            .map<DropdownMenuItem<String>>(
+                              (m) => DropdownMenuItem<String>(
+                                value: m.id as String,
+                                child: Text(m.name as String),
+                              ),
+                            )
+                            .toList(),
+                        onChanged: (v) => setState(() => _selectedManufacturerId = v),
+                      ),
+                    ),
+                  ],
                 ),
               ],
             ),
@@ -774,6 +798,7 @@ class _AddProductDialogState extends State<_AddProductDialog> {
               currentStock: int.tryParse(_stockCtrl.text) ?? 0,
               supplierId: _selectedSupplierId,
               manufacturerId: _selectedManufacturerId,
+              leadTimeDays: int.tryParse(_leadTimeCtrl.text) ?? 0,
             );
             final appState = context.read<AppState>();
             final messenger = ScaffoldMessenger.of(context);
@@ -804,6 +829,7 @@ class _AddProductDialogState extends State<_AddProductDialog> {
     _categoryCtrl.dispose();
     _costCtrl.dispose();
     _stockCtrl.dispose();
+    _leadTimeCtrl.dispose();
     super.dispose();
   }
 }

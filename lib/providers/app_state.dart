@@ -716,6 +716,15 @@ class AppState extends ChangeNotifier {
     final records = _demandByProduct[productId] ?? [];
     if (records.isEmpty) return;
 
+    // Resolve lead time: product-level > supplier > 0
+    final product = _products.where((p) => p.id == productId).firstOrNull;
+    int effectiveLeadTimeDays = product?.leadTimeDays ?? 0;
+    if (effectiveLeadTimeDays == 0 && product?.supplierId != null) {
+      final supplier =
+          _suppliers.where((s) => s.id == product!.supplierId).firstOrNull;
+      effectiveLeadTimeDays = supplier?.typicalLeadTimeDays ?? 0;
+    }
+
     final sorted = [...records]
       ..sort((a, b) => a.periodStart.compareTo(b.periodStart));
     final periods = sorted.map((r) => r.periodStart).toList();
@@ -728,6 +737,7 @@ class AppState extends ChangeNotifier {
       algorithm: algorithm,
       smaWindow: smaWindow,
       alpha: alpha,
+      leadTimeDays: effectiveLeadTimeDays,
     );
 
     notifyListeners();

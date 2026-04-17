@@ -7,6 +7,7 @@ class RawMaterial {
   final String supplierId;
   int currentStock;
   final int safetyStock;
+  final int leadTimeDays;
 
   RawMaterial({
     required this.id,
@@ -17,6 +18,7 @@ class RawMaterial {
     required this.supplierId,
     this.currentStock = 0,
     this.safetyStock = 0,
+    this.leadTimeDays = 0,
   });
 
   factory RawMaterial.fromFirestore(String id, Map<String, dynamic> data) {
@@ -29,6 +31,7 @@ class RawMaterial {
       supplierId: data['supplierId'] as String? ?? '',
       currentStock: (data['currentStock'] as num?)?.toInt() ?? 0,
       safetyStock: (data['safetyStock'] as num?)?.toInt() ?? 0,
+      leadTimeDays: (data['leadTimeDays'] as num?)?.toInt() ?? 0,
     );
   }
 
@@ -41,6 +44,7 @@ class RawMaterial {
       'supplierId': supplierId,
       'currentStock': currentStock,
       'safetyStock': safetyStock,
+      'leadTimeDays': leadTimeDays,
     };
   }
 }

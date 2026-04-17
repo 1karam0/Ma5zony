@@ -238,6 +238,52 @@ class _ForecastsScreenState extends State<ForecastsScreen> {
                             ),
                           ],
                         ),
+                        const SizedBox(height: 16),
+
+                        // Lead-time KPI chips (shown when lead time data exists)
+                        if (forecast.leadTimeDays != null &&
+                            forecast.leadTimeDays! > 0)
+                          Row(
+                            children: [
+                              Expanded(
+                                child: KPICard(
+                                  title: 'Lead Time',
+                                  value: '${forecast.leadTimeDays} days',
+                                  icon: Icons.schedule,
+                                  color: AppColors.primary,
+                                ),
+                              ),
+                              const SizedBox(width: 16),
+                              Expanded(
+                                child: KPICard(
+                                  title: 'Demand During LT',
+                                  value: forecast.demandDuringLeadTime
+                                          ?.toStringAsFixed(0) ??
+                                      '-',
+                                  icon: Icons.trending_up,
+                                ),
+                              ),
+                              const SizedBox(width: 16),
+                              Expanded(
+                                child: KPICard(
+                                  title: 'Safety Stock',
+                                  value:
+                                      '${forecast.safetyStockForecast ?? '-'}',
+                                  icon: Icons.shield,
+                                ),
+                              ),
+                              const SizedBox(width: 16),
+                              Expanded(
+                                child: KPICard(
+                                  title: 'Reorder Point',
+                                  value:
+                                      '${forecast.reorderPointForecast ?? '-'}',
+                                  icon: Icons.notification_important,
+                                  color: AppColors.warning,
+                                ),
+                              ),
+                            ],
+                          ),
                         const SizedBox(height: 24),
 
                         // Chart

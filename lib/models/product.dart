@@ -9,6 +9,7 @@ class Product {
   final String? manufacturerId;
   final String? warehouseId;
   final bool isActive;
+  final int leadTimeDays;
 
   Product({
     required this.id,
@@ -21,6 +22,7 @@ class Product {
     this.manufacturerId,
     this.warehouseId,
     this.isActive = true,
+    this.leadTimeDays = 0,
   });
 
   factory Product.fromJson(Map<String, dynamic> json) {
@@ -35,6 +37,7 @@ class Product {
       manufacturerId: json['manufacturerId'] as String?,
       warehouseId: json['warehouseId'] as String?,
       isActive: json['isActive'] as bool? ?? true,
+      leadTimeDays: (json['leadTimeDays'] as num?)?.toInt() ?? 0,
     );
   }
 
@@ -50,6 +53,7 @@ class Product {
       'manufacturerId': manufacturerId,
       'warehouseId': warehouseId,
       'isActive': isActive,
+      'leadTimeDays': leadTimeDays,
     };
   }
 }
