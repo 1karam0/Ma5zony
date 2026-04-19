@@ -28,6 +28,7 @@ import 'package:ma5zony/features/manufacturing/production_order_detail_screen.da
 import 'package:ma5zony/features/cash_flow/cash_flow_screen.dart';
 import 'package:ma5zony/features/manufacturer_portal/manufacturer_portal_screen.dart';
 import 'package:ma5zony/features/factory_portal/factory_portal_screen.dart';
+import 'package:ma5zony/features/legal/legal_screens.dart';
 import 'package:ma5zony/utils/role_guard.dart';
 
 // Private navigators
@@ -43,6 +44,15 @@ GoRouter buildAppRouter(AppState appState) => GoRouter(
     GoRoute(
       path: '/register',
       builder: (context, state) => const RegisterScreen(),
+    ),
+    // Public legal pages — no auth required
+    GoRoute(
+      path: '/privacy',
+      builder: (context, state) => const PrivacyPolicyScreen(),
+    ),
+    GoRoute(
+      path: '/terms',
+      builder: (context, state) => const TermsOfServiceScreen(),
     ),
     // Supplier portal — outside the auth shell (no login required)
     GoRoute(
@@ -195,10 +205,12 @@ GoRouter buildAppRouter(AppState appState) => GoRouter(
     final path = state.uri.toString();
     final loggingIn = path == '/login' || path == '/register';
 
-    // Portals are public — no auth redirect
+    // Portals and legal pages are public — no auth redirect
     if (path.startsWith('/supplier-portal') ||
         path.startsWith('/manufacturer-portal') ||
-        path.startsWith('/factory-portal')) {
+        path.startsWith('/factory-portal') ||
+        path == '/privacy' ||
+        path == '/terms') {
       return null;
     }
 

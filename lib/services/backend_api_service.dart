@@ -213,7 +213,13 @@ class BackendApiService {
     final result = await _post('/api/team/invite', {'email': email});
     return (result as Map<String, dynamic>)['result'] as String;
   }
-}
+  // ── Account management ─────────────────────────────────────────────────────
+
+  /// Permanently deletes the authenticated user's account and all their data.
+  /// Throws [BackendException] on failure.
+  Future<void> deleteAccount() async {
+    await _delete('/api/account');
+  }}
 
 class BackendException implements Exception {
   final int statusCode;

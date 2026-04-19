@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
+import 'package:go_router/go_router.dart';
 import 'package:provider/provider.dart';
 import 'package:ma5zony/models/app_user.dart';
 import 'package:ma5zony/providers/app_state.dart';
+import 'package:ma5zony/services/backend_api_service.dart';
 import 'package:ma5zony/services/settings_service.dart';
 import 'package:ma5zony/utils/constants.dart';
 import 'package:ma5zony/utils/role_guard.dart';
@@ -632,8 +634,119 @@ class _PreferencesTab extends StatelessWidget {
                 ),
               ),
             ),
+            const SizedBox(height: 24),
+
+            // Danger zone card
+            Card(
+              elevation: 2,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+                side: BorderSide(color: AppColors.error.withValues(alpha: 0.3)),
+              ),
+              child: Padding(
+                padding: const EdgeInsets.all(24),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Icon(Icons.warning_amber_rounded,
+                            color: AppColors.error, size: 20),
+                        const SizedBox(width: 8),
+                        Text('Danger Zone',
+                            style: AppTextStyles.h3
+                                .copyWith(color: AppColors.error)),
+                      ],
+                    ),
+                    const SizedBox(height: 12),
+                    Text(
+                      'Permanently delete your account and all associated data. '
+                      'This action cannot be undone.',
+                      style: AppTextStyles.body
+                          .copyWith(color: AppColors.textSecondary),
+                    ),
+                    const SizedBox(height: 16),
+                    _DeleteAccountButton(),
+                  ],
+                ),
+              ),
+            ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+class _DeleteAccountButton extends StatefulWidget {
+  const _DeleteAccountButton();
+
+  @override
+  State<_DeleteAccountButton> createState() => _DeleteAccountButtonState();
+}
+
+class _DeleteAccountButtonState extends State<_DeleteAccountButton> {
+  bool _deleting = false;
+
+  Future<void> _confirmAndDelete() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Delete Account'),
+        content: const Text(
+          'This will permanently delete your account and ALL your data '
+          '(products, orders, suppliers, forecasts, etc.).\n\n'
+          'This action cannot be undone.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: ElevatedButton.styleFrom(
+                backgroundColor: AppColors.error,
+                foregroundColor: Colors.white),
+            child: const Text('Delete Forever'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+
+    setState(() => _deleting = true);
+    try {
+      await BackendApiService().deleteAccount();
+      if (!mounted) return;
+      final appState = context.read<AppState>();
+      await appState.logout();
+      if (!mounted) return;
+      context.go('/login');
+    } on BackendException catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(e.message)),
+      );
+    } finally {
+      if (mounted) setState(() => _deleting = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return OutlinedButton.icon(
+      onPressed: _deleting ? null : _confirmAndDelete,
+      icon: _deleting
+          ? const SizedBox(
+              width: 14,
+              height: 14,
+              child: CircularProgressIndicator(strokeWidth: 2))
+          : const Icon(Icons.delete_forever),
+      label: Text(_deleting ? 'Deleting…' : 'Delete My Account'),
+      style: OutlinedButton.styleFrom(
+        foregroundColor: AppColors.error,
+        side: BorderSide(color: AppColors.error),
       ),
     );
   }

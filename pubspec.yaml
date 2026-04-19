@@ -49,6 +49,7 @@ dependencies:
   file_picker: ^10.3.10
   csv: ^7.2.0
   excel: ^4.0.6
+  sentry_flutter: ^8.13.2
 
 dev_dependencies:
   flutter_test:

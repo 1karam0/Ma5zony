@@ -119,6 +119,32 @@ class _LoginScreenState extends State<LoginScreen> {
                     ),
                   ],
                 ),
+                const SizedBox(height: 8),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    TextButton(
+                      onPressed: () => context.push('/privacy'),
+                      style: TextButton.styleFrom(
+                        padding: EdgeInsets.zero,
+                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      ),
+                      child: const Text('Privacy Policy',
+                          style: TextStyle(fontSize: 12)),
+                    ),
+                    const Text(' · ',
+                        style: TextStyle(fontSize: 12, color: Colors.grey)),
+                    TextButton(
+                      onPressed: () => context.push('/terms'),
+                      style: TextButton.styleFrom(
+                        padding: EdgeInsets.zero,
+                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      ),
+                      child: const Text('Terms of Service',
+                          style: TextStyle(fontSize: 12)),
+                    ),
+                  ],
+                ),
               ],
             ),
             ),
