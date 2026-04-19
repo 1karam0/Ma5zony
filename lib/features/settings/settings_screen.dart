@@ -13,7 +13,7 @@ class SettingsScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return DefaultTabController(
-      length: 3,
+      length: 4,
       child: Column(
         children: [
           Container(
@@ -28,6 +28,7 @@ class SettingsScreen extends StatelessWidget {
                     Tab(text: 'Global Parameters'),
                     Tab(text: 'Forecasting Defaults'),
                     Tab(text: 'User Management'),
+                    Tab(text: 'Preferences'),
                   ],
                   labelColor: AppColors.primary,
                   unselectedLabelColor: AppColors.textSecondary,
@@ -42,6 +43,7 @@ class SettingsScreen extends StatelessWidget {
                 _GlobalParametersTab(),
                 _ForecastingDefaultsTab(),
                 _UserManagementTab(),
+                _PreferencesTab(),
               ],
             ),
           ),
@@ -298,10 +300,17 @@ class _UserManagementTabState extends State<_UserManagementTab> {
     setState(() => _inviting = false);
 
     if (!mounted) return;
-    if (result == 'success') {
+    if (result == 'added') {
       _emailController.clear();
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Team member added successfully.')),
+      );
+    } else if (result == 'invited') {
+      _emailController.clear();
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Invitation email sent. They will receive a link to join.'),
+        ),
       );
     } else {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -523,6 +532,108 @@ class _UserManagementTabState extends State<_UserManagementTab> {
               ),
           ],
         ],
+      ),
+    );
+  }
+}
+
+// ─── Preferences Tab ──────────────────────────────────────────────────────────
+
+class _PreferencesTab extends StatelessWidget {
+  const _PreferencesTab();
+
+  @override
+  Widget build(BuildContext context) {
+    final state = context.watch<AppState>();
+    final settings = state.settings;
+    final isDark = state.themeMode == ThemeMode.dark;
+
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(24),
+      child: SizedBox(
+        width: 600,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // Appearance card
+            Card(
+              elevation: 2,
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12)),
+              child: Padding(
+                padding: const EdgeInsets.all(24),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('Appearance', style: AppTextStyles.h3),
+                    const SizedBox(height: 16),
+                    SwitchListTile(
+                      contentPadding: EdgeInsets.zero,
+                      title: const Text('Dark Mode'),
+                      subtitle: Text(
+                        isDark ? 'Currently using dark theme' : 'Currently using light theme',
+                        style: AppTextStyles.label,
+                      ),
+                      secondary: Icon(
+                        isDark ? Icons.dark_mode : Icons.light_mode,
+                        color: AppColors.primary,
+                      ),
+                      value: isDark,
+                      onChanged: (_) => state.toggleTheme(),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(height: 24),
+
+            // Notifications card
+            Card(
+              elevation: 2,
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12)),
+              child: Padding(
+                padding: const EdgeInsets.all(24),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('Notifications', style: AppTextStyles.h3),
+                    const SizedBox(height: 8),
+                    Text(
+                      'Configure which alerts you receive via email.',
+                      style: AppTextStyles.body
+                          .copyWith(color: AppColors.textSecondary),
+                    ),
+                    const SizedBox(height: 16),
+                    SwitchListTile(
+                      contentPadding: EdgeInsets.zero,
+                      title: const Text('Weekly Email Digest'),
+                      subtitle: const Text(
+                          'Receive a summary of inventory, forecasts, and orders every week.'),
+                      value: settings.emailDigest,
+                      onChanged: (v) async {
+                        final updated = settings.copyWith(emailDigest: v);
+                        await context.read<AppState>().saveSettings(updated);
+                      },
+                    ),
+                    const Divider(),
+                    SwitchListTile(
+                      contentPadding: EdgeInsets.zero,
+                      title: const Text('Low Stock Alerts'),
+                      subtitle: const Text(
+                          'Send an email when any product falls below its reorder point.'),
+                      value: settings.lowStockAlerts,
+                      onChanged: (v) async {
+                        final updated = settings.copyWith(lowStockAlerts: v);
+                        await context.read<AppState>().saveSettings(updated);
+                      },
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }

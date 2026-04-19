@@ -1,5 +1,6 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart' as fb;
+import 'package:ma5zony/services/backend_api_service.dart';
 
 /// Wraps Firebase Auth and Firestore user-profile operations.
 /// All auth state flows through [FirebaseAuth.authStateChanges].
@@ -92,37 +93,18 @@ class FirebaseAuthService {
         .toList();
   }
 
-  /// Invite an existing user (by email) to the owner's team.
-  /// Returns a descriptive result string.
+  /// Invite a user (by email) to the owner's team.
+  /// Delegates to the backend, which handles both existing-user addition and
+  /// email-based invitation for new users.
+  /// Returns `'added'`, `'invited'`, or an error message string.
   Future<String> inviteTeamMember(String ownerUid, String email) async {
-    // Find user by email
-    final snap = await _firestore
-        .collection('users')
-        .where('email', isEqualTo: email.trim())
-        .limit(1)
-        .get();
-
-    if (snap.docs.isEmpty) {
-      return 'No account found with that email.';
+    try {
+      return await BackendApiService().inviteTeamMember(email);
+    } on BackendException catch (e) {
+      return e.message;
+    } catch (_) {
+      return 'Failed to process invitation. Please try again.';
     }
-
-    final doc = snap.docs.first;
-    final data = doc.data();
-
-    if (data['role'] != 'Inventory Manager') {
-      return 'Only Inventory Managers can be added to a team.';
-    }
-    if (data['ownerId'] != null && data['ownerId'] != ownerUid) {
-      return 'This user already belongs to another team.';
-    }
-    if (data['ownerId'] == ownerUid) {
-      return 'This user is already on your team.';
-    }
-
-    await _firestore.collection('users').doc(doc.id).update({
-      'ownerId': ownerUid,
-    });
-    return 'success';
   }
 
   /// Remove a team member from the owner's team.

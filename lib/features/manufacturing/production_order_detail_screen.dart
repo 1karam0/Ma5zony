@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:go_router/go_router.dart';
 import 'package:provider/provider.dart';
 import 'package:ma5zony/models/production_order.dart';
 import 'package:ma5zony/providers/app_state.dart';
@@ -59,12 +60,18 @@ class _ProductionOrderDetailScreenState
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          // Breadcrumb
+          Breadcrumbs(crumbs: [
+            ('Dashboard', '/dashboard'),
+            ('Production Orders', '/production-orders'),
+            ('Order #${order.id.substring(0, order.id.length > 8 ? 8 : order.id.length).toUpperCase()}', null),
+          ]),
           // Header
           Row(
             children: [
               IconButton(
                 icon: const Icon(Icons.arrow_back),
-                onPressed: () => Navigator.pop(context),
+                onPressed: () => context.go('/production-orders'),
               ),
               const SizedBox(width: 8),
               Expanded(

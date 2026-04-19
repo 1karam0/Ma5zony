@@ -72,19 +72,12 @@ class SuppliersScreen extends StatelessWidget {
           const SizedBox(height: 24),
 
           if (suppliers.isEmpty)
-            const Padding(
-              padding: EdgeInsets.symmetric(vertical: 48),
-              child: Center(
-                child: Column(
-                  children: [
-                    Icon(Icons.local_shipping_outlined, size: 64, color: Colors.grey),
-                    SizedBox(height: 16),
-                    Text('No suppliers yet', style: TextStyle(fontSize: 18, color: Colors.grey)),
-                    SizedBox(height: 8),
-                    Text('Add your first supplier to get started.', style: TextStyle(color: Colors.grey)),
-                  ],
-                ),
-              ),
+            EmptyStateWidget(
+              icon: Icons.local_shipping_outlined,
+              title: 'No suppliers yet',
+              description: 'Add your first supplier to track lead times and manage orders.',
+              primaryLabel: 'Add Supplier',
+              onPrimary: () => _showAddSupplierDialog(context),
             )
           else
             Card(
@@ -100,6 +93,7 @@ class SuppliersScreen extends StatelessWidget {
                   DataColumn(label: Text('Email')),
                   DataColumn(label: Text('Phone')),
                   DataColumn(label: Text('Lead Time')),
+                  DataColumn(label: Text('Rating')),
                   DataColumn(label: Text('Linked Products')),
                   DataColumn(label: Text('Actions')),
                 ],
@@ -129,6 +123,7 @@ class SuppliersScreen extends StatelessWidget {
                           ],
                         ),
                       ),
+                      DataCell(_PerformanceRating(rating: s.performanceRating)),
                       DataCell(Text('$linkedCount products')),
                       DataCell(
                         Row(
@@ -215,6 +210,33 @@ class SuppliersScreen extends StatelessWidget {
   }
 }
 
+class _PerformanceRating extends StatelessWidget {
+  final double? rating;
+  const _PerformanceRating({required this.rating});
+
+  @override
+  Widget build(BuildContext context) {
+    if (rating == null) {
+      return const Text('—', style: TextStyle(color: Colors.grey));
+    }
+    final stars = rating!.clamp(0.0, 5.0);
+    final color = stars >= 4.0
+        ? AppColors.success
+        : (stars >= 2.5 ? AppColors.warning : AppColors.error);
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(Icons.star, size: 14, color: color),
+        const SizedBox(width: 4),
+        Text(
+          stars.toStringAsFixed(1),
+          style: TextStyle(color: color, fontWeight: FontWeight.w600),
+        ),
+      ],
+    );
+  }
+}
+
 class _LeadTimeChip extends StatelessWidget {
   final int days;
   const _LeadTimeChip({required this.days});
@@ -267,6 +289,7 @@ class _SupplierFormDialogState extends State<_SupplierFormDialog> {
   late final TextEditingController _emailCtrl;
   late final TextEditingController _phoneCtrl;
   late final TextEditingController _leadTimeCtrl;
+  late final TextEditingController _ratingCtrl;
 
   @override
   void initState() {
@@ -278,6 +301,11 @@ class _SupplierFormDialogState extends State<_SupplierFormDialog> {
     _leadTimeCtrl = TextEditingController(
       text: s != null ? '${s.typicalLeadTimeDays}' : '',
     );
+    _ratingCtrl = TextEditingController(
+      text: s?.performanceRating != null
+          ? s!.performanceRating!.toStringAsFixed(1)
+          : '',
+    );
   }
 
   @override
@@ -286,6 +314,7 @@ class _SupplierFormDialogState extends State<_SupplierFormDialog> {
     _emailCtrl.dispose();
     _phoneCtrl.dispose();
     _leadTimeCtrl.dispose();
+    _ratingCtrl.dispose();
     super.dispose();
   }
 
@@ -346,6 +375,23 @@ class _SupplierFormDialogState extends State<_SupplierFormDialog> {
                     return null;
                   },
                 ),
+                const SizedBox(height: 16),
+                TextFormField(
+                  controller: _ratingCtrl,
+                  decoration: const InputDecoration(
+                    labelText: 'Performance Rating (0–5, optional)',
+                    hintText: 'e.g. 4.5',
+                  ),
+                  keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                  validator: (v) {
+                    if (v == null || v.trim().isEmpty) return null; // optional
+                    final val = double.tryParse(v.trim());
+                    if (val == null || val < 0 || val > 5) {
+                      return 'Enter a value between 0 and 5';
+                    }
+                    return null;
+                  },
+                ),
               ],
             ),
           ),
@@ -363,6 +409,7 @@ class _SupplierFormDialogState extends State<_SupplierFormDialog> {
           ),
           onPressed: () async {
             if (!_formKey.currentState!.validate()) return;
+            final ratingText = _ratingCtrl.text.trim();
             final supplier = Supplier(
               id: widget.supplier?.id ?? '',
               name: _nameCtrl.text.trim(),
@@ -372,6 +419,9 @@ class _SupplierFormDialogState extends State<_SupplierFormDialog> {
                   : _phoneCtrl.text.trim(),
               typicalLeadTimeDays:
                   int.tryParse(_leadTimeCtrl.text) ?? 0,
+              performanceRating: ratingText.isEmpty
+                  ? null
+                  : double.tryParse(ratingText),
             );
             final appState = context.read<AppState>();
             final messenger = ScaffoldMessenger.of(context);

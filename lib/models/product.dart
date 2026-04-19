@@ -25,20 +25,55 @@ class Product {
     this.leadTimeDays = 0,
   });
 
-  factory Product.fromJson(Map<String, dynamic> json) {
+  /// Resolves a value from multiple possible field name aliases.
+  /// Used to handle Shopify-imported docs vs manually-created docs.
+  static T? _resolve<T>(Map<String, dynamic> data, List<String> keys) {
+    for (final k in keys) {
+      if (data.containsKey(k) && data[k] != null) return data[k] as T?;
+    }
+    return null;
+  }
+
+  /// Primary deserialization for Firestore documents.
+  /// Handles both app-native field names and Shopify-imported field names.
+  factory Product.fromFirestore(String id, Map<String, dynamic> data) {
+    // SKU: app uses 'sku'; Shopify may use 'variant_sku' or 'SKU'
+    final sku = _resolve<String>(data, ['sku', 'variant_sku', 'SKU']) ?? '';
+    // Name: app uses 'name'; Shopify uses 'title'
+    final name = _resolve<String>(data, ['name', 'title', 'productName']) ?? '';
+    // Category: app uses 'category'; Shopify uses 'product_type' or 'type'
+    final category =
+        _resolve<String>(data, ['category', 'product_type', 'type']) ??
+            'Uncategorised';
+    // Unit cost: app uses 'unitCost'; Shopify uses 'price' or 'unit_cost'
+    final unitCostRaw =
+        _resolve<dynamic>(data, ['unitCost', 'unit_cost', 'price']);
+    final unitCost = (unitCostRaw as num?)?.toDouble() ?? 0.0;
+    // Stock: app uses 'currentStock'; Shopify uses 'inventory_quantity'
+    final stockRaw =
+        _resolve<dynamic>(data, ['currentStock', 'inventory_quantity', 'stock']);
+    final currentStock = (stockRaw as num?)?.toInt() ?? 0;
+
     return Product(
-      id: json['id'] as String? ?? '',
-      sku: json['sku'] as String? ?? '',
-      name: json['name'] as String? ?? '',
-      category: json['category'] as String? ?? '',
-      unitCost: (json['unitCost'] as num?)?.toDouble() ?? 0.0,
-      currentStock: (json['currentStock'] as num?)?.toInt() ?? 0,
-      supplierId: json['supplierId'] as String?,
-      manufacturerId: json['manufacturerId'] as String?,
-      warehouseId: json['warehouseId'] as String?,
-      isActive: json['isActive'] as bool? ?? true,
-      leadTimeDays: (json['leadTimeDays'] as num?)?.toInt() ?? 0,
+      id: id,
+      sku: sku.isNotEmpty ? sku : id.substring(0, 8), // fallback to truncated ID
+      name: name,
+      category: category,
+      unitCost: unitCost,
+      currentStock: currentStock,
+      supplierId: data['supplierId'] as String?,
+      manufacturerId: data['manufacturerId'] as String?,
+      warehouseId: data['warehouseId'] as String?,
+      isActive: data['isActive'] as bool? ?? true,
+      leadTimeDays: (data['leadTimeDays'] as num?)?.toInt() ?? 0,
     );
+  }
+
+  /// Legacy JSON deserialization — also applies alias resolution for
+  /// data that may have been written by Shopify Cloud Functions.
+  factory Product.fromJson(Map<String, dynamic> json) {
+    final id = json['id'] as String? ?? '';
+    return Product.fromFirestore(id, json);
   }
 
   Map<String, dynamic> toJson() {

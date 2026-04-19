@@ -16,6 +16,7 @@ class ProductsScreen extends StatefulWidget {
 
 class _ProductsScreenState extends State<ProductsScreen> {
   String _search = '';
+  String _statusFilter = 'All'; // All | OK | Low | Critical
 
   @override
   Widget build(BuildContext context) {
@@ -24,12 +25,26 @@ class _ProductsScreenState extends State<ProductsScreen> {
     final manufacturers = {for (final m in state.manufacturers) m.id: m.name};
     final bomMap = {for (final b in state.boms) b.finalProductId: b};
 
+    final recs = {for (final r in state.recommendations) r.productId: r};
+
     final products = state.products.where((p) {
-      if (_search.isEmpty) return true;
-      final q = _search.toLowerCase();
-      return p.name.toLowerCase().contains(q) ||
-          p.sku.toLowerCase().contains(q) ||
-          p.category.toLowerCase().contains(q);
+      // Text search filter
+      if (_search.isNotEmpty) {
+        final q = _search.toLowerCase();
+        if (!p.name.toLowerCase().contains(q) &&
+            !p.sku.toLowerCase().contains(q) &&
+            !p.category.toLowerCase().contains(q)) {
+          return false;
+        }
+      }
+      // Status filter
+      if (_statusFilter != 'All') {
+        final status = p.currentStock == 0
+            ? 'Critical'
+            : (recs.containsKey(p.id) ? 'Low' : 'OK');
+        if (status != _statusFilter) return false;
+      }
+      return true;
     }).toList();
 
     if (state.isLoading) {
@@ -134,20 +149,68 @@ class _ProductsScreenState extends State<ProductsScreen> {
             ],
           ),
 
+          // Status filter chips
+          Padding(
+            padding: const EdgeInsets.only(bottom: 12),
+            child: Wrap(
+              spacing: 8,
+              children: ['All', 'OK', 'Low', 'Critical'].map((filter) {
+                final isActive = _statusFilter == filter;
+                final chipColor = filter == 'Critical'
+                    ? AppColors.error
+                    : filter == 'Low'
+                        ? AppColors.warning
+                        : filter == 'OK'
+                            ? AppColors.success
+                            : AppColors.primary;
+                return FilterChip(
+                  label: Text(filter),
+                  selected: isActive,
+                  onSelected: (_) => setState(() => _statusFilter = filter),
+                  selectedColor: chipColor.withValues(alpha: 0.15),
+                  checkmarkColor: chipColor,
+                  labelStyle: TextStyle(
+                    color: isActive ? chipColor : AppColors.textSecondary,
+                    fontWeight: isActive ? FontWeight.w600 : FontWeight.normal,
+                    fontSize: 12,
+                  ),
+                  side: BorderSide(
+                    color: isActive
+                        ? chipColor.withValues(alpha: 0.5)
+                        : AppColors.border,
+                  ),
+                );
+              }).toList(),
+            ),
+          ),
+
           if (products.isEmpty)
-            const Padding(
-              padding: EdgeInsets.symmetric(vertical: 48),
-              child: Center(
-                child: Column(
-                  children: [
-                    Icon(Icons.inventory_2_outlined, size: 64, color: Colors.grey),
-                    SizedBox(height: 16),
-                    Text('No products yet', style: TextStyle(fontSize: 18, color: Colors.grey)),
-                    SizedBox(height: 8),
-                    Text('Add your first product to get started.', style: TextStyle(color: Colors.grey)),
-                  ],
-                ),
-              ),
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 48),
+              child: state.products.isEmpty
+                  // No products at all — show onboarding CTA
+                  ? EmptyStateWidget(
+                      icon: Icons.inventory_2_outlined,
+                      title: 'No products yet',
+                      description:
+                          'Add products manually or import them directly from your Shopify store.',
+                      primaryLabel: 'Import from Shopify',
+                      onPrimary: () => context.go('/integrations'),
+                      secondaryLabel: 'Add Manually',
+                      onSecondary: () => _showAddProductDialog(context, state),
+                    )
+                  // Products exist but filter gives 0 — show filter-empty state
+                  : EmptyStateWidget(
+                      icon: Icons.filter_list_off,
+                      title: 'No products match "$_statusFilter"',
+                      description:
+                          'Try a different filter or clear your search.',
+                      primaryLabel: 'Clear Filters',
+                      onPrimary: () => setState(() {
+                        _search = '';
+                        _statusFilter = 'All';
+                      }),
+                    ),
             )
           else
             Card(
@@ -239,13 +302,16 @@ class _ProductDataSource extends DataTableSource {
 
     final recs = context
         .read<AppState>()
-        .recommendations
-        .where((r) => r.productId == p.id)
-        .firstOrNull;
+        .recommendations;
+    final recMap = {for (final r in recs) r.productId: r};
 
+    // Corrected stock status logic:
+    //   Critical = stock is exactly 0
+    //   Low      = stock > 0 but below reorder point (has a recommendation)
+    //   OK       = stock is healthy
     final status = p.currentStock == 0
         ? 'Critical'
-        : (recs != null ? 'Low' : 'OK');
+        : (recMap.containsKey(p.id) ? 'Low' : 'OK');
 
     final mfrName = manufacturerMap[p.manufacturerId ?? ''] ?? '—';
     final bom = bomMap[p.id];

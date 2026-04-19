@@ -21,6 +21,7 @@ class _MainLayoutState extends State<MainLayout> {
   @override
   Widget build(BuildContext context) {
     final isDesktop = MediaQuery.of(context).size.width >= 800;
+    final isMobile = MediaQuery.of(context).size.width < 600;
     final state = context.watch<AppState>();
 
     // Show error snackbar when errorMessage changes
@@ -46,13 +47,19 @@ class _MainLayoutState extends State<MainLayout> {
     }
 
     return Scaffold(
+      // Mobile drawer (< 600px): sidebar slides in from left
+      drawer: isMobile
+          ? Drawer(
+              child: _Sidebar(isDesktop: true),
+            )
+          : null,
       body: Row(
         children: [
-          _Sidebar(isDesktop: isDesktop),
+          if (!isMobile) _Sidebar(isDesktop: isDesktop),
           Expanded(
             child: Column(
               children: [
-                const _TopBar(),
+                _TopBar(isMobile: isMobile),
                 Expanded(child: widget.child),
               ],
             ),
@@ -75,53 +82,76 @@ class _Sidebar extends StatelessWidget {
 
     return Container(
       width: isDesktop ? kSidebarWidth : kSidebarCollapsedWidth,
-      color: Colors.white,
+      decoration: BoxDecoration(
+        color: Colors.white,
+        border: Border(
+          right: BorderSide(color: AppColors.border),
+        ),
+      ),
       child: Column(
         children: [
+          // ── Logo / brand ────────────────────────────────────────────
           SizedBox(
             height: 64,
             child: Center(
               child: isDesktop
-                  ? Text(
-                      'Ma5zony',
-                      style: AppTextStyles.h2.copyWith(
-                        color: AppColors.primary,
-                      ),
+                  ? Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(Icons.inventory_2,
+                            color: AppColors.primary, size: 20),
+                        const SizedBox(width: 8),
+                        Text(
+                          'Ma5zony',
+                          style: AppTextStyles.h2.copyWith(
+                            color: AppColors.primary,
+                          ),
+                        ),
+                      ],
                     )
-                  : const Icon(Icons.inventory_2, color: AppColors.primary),
+                  : const Icon(Icons.inventory_2,
+                      color: AppColors.primary),
             ),
           ),
           const Divider(height: 1),
+
+          // ── Nav items ───────────────────────────────────────────────
           Expanded(
             child: ListView(
               padding: const EdgeInsets.symmetric(vertical: 8),
               children: [
                 _NavItem(
-                  icon: Icons.dashboard,
+                  icon: Icons.dashboard_outlined,
                   label: 'Dashboard',
                   path: '/dashboard',
                   isDesktop: isDesktop,
                 ),
+
+                // ── INVENTORY ───────────────────────────────────────
+                _SectionDivider(label: 'INVENTORY', isDesktop: isDesktop),
                 _NavItem(
-                  icon: Icons.inventory,
+                  icon: Icons.inventory_2_outlined,
                   label: 'Products',
                   path: '/products',
                   isDesktop: isDesktop,
                 ),
                 _NavItem(
-                  icon: Icons.local_shipping,
+                  icon: Icons.local_shipping_outlined,
                   label: 'Suppliers',
                   path: '/suppliers',
                   isDesktop: isDesktop,
                 ),
                 _NavItem(
-                  icon: Icons.warehouse,
+                  icon: Icons.warehouse_outlined,
                   label: 'Warehouses',
                   path: '/warehouses',
                   isDesktop: isDesktop,
                 ),
+
+                // ── OPERATIONS ──────────────────────────────────────
+                _SectionDivider(label: 'OPERATIONS', isDesktop: isDesktop),
                 _NavItem(
-                  icon: Icons.analytics,
+                  icon: Icons.analytics_outlined,
                   label: 'Demand Data',
                   path: '/demand-data',
                   isDesktop: isDesktop,
@@ -133,71 +163,78 @@ class _Sidebar extends StatelessWidget {
                   isDesktop: isDesktop,
                 ),
                 _NavItem(
-                  icon: Icons.shopping_cart,
+                  icon: Icons.shopping_cart_outlined,
                   label: 'Replenishment',
                   path: '/replenishment',
                   isDesktop: isDesktop,
                 ),
                 _NavItem(
-                  icon: Icons.receipt_long,
-                  label: 'Orders',
+                  icon: Icons.receipt_long_outlined,
+                  label: 'Purchase Orders',
                   path: '/orders',
                   isDesktop: isDesktop,
                 ),
+
+                // ── MANUFACTURING ────────────────────────────────────
+                _SectionDivider(label: 'MANUFACTURING', isDesktop: isDesktop),
                 _NavItem(
-                  icon: Icons.integration_instructions,
-                  label: 'Integrations',
-                  path: '/integrations',
-                  isDesktop: isDesktop,
-                ),
-                const Divider(),
-                _NavItem(
-                  icon: Icons.category,
+                  icon: Icons.category_outlined,
                   label: 'Raw Materials',
                   path: '/raw-materials',
                   isDesktop: isDesktop,
                 ),
                 _NavItem(
-                  icon: Icons.list_alt,
+                  icon: Icons.list_alt_outlined,
                   label: 'Bill of Materials',
                   path: '/bom',
                   isDesktop: isDesktop,
                 ),
                 _NavItem(
-                  icon: Icons.factory,
+                  icon: Icons.factory_outlined,
                   label: 'Manufacturers',
                   path: '/manufacturers',
                   isDesktop: isDesktop,
                 ),
                 _NavItem(
-                  icon: Icons.auto_awesome,
+                  icon: Icons.auto_awesome_outlined,
                   label: 'Recommendations',
                   path: '/recommendations',
                   isDesktop: isDesktop,
                 ),
                 _NavItem(
-                  icon: Icons.precision_manufacturing,
+                  icon: Icons.precision_manufacturing_outlined,
                   label: 'Production Orders',
                   path: '/production-orders',
                   isDesktop: isDesktop,
                 ),
+
+                // ── FINANCE (owner only) ─────────────────────────────
                 if (userIsOwner) ...[
+                  _SectionDivider(label: 'FINANCE', isDesktop: isDesktop),
                   _NavItem(
-                    icon: Icons.account_balance_wallet,
+                    icon: Icons.account_balance_wallet_outlined,
                     label: 'Cash Flow',
                     path: '/cash-flow',
                     isDesktop: isDesktop,
                   ),
                   _NavItem(
-                    icon: Icons.attach_money,
+                    icon: Icons.bar_chart_outlined,
                     label: 'Financial Analytics',
                     path: '/financial-analytics',
                     isDesktop: isDesktop,
                   ),
                 ],
-                const Divider(),
+
+                // ── SYSTEM ───────────────────────────────────────────
+                _SectionDivider(label: 'SYSTEM', isDesktop: isDesktop),
                 _NavItem(
-                  icon: Icons.settings,
+                  icon: Icons.integration_instructions_outlined,
+                  label: 'Integrations',
+                  path: '/integrations',
+                  isDesktop: isDesktop,
+                ),
+                _NavItem(
+                  icon: Icons.settings_outlined,
                   label: 'Settings',
                   path: '/settings',
                   isDesktop: isDesktop,
@@ -228,41 +265,79 @@ class _NavItem extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final isSelected = GoRouterState.of(
-      context,
-    ).uri.toString().startsWith(path);
+    final currentPath = GoRouterState.of(context).uri.toString();
+    final isSelected = currentPath == path ||
+        (path != '/dashboard' && currentPath.startsWith(path));
     return InkWell(
       onTap: () => context.go(path),
-      child: Container(
-        height: 50,
-        margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+      borderRadius: BorderRadius.circular(8),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 150),
+        height: 44,
+        margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 1),
         decoration: BoxDecoration(
           color: isSelected
               ? AppColors.primary.withValues(alpha: 0.1)
               : Colors.transparent,
           borderRadius: BorderRadius.circular(8),
+          border: isSelected
+              ? Border.all(
+                  color: AppColors.primary.withValues(alpha: 0.2), width: 1)
+              : null,
         ),
         child: Row(
           children: [
-            const SizedBox(width: 16),
+            const SizedBox(width: 14),
             Icon(
               icon,
-              color: isSelected ? AppColors.primary : AppColors.textSecondary,
-              size: 20,
+              color:
+                  isSelected ? AppColors.primary : AppColors.textSecondary,
+              size: 18,
             ),
             if (isDesktop) ...[
-              const SizedBox(width: 12),
+              const SizedBox(width: 10),
               Text(
                 label,
                 style: isSelected
                     ? AppTextStyles.body.copyWith(
                         color: AppColors.primary,
                         fontWeight: FontWeight.w600,
+                        fontSize: 13,
                       )
-                    : AppTextStyles.body,
+                    : AppTextStyles.body.copyWith(fontSize: 13),
               ),
             ],
           ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Section label shown between nav-item groups in the expanded sidebar.
+class _SectionDivider extends StatelessWidget {
+  final String label;
+  final bool isDesktop;
+  const _SectionDivider({required this.label, required this.isDesktop});
+
+  @override
+  Widget build(BuildContext context) {
+    if (!isDesktop) {
+      // Collapsed sidebar: just a subtle line
+      return Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+        child: Divider(height: 1, color: AppColors.border),
+      );
+    }
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(18, 14, 16, 2),
+      child: Text(
+        label,
+        style: AppTextStyles.label.copyWith(
+          fontSize: 10,
+          letterSpacing: 1.1,
+          color: AppColors.textSecondary.withValues(alpha: 0.6),
+          fontWeight: FontWeight.w600,
         ),
       ),
     );
@@ -328,32 +403,44 @@ class _UserItem extends StatelessWidget {
 }
 
 class _TopBar extends StatelessWidget {
-  const _TopBar();
+  const _TopBar({this.isMobile = false});
+
+  final bool isMobile;
+
+  static const _routeTitles = [
+    ('/orders/create', 'Create Purchase Order'),
+    ('/orders/', 'Order Detail'),
+    ('/orders', 'Purchase Orders'),
+    ('/production-orders/', 'Production Order Detail'),
+    ('/production-orders', 'Production Orders'),
+    ('/dashboard', 'Dashboard'),
+    ('/products', 'Products'),
+    ('/suppliers', 'Suppliers'),
+    ('/warehouses', 'Warehouses'),
+    ('/demand-data', 'Demand Data'),
+    ('/forecasts', 'Forecasts'),
+    ('/replenishment', 'Replenishment'),
+    ('/integrations', 'Integrations'),
+    ('/settings', 'Settings'),
+    ('/financial-analytics', 'Financial Analytics'),
+    ('/raw-materials', 'Raw Materials'),
+    ('/bom', 'Bill of Materials'),
+    ('/manufacturers', 'Manufacturers'),
+    ('/recommendations', 'Recommendations'),
+    ('/cash-flow', 'Cash Flow'),
+  ];
+
+  String _titleFor(String location) {
+    for (final entry in _routeTitles) {
+      if (location.startsWith(entry.$1)) return entry.$2;
+    }
+    return 'Ma5zony';
+  }
 
   @override
   Widget build(BuildContext context) {
-    // Get title from current route (naive implementation)
-    final String location = GoRouterState.of(context).uri.toString();
-    String title = 'Dashboard';
-    if (location.contains('products')) {
-      title = 'Products';
-    } else if (location.contains('suppliers')) {
-      title = 'Suppliers';
-    } else if (location.contains('warehouses')) {
-      title = 'Warehouses';
-    } else if (location.contains('demand')) {
-      title = 'Demand Data';
-    } else if (location.contains('forecasts')) {
-      title = 'Forecasts';
-    } else if (location.contains('replenishment')) {
-      title = 'Replenishment';
-    } else if (location.contains('orders')) {
-      title = 'Purchase Orders';
-    } else if (location.contains('integrations')) {
-      title = 'Integrations';
-    } else if (location.contains('settings')) {
-      title = 'Settings';
-    }
+    final location = GoRouterState.of(context).uri.toString();
+    final title = _titleFor(location);
 
     return Container(
       height: 64,
@@ -364,6 +451,15 @@ class _TopBar extends StatelessWidget {
       ),
       child: Row(
         children: [
+          // Hamburger menu on mobile
+          if (isMobile)
+            Builder(
+              builder: (ctx) => IconButton(
+                icon: const Icon(Icons.menu),
+                onPressed: () => Scaffold.of(ctx).openDrawer(),
+                tooltip: 'Open navigation',
+              ),
+            ),
           Text(title, style: AppTextStyles.h2),
           const Spacer(),
           _GlobalSearchBox(),

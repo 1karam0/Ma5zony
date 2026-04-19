@@ -10,22 +10,32 @@ class Ma5zonyApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final appState = context.read<AppState>();
+    final appState = context.watch<AppState>();
     final router = buildAppRouter(appState);
 
     return MaterialApp.router(
       title: 'Ma5zony - Inventory Management',
       debugShowCheckedModeBanner: false,
+      themeMode: appState.themeMode,
       theme: ThemeData(
         colorScheme: ColorScheme.fromSeed(
           seedColor: AppColors.primary,
           primary: AppColors.primary,
           secondary: AppColors.secondary,
           surface: AppColors.surface,
+          brightness: Brightness.light,
         ),
         useMaterial3: true,
         textTheme: GoogleFonts.interTextTheme(),
         scaffoldBackgroundColor: AppColors.background,
+      ),
+      darkTheme: ThemeData(
+        colorScheme: ColorScheme.fromSeed(
+          seedColor: AppColors.primary,
+          brightness: Brightness.dark,
+        ),
+        useMaterial3: true,
+        textTheme: GoogleFonts.interTextTheme(ThemeData.dark().textTheme),
       ),
       routerConfig: router,
     );

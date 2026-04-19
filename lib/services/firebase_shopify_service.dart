@@ -24,6 +24,15 @@ class FirebaseShopifyService implements ShopifyIntegrationService {
   DocumentReference get _connectionDoc =>
       _firestore.collection('users').doc(uid).collection('shopify').doc('connection');
 
+  static final Map<String, String Function()> _functionUrls = {
+    'shopifyGetOAuthUrl': () => CloudFunctionConfig.shopifyGetOAuthUrl,
+    'shopifyOAuthCallback': () => CloudFunctionConfig.shopifyOAuthCallback,
+    'shopifyImportProducts': () => CloudFunctionConfig.shopifyImportProducts,
+    'shopifySyncStock': () => CloudFunctionConfig.shopifySyncStock,
+    'shopifyDisconnectStore': () => CloudFunctionConfig.shopifyDisconnectStore,
+    'shopifyImportOrders': () => CloudFunctionConfig.shopifyImportOrders,
+  };
+
   /// Calls a callable Cloud Function via HTTP POST with Firebase Auth token.
   Future<Map<String, dynamic>> _callFunction(
     String name, [
@@ -33,8 +42,9 @@ class FirebaseShopifyService implements ShopifyIntegrationService {
     if (user == null) throw Exception('Not authenticated');
     final token = await user.getIdToken();
 
-    final url = CloudFunctionConfig.shopifyFunctions[name];
-    if (url == null) throw Exception('Unknown function: $name');
+    final urlBuilder = _functionUrls[name];
+    if (urlBuilder == null) throw Exception('Unknown function: $name');
+    final url = urlBuilder();
 
     final response = await http.post(
       Uri.parse(url),

@@ -202,6 +202,17 @@ class BackendApiService {
       return false;
     }
   }
+
+  // ── Team management ────────────────────────────────────────────────────
+
+  /// Invites [email] to join the authenticated user's team.
+  /// Returns `'added'` if the user already existed and was added, or
+  /// `'invited'` if an invitation email was sent.
+  /// Throws [BackendException] on validation/server errors.
+  Future<String> inviteTeamMember(String email) async {
+    final result = await _post('/api/team/invite', {'email': email});
+    return (result as Map<String, dynamic>)['result'] as String;
+  }
 }
 
 class BackendException implements Exception {

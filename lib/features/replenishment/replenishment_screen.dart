@@ -2,8 +2,10 @@ import 'package:csv/csv.dart' show CsvEncoder;
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
+import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 import 'package:ma5zony/models/product.dart';
+import 'package:ma5zony/models/supplier.dart';
 import 'package:ma5zony/providers/app_state.dart';
 import 'package:ma5zony/models/replenishment_recommendation.dart';
 import 'package:ma5zony/utils/constants.dart';
@@ -22,6 +24,7 @@ class _ReplenishmentScreenState extends State<ReplenishmentScreen> {
   final Map<String, int> _adjustedQty = {};
   final Set<String> _selectedIds = {};
   bool _selectAll = false;
+  bool _sortByPriority = true;
 
   void _exportCsv(
     BuildContext context,
@@ -63,6 +66,31 @@ class _ReplenishmentScreenState extends State<ReplenishmentScreen> {
         ),
       );
     }
+  }
+
+  Widget _buildArrivalDate(
+    ReplenishmentRecommendation r,
+    Product? product,
+    Map<String, Supplier> supplierMap,
+  ) {
+    if (product?.supplierId == null) {
+      return const Text('—', style: TextStyle(color: Colors.grey));
+    }
+    final supplier = supplierMap[product!.supplierId!];
+    if (supplier == null) {
+      return const Text('—', style: TextStyle(color: Colors.grey));
+    }
+    final leadDays = supplier.typicalLeadTimeDays;
+    final arrival = r.recommendedOrderDate.add(Duration(days: leadDays));
+    return Column(
+      mainAxisAlignment: MainAxisAlignment.center,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(DateFormat('d MMM').format(arrival),
+            style: const TextStyle(fontWeight: FontWeight.w600)),
+        Text('+${leadDays}d', style: AppTextStyles.label),
+      ],
+    );
   }
 
   Widget _buildApproveButton(BuildContext context, ReplenishmentRecommendation r, Product? product) {
@@ -146,6 +174,16 @@ class _ReplenishmentScreenState extends State<ReplenishmentScreen> {
               r.sku.toLowerCase().contains(_searchQuery.toLowerCase());
         })
         .toList();
+
+    // Priority sort: Critical → Order Now → Monitor
+    if (_sortByPriority) {
+      const priority = {'Critical': 0, 'Order Now': 1, 'Monitor': 2};
+      recommendations.sort(
+        (a, b) => (priority[a.status] ?? 3).compareTo(priority[b.status] ?? 3),
+      );
+    }
+
+    final supplierMap = {for (final s in state.suppliers) s.id: s};
 
     final totalSuggested = recommendations.fold<int>(
       0,
@@ -232,7 +270,21 @@ class _ReplenishmentScreenState extends State<ReplenishmentScreen> {
                         icon: const Icon(Icons.refresh),
                         label: const Text('Reset'),
                       ),
-                      const SizedBox(width: 16),
+                      const SizedBox(width: 8),
+                      Tooltip(
+                        message: _sortByPriority
+                            ? 'Sorted by priority (Critical first)'
+                            : 'Sort by priority',
+                        child: FilterChip(
+                          label: const Text('Priority'),
+                          avatar: const Icon(Icons.sort, size: 14),
+                          selected: _sortByPriority,
+                          onSelected: (v) =>
+                              setState(() => _sortByPriority = v),
+                          selectedColor: AppColors.primary.withValues(alpha: 0.15),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
                       ElevatedButton.icon(
                         onPressed: () => _exportCsv(context, recommendations, productMap),
                         icon: const Icon(Icons.download),
@@ -313,6 +365,7 @@ class _ReplenishmentScreenState extends State<ReplenishmentScreen> {
                               DataColumn(label: Text('Forecast')),
                               DataColumn(label: Text('ROP')),
                               DataColumn(label: Text('Order Qty')),
+                              DataColumn(label: Text('Est. Arrival')),
                               DataColumn(label: Text('Status')),
                               DataColumn(label: Text('Action')),
                             ],
@@ -423,6 +476,7 @@ class _ReplenishmentScreenState extends State<ReplenishmentScreen> {
                                       ),
                                     ),
                                   ),
+                                  DataCell(_buildArrivalDate(r, product, supplierMap)),
                                   DataCell(StatusChip(r.status)),
                                   DataCell(
                                     _buildApproveButton(context, r, product),

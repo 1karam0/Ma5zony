@@ -8,6 +8,8 @@ class UserSettings {
   final String defaultAlgorithm;
   final int smaWindow;
   final double sesAlpha;
+  final bool emailDigest;
+  final bool lowStockAlerts;
 
   const UserSettings({
     this.serviceLevelTarget = 95,
@@ -16,6 +18,8 @@ class UserSettings {
     this.defaultAlgorithm = 'SMA',
     this.smaWindow = 3,
     this.sesAlpha = 0.3,
+    this.emailDigest = true,
+    this.lowStockAlerts = true,
   });
 
   factory UserSettings.fromMap(Map<String, dynamic> m) {
@@ -26,6 +30,8 @@ class UserSettings {
       defaultAlgorithm: m['defaultAlgorithm'] as String? ?? 'SMA',
       smaWindow: (m['smaWindow'] as num?)?.toInt() ?? 3,
       sesAlpha: (m['sesAlpha'] as num?)?.toDouble() ?? 0.3,
+      emailDigest: m['emailDigest'] as bool? ?? true,
+      lowStockAlerts: m['lowStockAlerts'] as bool? ?? true,
     );
   }
 
@@ -36,6 +42,8 @@ class UserSettings {
         'defaultAlgorithm': defaultAlgorithm,
         'smaWindow': smaWindow,
         'sesAlpha': sesAlpha,
+        'emailDigest': emailDigest,
+        'lowStockAlerts': lowStockAlerts,
       };
 
   UserSettings copyWith({
@@ -45,6 +53,8 @@ class UserSettings {
     String? defaultAlgorithm,
     int? smaWindow,
     double? sesAlpha,
+    bool? emailDigest,
+    bool? lowStockAlerts,
   }) {
     return UserSettings(
       serviceLevelTarget: serviceLevelTarget ?? this.serviceLevelTarget,
@@ -53,6 +63,8 @@ class UserSettings {
       defaultAlgorithm: defaultAlgorithm ?? this.defaultAlgorithm,
       smaWindow: smaWindow ?? this.smaWindow,
       sesAlpha: sesAlpha ?? this.sesAlpha,
+      emailDigest: emailDigest ?? this.emailDigest,
+      lowStockAlerts: lowStockAlerts ?? this.lowStockAlerts,
     );
   }
 }

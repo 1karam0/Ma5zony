@@ -1,54 +1,57 @@
 /// Centralized configuration for Firebase Cloud Function URLs.
 ///
-/// Update these URLs after each `firebase deploy --only functions` if
-/// the function region or project changes.
+/// Cloud Functions v2 (2nd gen) deploy to Cloud Run. The URL format is:
+///   https://{functionName}-{projectHash}-{region}.a.run.app
+///
+/// Override the base URL at build time via --dart-define:
+///   flutter build web --dart-define=CLOUD_FUNCTIONS_BASE_URL=https://...
+///
+/// To find your URLs after deploying:
+///   firebase deploy --only functions
+/// Then check Firebase Console → Functions → each function's trigger URL.
 class CloudFunctionConfig {
   CloudFunctionConfig._();
 
-  /// Firebase project region prefix (from deploy output).
-  static const String _baseUrl = 'https://';
-  static const String _suffix = '-rjv64oud6a-uc.a.run.app';
+  /// Cloud Run suffix shared by all functions in the same project/region.
+  /// This is the hash portion: e.g. "-rjv64oud6a-uc.a.run.app"
+  static const String _suffix = String.fromEnvironment(
+    'CLOUD_FUNCTIONS_SUFFIX',
+    defaultValue: '-rjv64oud6a-uc.a.run.app',
+  );
+
+  static String _url(String functionName) =>
+      'https://$functionName$_suffix';
 
   // ── Shopify Integration ──────────────────────────────────────────────
 
-  static const String shopifyGetOAuthUrl =
-      '${_baseUrl}shopifygetoauthurl$_suffix';
+  static String get shopifyGetOAuthUrl =>
+      _url('shopifygetoauthurl');
 
-  static const String shopifyOAuthCallback =
-      '${_baseUrl}shopifyoauthcallback$_suffix';
+  static String get shopifyOAuthCallback =>
+      _url('shopifyoauthcallback');
 
-  static const String shopifyImportProducts =
-      '${_baseUrl}shopifyimportproducts$_suffix';
+  static String get shopifyImportProducts =>
+      _url('shopifyimportproducts');
 
-  static const String shopifySyncStock =
-      '${_baseUrl}shopifysyncstock$_suffix';
+  static String get shopifySyncStock =>
+      _url('shopifysyncstock');
 
-  static const String shopifyDisconnectStore =
-      '${_baseUrl}shopifydisconnectstore$_suffix';
+  static String get shopifyDisconnectStore =>
+      _url('shopifydisconnectstore');
 
   // ── Order Import ─────────────────────────────────────────────────────
 
-  static const String shopifyImportOrders =
-      '${_baseUrl}shopifyimportorders$_suffix';
+  static String get shopifyImportOrders =>
+      _url('shopifyimportorders');
 
   // ── Emails ───────────────────────────────────────────────────────────
 
-  static const String sendSupplierEmails =
-      '${_baseUrl}sendsupplieremails$_suffix';
+  static String get sendSupplierEmails =>
+      _url('sendsupplieremails');
 
-  static const String sendFactoryEmails =
-      '${_baseUrl}sendfactoryemails$_suffix';
+  static String get sendFactoryEmails =>
+      _url('sendfactoryemails');
 
-  static const String sendManufacturerEmails =
-      '${_baseUrl}sendmanufactureremails$_suffix';
-
-  /// All Shopify function URLs in a map (for dynamic lookup).
-  static const Map<String, String> shopifyFunctions = {
-    'shopifyGetOAuthUrl': shopifyGetOAuthUrl,
-    'shopifyOAuthCallback': shopifyOAuthCallback,
-    'shopifyImportProducts': shopifyImportProducts,
-    'shopifySyncStock': shopifySyncStock,
-    'shopifyDisconnectStore': shopifyDisconnectStore,
-    'shopifyImportOrders': shopifyImportOrders,
-  };
+  static String get sendManufacturerEmails =>
+      _url('sendmanufactureremails');
 }

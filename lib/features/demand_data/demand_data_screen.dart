@@ -1,6 +1,7 @@
 import 'package:csv/csv.dart' show CsvDecoder;
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 import 'package:ma5zony/models/demand_record.dart';
@@ -227,19 +228,9 @@ class _DemandHistoryTabState extends State<_DemandHistoryTab> {
           const SizedBox(height: 16),
 
           if (allRecords.isEmpty)
-            const Padding(
-              padding: EdgeInsets.symmetric(vertical: 48),
-              child: Center(
-                child: Column(
-                  children: [
-                    Icon(Icons.show_chart, size: 64, color: Colors.grey),
-                    SizedBox(height: 16),
-                    Text('No demand records yet', style: TextStyle(fontSize: 18, color: Colors.grey)),
-                    SizedBox(height: 8),
-                    Text('Add a demand record or import from Shopify.', style: TextStyle(color: Colors.grey)),
-                  ],
-                ),
-              ),
+            _DemandEmptyState(
+              isFiltered: _sourceFilter != 'All',
+              isShopifyConnected: state.shopifyConnection?.isConnected == true,
             )
           else
             Card(
@@ -329,6 +320,59 @@ class _InventoryRecordsTab extends StatelessWidget {
             }).toList(),
           ),
         ),
+      ),
+    );
+  }
+}
+
+// ─── Demand Empty State ───────────────────────────────────────────────────────
+
+class _DemandEmptyState extends StatelessWidget {
+  const _DemandEmptyState({
+    required this.isFiltered,
+    required this.isShopifyConnected,
+  });
+
+  final bool isFiltered;
+  final bool isShopifyConnected;
+
+  @override
+  Widget build(BuildContext context) {
+    if (isFiltered) {
+      return const EmptyStateWidget(
+        icon: Icons.filter_list_off,
+        title: 'No matching records',
+        description: 'Try changing the source filter to see all demand records.',
+      );
+    }
+
+    if (!isShopifyConnected) {
+      return EmptyStateWidget(
+        icon: Icons.show_chart,
+        title: 'No demand data yet',
+        description:
+            'Connect your Shopify store to automatically import sales history, '
+            'or add records manually.',
+        primaryLabel: 'Connect Shopify',
+        onPrimary: () => context.go('/integrations'),
+        secondaryLabel: 'Add Manually',
+        onSecondary: () => showDialog(
+          context: context,
+          builder: (_) => const _AddDemandRecordDialog(),
+        ),
+      );
+    }
+
+    return EmptyStateWidget(
+      icon: Icons.show_chart,
+      title: 'No demand records yet',
+      description:
+          'Import a CSV or add records manually. Your Shopify store will '
+          'also sync sales here automatically.',
+      primaryLabel: 'Add Record',
+      onPrimary: () => showDialog(
+        context: context,
+        builder: (_) => const _AddDemandRecordDialog(),
       ),
     );
   }

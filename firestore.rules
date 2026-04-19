@@ -23,7 +23,15 @@ service cloud.firestore {
 
       // ── Products ─────────────────────────────────────────────────────
       match /products/{productId} {
-        allow read, write: if request.auth != null && request.auth.uid == userId;
+        allow read: if request.auth != null && request.auth.uid == userId;
+        allow delete: if request.auth != null && request.auth.uid == userId;
+        allow create, update: if request.auth != null
+          && request.auth.uid == userId
+          // Required fields must be present and of the correct type
+          && request.resource.data.name is string
+          && request.resource.data.name.size() > 0
+          && request.resource.data.currentStock is int
+          && request.resource.data.currentStock >= 0;
       }
 
       // ── Suppliers ────────────────────────────────────────────────────
@@ -38,7 +46,14 @@ service cloud.firestore {
 
       // ── Demand Records ───────────────────────────────────────────────
       match /demandRecords/{recordId} {
-        allow read, write: if request.auth != null && request.auth.uid == userId;
+        allow read: if request.auth != null && request.auth.uid == userId;
+        allow delete: if request.auth != null && request.auth.uid == userId;
+        allow create, update: if request.auth != null
+          && request.auth.uid == userId
+          && request.resource.data.productId is string
+          && request.resource.data.productId.size() > 0
+          && request.resource.data.quantity is number
+          && request.resource.data.quantity >= 0;
       }
 
       // ── Settings ─────────────────────────────────────────────────────
@@ -66,10 +81,14 @@ service cloud.firestore {
       // Client can only read connection status, not modify tokens.
       match /shopify/{docId} {
         allow read: if request.auth != null && request.auth.uid == userId;
-        // Allow client to write pending_oauth (nonce) but not connection doc
+        // Allow client to write pending_oauth (nonce) but not connection doc.
+        // Validate that only the expected fields can be written.
         allow write: if request.auth != null
                      && request.auth.uid == userId
-                     && docId == 'pending_oauth';
+                     && docId == 'pending_oauth'
+                     && request.resource.data.keys().hasOnly(
+                          ['nonce', 'shopDomain', 'createdAt', 'expiresAt']
+                        );
       }
 
       // ── Notifications ────────────────────────────────────────────────
@@ -84,7 +103,15 @@ service cloud.firestore {
 
       // ── Purchase Orders ──────────────────────────────────────────────
       match /purchaseOrders/{orderId} {
-        allow read, write: if request.auth != null && request.auth.uid == userId;
+        allow read: if request.auth != null && request.auth.uid == userId;
+        allow delete: if request.auth != null && request.auth.uid == userId;
+        allow create, update: if request.auth != null
+          && request.auth.uid == userId
+          && request.resource.data.supplierId is string
+          && request.resource.data.supplierId.size() > 0
+          && request.resource.data.status is string
+          && request.resource.data.status in ['draft', 'pending', 'confirmed',
+               'shipped', 'received', 'cancelled'];
       }
 
       // ── Raw Materials ────────────────────────────────────────────────
@@ -130,13 +157,13 @@ service cloud.firestore {
 
     // ── Supplier Orders (top-level for portal access) ────────────────────
     // Portal users (suppliers) access by unguessable 32-char access token.
-    // Read is open (access control is via the token's secrecy).
+    // Read is only allowed if the token has not expired.
     // Update is restricted to portal-safe fields only.
     // Only authenticated owners can create. Deletes disallowed.
     match /supplierOrders/{orderId} {
-      allow read: if true;
-      allow update: if true
-                    && (!resource.data.keys().hasAny(['expiresAt'])
+      allow read: if !resource.data.keys().hasAny(['expiresAt'])
+                  || resource.data.expiresAt > request.time;
+      allow update: if (!resource.data.keys().hasAny(['expiresAt'])
                         || resource.data.expiresAt > request.time)
                     && request.resource.data.diff(resource.data).affectedKeys()
                        .hasOnly(['response', 'status']);
@@ -147,9 +174,9 @@ service cloud.firestore {
 
     // ── Manufacturer Orders (top-level for portal access) ────────────────
     match /manufacturerOrders/{orderId} {
-      allow read: if true;
-      allow update: if true
-                    && (!resource.data.keys().hasAny(['expiresAt'])
+      allow read: if !resource.data.keys().hasAny(['expiresAt'])
+                  || resource.data.expiresAt > request.time;
+      allow update: if (!resource.data.keys().hasAny(['expiresAt'])
                         || resource.data.expiresAt > request.time)
                     && request.resource.data.diff(resource.data).affectedKeys()
                        .hasOnly(['status', 'manufacturerNotes', 'completedAt']);
@@ -160,9 +187,9 @@ service cloud.firestore {
 
     // ── Factory Orders (top-level for portal access) ─────────────────────
     match /factoryOrders/{orderId} {
-      allow read: if true;
-      allow update: if true
-                    && (!resource.data.keys().hasAny(['expiresAt'])
+      allow read: if !resource.data.keys().hasAny(['expiresAt'])
+                  || resource.data.expiresAt > request.time;
+      allow update: if (!resource.data.keys().hasAny(['expiresAt'])
                         || resource.data.expiresAt > request.time)
                     && request.resource.data.diff(resource.data).affectedKeys()
                        .hasOnly(['status', 'factoryNotes', 'estimatedDeliveryDays',

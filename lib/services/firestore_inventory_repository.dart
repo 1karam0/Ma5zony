@@ -35,19 +35,22 @@ class FirestoreInventoryRepository implements InventoryRepository {
   CollectionReference<Map<String, dynamic>> get _warehousesCol =>
       _db.collection('users').doc(uid).collection('warehouses');
 
+  /// Primary demand collection (manually-added records).
   CollectionReference<Map<String, dynamic>> get _demandCol =>
       _db.collection('users').doc(uid).collection('demandRecords');
+
+  /// Secondary demand collection written by the Shopify Cloud Function.
+  CollectionReference<Map<String, dynamic>> get _demandImportedCol =>
+      _db.collection('users').doc(uid).collection('demand');
 
   // ── Read ─────────────────────────────────────────────────────────────────
 
   @override
   Future<List<Product>> getProducts() async {
     final snap = await _productsCol.get();
-    return snap.docs.map((d) {
-      final data = d.data();
-      data['id'] = d.id;
-      return Product.fromJson(data);
-    }).toList();
+    return snap.docs
+        .map((d) => Product.fromFirestore(d.id, d.data()))
+        .toList();
   }
 
   @override
@@ -72,18 +75,42 @@ class FirestoreInventoryRepository implements InventoryRepository {
 
   @override
   Future<Map<String, List<DomainDemandRecord>>> getDemandHistory() async {
-    final snap = await _demandCol.orderBy('periodStart').get();
     final map = <String, List<DomainDemandRecord>>{};
-    for (final d in snap.docs) {
-      final data = d.data();
-      data['id'] = d.id;
-      // Handle Firestore Timestamps
-      if (data['periodStart'] is Timestamp) {
-        data['periodStart'] =
-            (data['periodStart'] as Timestamp).toDate().toIso8601String();
+
+    // Helper to parse a collection snapshot into the map
+    void parseSnap(QuerySnapshot<Map<String, dynamic>> snap) {
+      for (final d in snap.docs) {
+        final data = d.data();
+        data['id'] = d.id;
+        if (data['periodStart'] is Timestamp) {
+          data['periodStart'] =
+              (data['periodStart'] as Timestamp).toDate().toIso8601String();
+        }
+        try {
+          final record = DomainDemandRecord.fromJson(data);
+          // Avoid duplicates when a record exists in both collections
+          final existing = map[record.productId] ?? [];
+          if (!existing.any((r) => r.id == record.id)) {
+            map.putIfAbsent(record.productId, () => []).add(record);
+          }
+        } catch (_) {
+          // Skip malformed records silently
+        }
       }
-      final record = DomainDemandRecord.fromJson(data);
-      map.putIfAbsent(record.productId, () => []).add(record);
+    }
+
+    // Load both collections in parallel
+    final results = await Future.wait([
+      _demandCol.orderBy('periodStart').get(),
+      _demandImportedCol.orderBy('periodStart').get(),
+    ]);
+    for (final snap in results) {
+      parseSnap(snap);
+    }
+
+    // Sort each product's records chronologically
+    for (final key in map.keys) {
+      map[key]!.sort((a, b) => a.periodStart.compareTo(b.periodStart));
     }
     return map;
   }
@@ -95,7 +122,7 @@ class FirestoreInventoryRepository implements InventoryRepository {
     final data = product.toJson();
     data.remove('id'); // let Firestore generate the ID
     final docRef = await _productsCol.add(data);
-    return Product.fromJson({...data, 'id': docRef.id});
+    return Product.fromFirestore(docRef.id, data);
   }
 
   @override

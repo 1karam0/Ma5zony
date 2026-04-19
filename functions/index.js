@@ -23,6 +23,9 @@ const db = admin.firestore();
 const SHOPIFY_API_KEY = defineSecret("SHOPIFY_API_KEY");
 const SHOPIFY_API_SECRET = defineSecret("SHOPIFY_API_SECRET");
 
+/** Shopify API version — override with SHOPIFY_API_VERSION env var. */
+const SHOPIFY_API_VERSION = process.env.SHOPIFY_API_VERSION || "2025-01";
+
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
 /** Promisified HTTPS request helper (no external deps). */
@@ -47,18 +50,25 @@ function isValidShopDomain(shop) {
   return /^[a-zA-Z0-9][a-zA-Z0-9-]*\.myshopify\.com$/.test(shop);
 }
 
-/** Allowed origins for CORS. */
-const ALLOWED_ORIGINS = [
+/** Allowed origins for CORS.
+ *  In production set the CORS_ALLOWED_ORIGINS env var (comma-separated).
+ *  Localhost is only allowed when NODE_ENV !== 'production'.
+ */
+const _productionOrigins = [
   "https://ma5zony.web.app",
   "https://ma5zony.firebaseapp.com",
-  "http://localhost:5000",
-  "http://localhost:8080",
 ];
+const _extraOrigins = process.env.CORS_ALLOWED_ORIGINS
+  ? process.env.CORS_ALLOWED_ORIGINS.split(",").map((o) => o.trim())
+  : [];
+const ALLOWED_ORIGINS = [..._productionOrigins, ..._extraOrigins];
 
 /** Set CORS headers and handle preflight. Returns true if preflight handled. */
 function handleCors(req, res) {
   const origin = req.headers.origin || "";
-  if (ALLOWED_ORIGINS.includes(origin) || /^http:\/\/localhost(:\d+)?$/.test(origin)) {
+  const isDev = process.env.NODE_ENV !== "production";
+  const isLocalhostInDev = isDev && /^http:\/\/localhost(:\d+)?$/.test(origin);
+  if (ALLOWED_ORIGINS.includes(origin) || isLocalhostInDev) {
     res.set("Access-Control-Allow-Origin", origin);
   } else {
     res.set("Access-Control-Allow-Origin", ALLOWED_ORIGINS[0]);
@@ -102,14 +112,17 @@ exports.shopifyGetOAuthUrl = onRequest(
     }
 
     const nonce = crypto.randomBytes(16).toString("hex");
+    // Nonce expires in 10 minutes to prevent CSRF replay attacks.
+    const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
     await db
       .collection("users")
       .doc(uid)
       .collection("shopify")
       .doc("pending_oauth")
-      .set({ nonce, shopDomain, createdAt: admin.firestore.FieldValue.serverTimestamp() });
+      .set({ nonce, shopDomain, createdAt: admin.firestore.FieldValue.serverTimestamp(), expiresAt });
 
-    const redirectUri = `https://shopifyoauthcallback-rjv64oud6a-uc.a.run.app`;
+    const redirectUri = process.env.SHOPIFY_CALLBACK_URL ||
+      `https://shopifyoauthcallback-rjv64oud6a-uc.a.run.app`;
 
     const scopes = "read_products,read_inventory,read_orders";
     const authUrl =
@@ -176,6 +189,12 @@ exports.shopifyOAuthCallback = onRequest(
 
     if (!pendingDoc.exists || pendingDoc.data().nonce !== nonce) {
       res.status(403).send("Nonce mismatch – possible CSRF.");
+      return;
+    }
+    // Validate nonce expiry (10 minutes)
+    const oauthExpiresAt = pendingDoc.data().expiresAt;
+    if (oauthExpiresAt && oauthExpiresAt.toDate && oauthExpiresAt.toDate() < new Date()) {
+      res.status(403).send("OAuth nonce expired. Please start the connection process again.");
       return;
     }
 
@@ -260,7 +279,7 @@ exports.shopifyImportProducts = onRequest(
 
     const prodRes = await httpsRequest({
       hostname: shopDomain,
-      path: "/admin/api/2024-01/products.json?limit=250",
+      path: `/admin/api/${SHOPIFY_API_VERSION}/products.json?limit=250`,
       method: "GET",
       headers: { "X-Shopify-Access-Token": accessToken },
     });
@@ -275,25 +294,34 @@ exports.shopifyImportProducts = onRequest(
 
     const batch = db.batch();
     for (const sp of products) {
-      const variant = sp.variants?.[0] || {};
-      const docData = {
-        sku: variant.sku || `SHOP-${sp.id}`,
-        name: sp.title,
-        category: sp.product_type || "Uncategorised",
-        unitCost: parseFloat(variant.price) || 0,
-        currentStock: variant.inventory_quantity ?? 0,
-        supplierId: null,
-        isActive: sp.status === "active",
-        shopifyProductId: String(sp.id),
-      };
+      // Import each variant as a separate SKU so multi-variant products
+      // are fully represented (e.g. a T-shirt in S/M/L becomes 3 products).
+      const variants = sp.variants && sp.variants.length > 0 ? sp.variants : [{}];
+      for (const variant of variants) {
+        const variantSuffix = variants.length > 1 ? `_${variant.id || variant.title || 'var'}` : '';
+        const docId = `shopify_${sp.id}${variantSuffix}`;
+        const docData = {
+          sku: variant.sku || `SHOP-${sp.id}${variantSuffix}`,
+          name: variants.length > 1
+            ? `${sp.title} — ${variant.title || variant.option1 || ''}`
+            : sp.title,
+          category: sp.product_type || "Uncategorised",
+          unitCost: parseFloat(variant.price) || 0,
+          currentStock: variant.inventory_quantity ?? 0,
+          supplierId: null,
+          isActive: sp.status === "active",
+          shopifyProductId: String(sp.id),
+          shopifyVariantId: variant.id ? String(variant.id) : null,
+        };
 
-      const ref = db
-        .collection("users")
-        .doc(uid)
-        .collection("products")
-        .doc(`shopify_${sp.id}`);
-      batch.set(ref, docData, { merge: true });
-      imported.push({ id: ref.id, ...docData });
+        const ref = db
+          .collection("users")
+          .doc(uid)
+          .collection("products")
+          .doc(docId);
+        batch.set(ref, docData, { merge: true });
+        imported.push({ id: ref.id, ...docData });
+      }
     }
     await batch.commit();
 
@@ -327,7 +355,7 @@ exports.shopifySyncStock = onRequest(
 
     const prodRes = await httpsRequest({
       hostname: shopDomain,
-      path: "/admin/api/2024-01/products.json?limit=250&fields=id,variants",
+      path: `/admin/api/${SHOPIFY_API_VERSION}/products.json?limit=250&fields=id,variants`,
       method: "GET",
       headers: { "X-Shopify-Access-Token": accessToken },
     });
@@ -411,11 +439,14 @@ exports.shopifyImportOrders = onRequest(
 
     const { shopDomain, accessToken } = connDoc.data();
 
-    // Paginate through all orders
+    // Paginate through all orders (max 50 pages = 12,500 orders as a safety guard)
+    const MAX_PAGES = 50;
     let allOrders = [];
-    let nextPageUrl = `/admin/api/2024-01/orders.json?limit=250&status=any`;
+    let nextPageUrl = `/admin/api/${SHOPIFY_API_VERSION}/orders.json?limit=250&status=any`;
+    let pageCount = 0;
 
-    while (nextPageUrl) {
+    while (nextPageUrl && pageCount < MAX_PAGES) {
+      pageCount++;
       const orderRes = await httpsRequest({
         hostname: shopDomain,
         path: nextPageUrl,
@@ -428,22 +459,31 @@ exports.shopifyImportOrders = onRequest(
         return;
       }
 
-      const parsed = JSON.parse(orderRes.body);
+      let parsed;
+      try {
+        parsed = JSON.parse(orderRes.body);
+      } catch {
+        res.status(502).json({ error: "Invalid JSON from Shopify orders API." });
+        return;
+      }
       allOrders = allOrders.concat(parsed.orders || []);
 
       // Shopify REST cursor-based pagination via Link header.
       if (!parsed.orders || parsed.orders.length < 250) {
         nextPageUrl = null;
       } else {
-        // Parse Link header for next page URL
         const linkHeader = orderRes.headers && orderRes.headers.link;
         if (linkHeader) {
-          const nextMatch = linkHeader.match(/<([^>]+)>;\s*rel="next"/);
-          if (nextMatch) {
-            // Extract path from full URL
-            const nextUrl = new URL(nextMatch[1]);
-            nextPageUrl = nextUrl.pathname + nextUrl.search;
-          } else {
+          try {
+            const nextMatch = linkHeader.match(/<([^>]+)>;\s*rel="next"/);
+            if (nextMatch) {
+              const nextUrl = new URL(nextMatch[1]);
+              nextPageUrl = nextUrl.pathname + nextUrl.search;
+            } else {
+              nextPageUrl = null;
+            }
+          } catch {
+            // If Link header parsing fails, stop paginating safely
             nextPageUrl = null;
           }
         } else {

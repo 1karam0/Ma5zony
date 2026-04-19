@@ -151,13 +151,43 @@ class _ForecastsScreenState extends State<ForecastsScreen> {
                             ? null
                             : () async {
                                 setState(() => _running = true);
-                                await context.read<AppState>().runForecast(
-                                  _selectedProductId!,
-                                  _algorithm ?? 'SMA',
-                                  (_smaWindow ?? 3).toInt(),
-                                  _sesAlpha ?? 0.3,
-                                );
-                                setState(() => _running = false);
+                                try {
+                                  await context
+                                      .read<AppState>()
+                                      .runForecast(
+                                        _selectedProductId!,
+                                        _algorithm ?? 'SMA',
+                                        (_smaWindow ?? 3).toInt(),
+                                        _sesAlpha ?? 0.3,
+                                      )
+                                      .timeout(
+                                    const Duration(seconds: 30),
+                                    onTimeout: () {
+                                      throw Exception(
+                                        'Forecast timed out. Ensure this product has demand data.',
+                                      );
+                                    },
+                                  );
+                                } catch (e) {
+                                  if (mounted) {
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      SnackBar(
+                                        content: Text(
+                                          'Forecast failed: ${e.toString().replaceAll('Exception: ', '')}',
+                                        ),
+                                        backgroundColor: Colors.red[700],
+                                        behavior: SnackBarBehavior.floating,
+                                        action: SnackBarAction(
+                                          label: 'Dismiss',
+                                          textColor: Colors.white,
+                                          onPressed: () {},
+                                        ),
+                                      ),
+                                    );
+                                  }
+                                } finally {
+                                  if (mounted) setState(() => _running = false);
+                                }
                               },
                         style: ElevatedButton.styleFrom(
                           padding: const EdgeInsets.symmetric(vertical: 16),
@@ -217,7 +247,11 @@ class _ForecastsScreenState extends State<ForecastsScreen> {
                                 title: 'Forecast Accuracy',
                                 value: '${accuracyPercent.toStringAsFixed(1)}%',
                                 icon: Icons.check_circle,
-                                color: AppColors.success,
+                                color: accuracyPercent >= 90
+                                    ? AppColors.success
+                                    : (accuracyPercent >= 80
+                                        ? AppColors.warning
+                                        : AppColors.error),
                               ),
                             ),
                             const SizedBox(width: 16),
@@ -226,6 +260,14 @@ class _ForecastsScreenState extends State<ForecastsScreen> {
                                 title: 'MAPE',
                                 value: '${mapePercent.toStringAsFixed(1)}%',
                                 icon: Icons.functions,
+                                // Green < 10%, amber 10–20%, red > 20%
+                                color: mapePercent == 0
+                                    ? AppColors.textSecondary
+                                    : (mapePercent < 10
+                                        ? AppColors.success
+                                        : (mapePercent < 20
+                                            ? AppColors.warning
+                                            : AppColors.error)),
                               ),
                             ),
                             const SizedBox(width: 16),

@@ -292,6 +292,7 @@ class AppState extends ChangeNotifier {
   ForecastResult? _currentForecast;
   ShopifyStoreConnection? _shopifyConnection;
   UserSettings _settings = const UserSettings();
+  ThemeMode _themeMode = ThemeMode.light;
   Set<String> _approvedRecommendations = {};
   List<AppUser> _teamMembers = [];
   List<PurchaseOrder> _purchaseOrders = [];
@@ -315,6 +316,11 @@ class AppState extends ChangeNotifier {
   ForecastResult? get currentForecast => _currentForecast;
   ShopifyStoreConnection? get shopifyConnection => _shopifyConnection;
   UserSettings get settings => _settings;
+  ThemeMode get themeMode => _themeMode;
+  void toggleTheme() {
+    _themeMode = _themeMode == ThemeMode.light ? ThemeMode.dark : ThemeMode.light;
+    notifyListeners();
+  }
   Set<String> get approvedRecommendations => _approvedRecommendations;
   List<AppUser> get teamMembers => _teamMembers;
   List<PurchaseOrder> get purchaseOrders => _purchaseOrders;
@@ -602,7 +608,7 @@ class AppState extends ChangeNotifier {
     if (_currentUser == null) return 'Not authenticated.';
     final result =
         await _authService.inviteTeamMember(_currentUser!.uid, email);
-    if (result == 'success') {
+    if (result == 'added') {
       await loadTeamMembers();
     }
     return result;

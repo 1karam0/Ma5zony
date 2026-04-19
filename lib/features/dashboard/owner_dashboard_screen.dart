@@ -21,6 +21,7 @@ class OwnerDashboardScreen extends StatefulWidget {
 
 class _OwnerDashboardScreenState extends State<OwnerDashboardScreen> {
   bool _showBanner = true;
+  bool _showChecklist = true;
 
   // ── Helpers ──────────────────────────────────────────────────────────────
 
@@ -160,6 +161,9 @@ class _OwnerDashboardScreenState extends State<OwnerDashboardScreen> {
           // ── Shopify banner ───────────────────────────────────────────
           if (_showBanner && state.shopifyConnection?.isConnected != true)
             _buildShopifyBanner(),
+
+          // ── Getting Started checklist ────────────────────────────────
+          if (_showChecklist) _buildOnboardingChecklist(state),
 
           // ── Financial KPIs ───────────────────────────────────────────
           Text('Financial Overview', style: AppTextStyles.h2),
@@ -462,6 +466,155 @@ class _OwnerDashboardScreenState extends State<OwnerDashboardScreen> {
             onPressed: () => setState(() => _showBanner = false),
           ),
         ],
+      ),
+    );
+  }
+
+  Widget _buildOnboardingChecklist(AppState state) {
+    final steps = [
+      _ChecklistStep(
+        label: 'Connect Shopify or add products',
+        route: '/integrations',
+        isDone: state.products.isNotEmpty,
+      ),
+      _ChecklistStep(
+        label: 'Add at least one supplier',
+        route: '/suppliers',
+        isDone: state.suppliers.isNotEmpty,
+      ),
+      _ChecklistStep(
+        label: 'Add a warehouse',
+        route: '/warehouses',
+        isDone: state.warehouses.isNotEmpty,
+      ),
+      _ChecklistStep(
+        label: 'Import demand data',
+        route: '/demand-data',
+        isDone: state.demandByProduct.isNotEmpty,
+      ),
+      _ChecklistStep(
+        label: 'Run your first forecast',
+        route: '/forecasts',
+        isDone: state.currentForecast != null,
+      ),
+    ];
+    final doneCount = steps.where((s) => s.isDone).length;
+    final allDone = doneCount == steps.length;
+
+    // Auto-hide if everything is done
+    if (allDone) return const SizedBox.shrink();
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 24),
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          colors: [
+            AppColors.primary.withValues(alpha: 0.05),
+            AppColors.secondary,
+          ],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+        border: Border.all(color: AppColors.primary.withValues(alpha: 0.2)),
+        borderRadius: BorderRadius.circular(14),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.rocket_launch_outlined,
+                  size: 18, color: AppColors.primary),
+              const SizedBox(width: 8),
+              Text('Get started — $doneCount of ${steps.length} complete',
+                  style: AppTextStyles.h3.copyWith(color: AppColors.primary)),
+              const Spacer(),
+              // Progress bar
+              SizedBox(
+                width: 80,
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(4),
+                  child: LinearProgressIndicator(
+                    value: doneCount / steps.length,
+                    minHeight: 6,
+                    backgroundColor: AppColors.primary.withValues(alpha: 0.15),
+                    valueColor:
+                        const AlwaysStoppedAnimation<Color>(AppColors.primary),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              IconButton(
+                icon: const Icon(Icons.close, size: 16),
+                onPressed: () => setState(() => _showChecklist = false),
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(),
+                color: AppColors.textSecondary,
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          Wrap(
+            spacing: 12,
+            runSpacing: 8,
+            children: steps
+                .map((s) => _buildChecklistStep(context, s))
+                .toList(),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildChecklistStep(BuildContext context, _ChecklistStep step) {
+    return InkWell(
+      onTap: step.isDone ? null : () => context.go(step.route),
+      borderRadius: BorderRadius.circular(8),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+        decoration: BoxDecoration(
+          color: step.isDone
+              ? AppColors.success.withValues(alpha: 0.1)
+              : Colors.white,
+          border: Border.all(
+            color: step.isDone
+                ? AppColors.success.withValues(alpha: 0.4)
+                : AppColors.border,
+          ),
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              step.isDone
+                  ? Icons.check_circle
+                  : Icons.radio_button_unchecked,
+              size: 16,
+              color: step.isDone
+                  ? AppColors.success
+                  : AppColors.textSecondary,
+            ),
+            const SizedBox(width: 6),
+            Text(
+              step.label,
+              style: AppTextStyles.bodySmall.copyWith(
+                color: step.isDone
+                    ? AppColors.success
+                    : AppColors.textPrimary,
+                decoration:
+                    step.isDone ? TextDecoration.lineThrough : null,
+                fontWeight: step.isDone ? FontWeight.normal : FontWeight.w500,
+              ),
+            ),
+            if (!step.isDone) ...[
+              const SizedBox(width: 4),
+              const Icon(Icons.arrow_forward_ios,
+                  size: 10, color: AppColors.primary),
+            ],
+          ],
+        ),
       ),
     );
   }
@@ -781,5 +934,17 @@ class _SupplierCost {
     required this.productCount,
     required this.avgLeadTime,
     required this.totalMonthlySpend,
+  });
+}
+
+class _ChecklistStep {
+  final String label;
+  final String route;
+  final bool isDone;
+
+  _ChecklistStep({
+    required this.label,
+    required this.route,
+    required this.isDone,
   });
 }

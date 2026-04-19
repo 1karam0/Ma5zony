@@ -105,6 +105,12 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          // Breadcrumb
+          Breadcrumbs(crumbs: [
+            ('Dashboard', '/dashboard'),
+            ('Purchase Orders', '/orders'),
+            ('Order #${order.id.substring(0, order.id.length > 8 ? 8 : order.id.length).toUpperCase()}', null),
+          ]),
           // Header
           Row(
             children: [

@@ -2,6 +2,7 @@ import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:provider/provider.dart';
+import 'package:ma5zony/models/demand_record.dart';
 import 'package:ma5zony/providers/app_state.dart';
 import 'package:ma5zony/utils/constants.dart';
 import 'package:ma5zony/widgets/shared_widgets.dart';
@@ -16,6 +17,7 @@ class DashboardScreen extends StatefulWidget {
 class _DashboardScreenState extends State<DashboardScreen> {
   bool _showBanner = true;
   bool _syncing = false;
+  int _rangeMonths = 6;
 
   @override
   Widget build(BuildContext context) {
@@ -265,14 +267,26 @@ class _DashboardScreenState extends State<DashboardScreen> {
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Text(
-                              'Demand vs Forecast (Last 6M)',
-                              style: AppTextStyles.h3,
+                            Row(
+                              children: [
+                                Expanded(
+                                  child: Text(
+                                    'Demand vs Forecast (Last ${_rangeMonths}M)',
+                                    style: AppTextStyles.h3,
+                                  ),
+                                ),
+                                _RangePicker(
+                                  selected: _rangeMonths,
+                                  onChanged: (v) =>
+                                      setState(() => _rangeMonths = v),
+                                ),
+                              ],
                             ),
                             const SizedBox(height: 20),
                             SizedBox(
                               height: 250,
-                              child: _buildDemandForecastChart(state),
+                              child: _buildDemandForecastChart(
+                                  state, _rangeMonths),
                             ),
                           ],
                         ),
@@ -484,17 +498,20 @@ class _DashboardScreenState extends State<DashboardScreen> {
     return '${dt.day}/${dt.month}/${dt.year}';
   }
 
-  Widget _buildDemandForecastChart(AppState state) {
+  Widget _buildDemandForecastChart(AppState state, int rangeMonths) {
+    final cutoff = DateTime.now().subtract(Duration(days: rangeMonths * 30));
     final forecast = state.currentForecast;
     if (forecast == null || forecast.periods.isEmpty) {
       // Show a simple placeholder line chart using first product demand
-      final allDemand = state.demandByProduct.values.isNotEmpty
-          ? state.demandByProduct.values.first
-          : [];
+      final allDemand = (state.demandByProduct.values.isNotEmpty
+              ? state.demandByProduct.values.first
+              : <DomainDemandRecord>[])
+          .where((r) => r.periodStart.isAfter(cutoff))
+          .toList()
+        ..sort((a, b) => a.periodStart.compareTo(b.periodStart));
       final spots = allDemand
           .asMap()
           .entries
-          .take(6)
           .map((e) => FlSpot(e.key.toDouble(), e.value.quantity.toDouble()))
           .toList();
 
@@ -528,23 +545,24 @@ class _DashboardScreenState extends State<DashboardScreen> {
       );
     }
 
-    // Use computed ForecastResult
-    final take = forecast.periods.length.clamp(0, 6);
-    final actualSpots = forecast.actualDemand
-        .take(take)
-        .toList()
+    // Use computed ForecastResult — filter to selected date range
+    final filteredIndices = forecast.periods
         .asMap()
         .entries
-        .where((e) => e.value > 0)
-        .map((e) => FlSpot(e.key.toDouble(), e.value))
+        .where((e) => e.value.isAfter(cutoff))
+        .map((e) => e.key)
         .toList();
-    final forecastSpots = forecast.forecast
-        .take(take)
-        .toList()
-        .asMap()
-        .entries
-        .where((e) => e.value > 0)
-        .map((e) => FlSpot(e.key.toDouble(), e.value))
+    FlSpot toSpot(int idx, double v) =>
+        FlSpot(filteredIndices.indexOf(idx).toDouble(), v);
+    final actualSpots = filteredIndices
+        .where((i) =>
+            i < forecast.actualDemand.length && forecast.actualDemand[i] > 0)
+        .map((i) => toSpot(i, forecast.actualDemand[i]))
+        .toList();
+    final forecastSpots = filteredIndices
+        .where((i) =>
+            i < forecast.forecast.length && forecast.forecast[i] > 0)
+        .map((i) => toSpot(i, forecast.forecast[i]))
         .toList();
 
     return LineChart(
@@ -582,6 +600,33 @@ class _DashboardScreenState extends State<DashboardScreen> {
               dotData: const FlDotData(show: false),
             ),
         ],
+      ),
+    );
+  }
+}
+
+/// Compact segmented toggle for chart date-range selection.
+class _RangePicker extends StatelessWidget {
+  const _RangePicker({required this.selected, required this.onChanged});
+
+  final int selected;
+  final ValueChanged<int> onChanged;
+
+  static const _options = [1, 3, 6, 12];
+
+  @override
+  Widget build(BuildContext context) {
+    return SegmentedButton<int>(
+      segments: _options
+          .map((m) => ButtonSegment<int>(value: m, label: Text('${m}M')))
+          .toList(),
+      selected: {selected},
+      onSelectionChanged: (s) => onChanged(s.first),
+      style: ButtonStyle(
+        visualDensity: VisualDensity.compact,
+        textStyle: WidgetStateProperty.all(
+          const TextStyle(fontSize: 12, fontWeight: FontWeight.w500),
+        ),
       ),
     );
   }

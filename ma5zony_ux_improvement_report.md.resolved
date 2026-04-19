@@ -1,0 +1,550 @@
+# Ma5zony — Production-Grade QA & UX Improvement Report
+*QA session conducted: April 17, 2026 | Reviewer: Antigravity AI | Account: ahmed karam (SME Owner role)*
+
+---
+
+## Executive Summary
+
+Ma5zony is a well-architected Flutter/Firebase web app with a strong foundation: role-based routing, Shopify integration, forecasting algorithms, and a multi-module supply chain workflow. However, **the app cannot be considered production-ready** in its current state due to critical data rendering failures, several empty/broken module pipelines, and numerous UX friction points that would prevent day-to-day usability for a real business. This report details every issue found and provides a prioritized roadmap for production readiness. Additionally, it features an in-depth analysis of end-to-end user journeys and frontend architecture to push the application from a multi-screen prototype to a scalable enterprise system.
+
+---
+
+## Part 1: Critical Bugs (Must Fix Before Launch)
+
+### 🔴 BUG-01 — Products Table: SKU, Name, Category Are Blank
+**Screen:** Products  
+**What happens:** The table shows 18 product rows, but the SKU, Name, and Category columns are completely empty. Unit Cost shows `$0.00` for all. Only the Stock column has values.  
+**Root cause:** The `Firestore` product documents likely store these fields under slightly different field names than the [Product](file:///c:/Users/akara/Development/projects/ma5zony/lib/features/dashboard/owner_dashboard_screen.dart#757-772) model expects (e.g., `productName` vs `name`, or fields missing from Firestore documents that were imported from Shopify without full metadata mapping).  
+**Impact:** 🔴 Critical — the core product catalog is unreadable. KPIs and financial analytics that rely on `unitCost` all show `$0`.
+
+**Fix:**
+- Audit Firestore product documents in Firebase console — confirm field names match [Product](file:///c:/Users/akara/Development/projects/ma5zony/lib/features/dashboard/owner_dashboard_screen.dart#757-772) model exactly (`sku`, `name`, `category`, `unitCost`).
+- Add a data migration script or Firestore Cloud Function to normalize field names from Shopify imports.
+- Add field existence validation in `AppState` when loading products; log a warning if required fields are null.
+
+---
+
+### 🔴 BUG-02 — Forecast "Run Forecast" Hangs Indefinitely
+**Screen:** Forecasts  
+**What happens:** After clicking "Run Forecast", the button enters a loading spinner state and never resolves. No result is shown, no error is shown, the spinner just stays.  
+**Root cause:** The `runForecast()` call in `AppState` likely makes an API request to the backend's `/api/forecasts` endpoint. With no demand data in Firestore (see BUG-03), the backend may be returning an empty/unexpected response that the client doesn't handle gracefully — causing the future to never complete or throw a silent exception.  
+**Impact:** 🔴 Critical — the entire Forecasts module is non-functional.
+
+**Fix (Frontend):**
+```dart
+// Wrap the runForecast call with a timeout + error catch
+try {
+  await state.runForecast(...).timeout(
+    const Duration(seconds: 30),
+    onTimeout: () => throw TimeoutException('Forecast timed out'),
+  );
+} catch (e) {
+  // Show error snackbar, reset _running = false
+  ScaffoldMessenger.of(context).showSnackBar(
+    SnackBar(content: Text('Forecast failed: $e'), backgroundColor: Colors.red),
+  );
+  setState(() => _running = false);
+}
+```
+**Fix (Backend):** In [forecasts.ts](file:///c:/Users/akara/Development/projects/ma5zony_backend/src/routes/forecasts.ts), return a proper `400 Bad Request` with a descriptive message when insufficient demand data exists, rather than an empty response or hanging promise.
+
+---
+
+### 🔴 BUG-03 — Demand Data is Empty; All Downstream Modules Broken
+**Screen:** Demand Data  
+**What happens:** "No demand records yet." — zero demand entries exist.  
+**Cascading impact:** This single empty state causes **5 other modules to be broken or empty**:
+- Forecasts → can't compute (no historical data)
+- Replenishment → shows empty (no recommendations generated)
+- Dashboard charts → empty/placeholder state
+- Financial Analytics → $0 COGS (COGS requires demand × unit cost)
+- Owner Dashboard → all financial KPIs at $0
+
+**Fix:**
+- The Shopify integration is "Connected" and last synced Apr 13, 2026. Check if the Shopify order-import endpoint correctly writes to the `demand` Firestore collection with the right structure.
+- Create a "Seed Demo Data" button in Settings (for dev/demo use) that inserts 6 months of synthetic demand records per product.
+- In the Demand Data screen, add clearer call-to-action: "Import demand from Shopify orders" with a direct button linking to the Integrations screen's "Import Order History" action.
+
+---
+
+### 🟡 BUG-04 — Suppliers Have Duplicate Dummy Data
+**Screen:** Suppliers  
+**What happens:** 2 suppliers both named "aaaaa", both with email `a@gmail.com`, phone `1111`, lead time `100 days`. No real supplier data. Both show "0 products" linked.  
+**Impact:** 🟡 High — misleading; products aren't linked to any real supplier, which breaks all replenishment order flows.
+
+**Fix:** Clean up test data. More importantly, when a product is imported from Shopify, its supplier should be either auto-created from Shopify's vendor field or prompted for mapping.
+
+---
+
+### 🟡 BUG-05 — Forecasts Screen: "Target Product" Dropdown Shows Blank Products
+**Screen:** Forecasts  
+**What happens:** When clicking the Target Product dropdown, items appear but have no visible label (because product names are blank — linked to BUG-01).  
+**Impact:** 🟡 High — user cannot meaningfully select a product.
+
+**Fix:** Resolved when BUG-01 is fixed. Additionally, add a fallback display: `p.name.isEmpty ? p.sku : p.name` so SKU is used as label when name is missing.
+
+---
+
+### 🟡 BUG-06 — Global Search Returns No Results
+**Screen:** Top bar search  
+**What happens:** Typing in the search box produces no autocomplete dropdown — even though 18 products exist. The search logic in [_GlobalSearchBox](file:///c:/Users/akara/Development/projects/ma5zony/lib/widgets/main_layout.dart#550-554) queries `state.products` by name/sku/category, but since those fields are empty (BUG-01), no matches are found.  
+**Impact:** 🟡 Medium — search is non-functional until BUG-01 is resolved.
+
+**Fix:** Also resolves with BUG-01. Add a "no results found" message in the overlay so users know the search ran but found nothing.
+
+---
+
+## Part 2: UX / UI Improvements by Screen
+
+### 🔐 Login Screen
+
+**Current state:** Clean centered card with Email, Password, Forgot Password, and "Create account" link.
+
+**Issues & Improvements:**
+1. **No logo or branding** — the login card is completely unbranded. Add the Ma5zony logo/wordmark above "Welcome Back" to reinforce brand identity on the first screen users ever see.
+2. **No password visibility toggle** — the password field has no eye icon to show/hide password. This is a basic UX expectation in 2024+.
+3. **"Create account" misleads** — in a B2B inventory app, self-registration should be controlled. Either remove this link or replace it with "Request access" pointing to an onboarding form or email link.
+4. **No loading state on page** — add a subtle skeleton/spinner for the initial Firebase connection check so the page doesn't appear broken during cold-start.
+5. **No app description** — first-time users have no context. Add a tagline: *"Intelligent Inventory & Supply Chain Management"* in small text below the logo.
+
+---
+
+### 📊 Dashboard (Owner View)
+
+**Current state:** 12 KPI cards across 3 sections (Financial, Operational, Manufacturing Readiness), plus charts. All financial KPIs show $0 due to missing cost data.
+
+**Issues & Improvements:**
+1. **$0 financial KPIs are alarming** — when real data is absent, the dashboard looks broken. Add a contextual empty-state message: *"Financial data will populate once product costs and demand records are entered."*
+2. **KPI cards lack trend indicators** — none of the KPI cards show change from previous period (e.g., ▲12% vs last month). This is the most important context for a business owner.
+3. **Charts are empty with no guidance** — the "Monthly Cost Breakdown" pie chart and "Cash Flow Projection" bar chart show nothing. They need an empty state with an action: *"Add demand data and product costs to see cost analysis."*
+4. **12 KPI cards is too many** — the page is visually overwhelming. Collapse Manufacturing Readiness into a separate tab or section toggle to reduce cognitive load on first view.
+5. **No date range selector** — the dashboard has no way to change the time period. Add a global date range picker (Last 7d / 30d / 90d / Custom).
+6. **No "last updated" timestamp** — users don't know if the data is real-time or stale. Add a "Last synced: X minutes ago" indicator near the top.
+7. **The "Connect Shopify" banner is redundant** — Shopify is already connected. The banner correctly hides when connected, but the Shopify sync controls section at the bottom overlaps with dashboard purpose. Move Shopify controls exclusively to the Integrations page.
+
+---
+
+### 📦 Products Screen
+
+**Current state:** PaginatedDataTable with 18 rows, but SKU/Name/Category all blank.
+
+**Issues & Improvements (beyond BUG-01 fix):**
+1. **No product image column** — modern inventory tools show a product thumbnail. Add an image column or avatar (initials-based fallback). Shopify already provides image URLs.
+2. **Status logic is wrong** — the current code marks any product with a recommendation as "Low", regardless of actual stock vs ROP. Products showing "OK" should not show if they have zero stock. Fix: only "Critical" if `currentStock == 0`, "Low" if `currentStock <= reorderPoint`, else "OK".
+3. **No inline stock adjustment** — managers often need to manually adjust stock (receiving partial shipments, discrepancies). Add a "Adjust Stock" action that opens a quick dialog with +/- fields and a reason note.
+4. **No category filter** — only text search is available. Add a category/status dropdown filter above the table.
+5. **No sorting by column** — `PaginatedDataTable` supports `onSort` but it's not implemented. Enable sorting by Stock (ascending) to quickly find low-stock items.
+6. **"Import from Shopify" button is top-level** — this is a rare, one-time action but takes prime real estate. Move it to a ⋮ menu or secondary button group.
+7. **Empty state is basic** — the "No products yet" empty state has no call to action beyond a message. Add prominent buttons: "Add Product Manually" and "Import from Shopify".
+
+---
+
+### 🚚 Suppliers Screen
+
+**Current state:** 2 dummy suppliers with identical data; 3 KPI cards; table with actions.
+
+**Issues & Improvements:**
+1. **Lead time "Slow" badge is red/alarming** — 100 days is genuinely bad, but if it's test data, it needlessly triggers the badge. The badge color logic should compare against industry baselines (e.g., >30 days = Slow, 7-30 = Normal, <7 = Fast).
+2. **No supplier contact details expansion** — clicking a supplier row should open a detail panel/sheet with full contact info, linked products, order history, and performance ratings.
+3. **No supplier performance score** — a production-grade supplier screen should show: on-time delivery %, average actual lead time vs stated, defect rate.
+4. **0 products linked** — products should be linked to suppliers at creation time. Add a "Link Products" button per supplier row.
+5. **No search/filter** — add a search box for larger supplier lists.
+
+---
+
+### 🏭 Warehouses Screen
+
+**Current state:** Empty state with "No warehouses yet."
+
+**Issues & Improvements:**
+1. **Completely empty** — the most critical gap. Warehouses are referenced in the dashboard's "Stock by Warehouse" chart, which will always be empty without this data.
+2. **Add warehouse flow is missing context** — when clicking "Add Warehouse", the form should include: name, city, address, capacity (units), and default storage type (ambient/cold/hazmat).
+3. **No warehouse map visualization** — a production warehouse module should include a simple geographic map or at minimum a list with city/region grouping.
+4. **Stock distribution chart** — add a visual breakdown of which products are stored in which warehouses and at what quantities.
+
+---
+
+### 📈 Demand Data Screen
+
+**Current state:** Empty state with no demand records.
+
+**Issues & Improvements:**
+1. **No manual bulk entry** — provide a CSV upload template for entering historical demand data directly (without Shopify), for businesses that track sales offline.
+2. **No date range for demand records** — when demand does exist, the table should support filtering by product and date range.
+3. **Shopify order import** — the "Import Order History" action exists in Integrations but should be prominently surfaced here as the primary way to populate demand.
+4. **Demand aggregation view** — show a monthly bar chart of total demand across all products once data exists.
+5. **Missing demand data warning** — other modules that depend on demand data (Forecasts, Replenishment, Financial Analytics) should show a persistent inline warning with a link: *"Demand data is required for this module. [Import demand →]"*
+
+---
+
+### 🔮 Forecasts Screen
+
+**Current state:** Left panel (configuration) + right panel (results). Runs on button click but hangs.
+
+**Issues & Improvements (beyond BUG-02 fix):**
+1. **No historical forecast comparison** — once forecasts work, there's no way to compare the current forecast against a previous run. Add a "Previous Forecasts" history log.
+2. **Algorithm explanation missing** — users don't know what SMA or SES means. Add a [(?)](file:///c:/Users/akara/Development/projects/ma5zony/lib/features/orders/orders_screen.dart#14-167) tooltip: *"SMA = Simple Moving Average: smooths demand over N months. SES = Single Exponential Smoothing: weights recent demand more heavily."*
+3. **No bulk forecast mode** — users can only forecast one product at a time. Add a "Run All Products" button that queues forecasts for all products.
+4. **MAPE metric is unlabeled** — the MAPE KPI card shows a percentage but a new user won't know what "good" looks like. Add a color indicator: green (<15%), yellow (15-30%), red (>30%).
+5. **Forecast results not saved** — after running a forecast, navigating away loses the result. Save forecast results to Firestore so they persist and appear on the Dashboard chart.
+6. **No forecast export** — add a "Download Forecast (CSV)" button on the results panel.
+
+---
+
+### 🛒 Replenishment Screen
+
+**Current state:** Empty state ("No replenishment needed"). KPI cards show 0.
+
+**Issues & Improvements:**
+1. **Empty because demand data is missing** — addressed in BUG-03. Once demand and forecasts run, recommendations will populate.
+2. **No priority sort** — when recommendations exist, sort them by criticality (Critical → Low → OK) by default.
+3. **No supplier lead time context** — the table shows ROP and suggested qty but not the supplier's lead time. This is critical for ordering decisions (if lead time is 30 days, I need to order NOW).
+4. **Approval flow is incomplete** — after approving a recommendation, the UX flow that redirects to `/orders/create` doesn't pre-fill the order form. The order form should auto-populate with the approved items.
+5. **No "estimated arrival" date** — show: Order Date + Lead Time = Expected Arrival. This is the most important piece of information for a replenishment decision.
+6. **CSV export is functional** — ✅ good, keep it.
+
+---
+
+### 📋 Orders Screen
+
+**Current state:** Empty state ("No purchase orders yet").
+
+**Issues & Improvements:**
+1. **Empty state missing a direct CTA** — the empty state message says "Go to Replenishment to create an order from low-stock suggestions" but there's no button to actually navigate there. Add one.
+2. **Order ID display** — shows only 8 chars of the Firestore document ID. Consider using a sequential human-readable order number (PO-0001, PO-0002…) that is easier to reference in communications with suppliers.
+3. **No order filtering by status** — add tab filters: All | Draft | Confirmed | Sent | Completed | Cancelled.
+4. **No supplier name in orders table** — the table omits which supplier the order is for. This is essential context at a glance.
+5. **Order detail view** — the `OrderDetailScreen` exists but there's no indication of what it shows. Ensure it includes: line items, supplier contact info, delivery address, and a "Mark as Received" button that updates stock levels.
+6. **No bulk status update** — allow selecting multiple orders to mark as "Sent to Supplier" at once.
+
+---
+
+### 🔗 Integrations Screen
+
+**Current state:** Shopify connected (last synced Apr 13, 2026). Four action buttons: Disconnect, Import Products, Sync Inventory, Import Order History.
+
+**Issues & Improvements:**
+1. **Only Shopify integration exists** — a production-grade tool should plan for more integrations. Add placeholder cards for: WooCommerce, Amazon, QuickBooks/Xero (accounting), and a REST API/Webhook option for custom ERPs.
+2. **"Sync Inventory" vs "Import Order History" distinction is unclear** — users won't understand the difference. Add a brief description under each button: *"Sync Inventory: Updates stock levels from Shopify. Import Order History: Pulls past Shopify sales as demand records."*
+3. **Last synced shows date only** — show time too, and add color: green if < 24 hours ago, yellow if 1-7 days, red if > 7 days.
+4. **No sync log** — add a collapsible "Recent Sync History" panel showing last 5 sync events (timestamp, records imported, any errors).
+5. **Security note is good** — ✅ the "OAuth tokens are managed server-side" notice is a nice trust signal. Keep it.
+
+---
+
+### 🧱 Raw Materials Screen
+
+**Current state:** Empty state ("No raw materials yet").
+
+**Issues & Improvements:**
+1. **No data because no BOM is defined** — raw materials are the prerequisite for BOMs and production orders. Add an onboarding checklist: *"Step 1: Add raw materials → Step 2: Define BOMs → Step 3: Link to products."*
+2. **Unit of measure** — the add form should enforce a unit of measure (kg, liters, pcs, meters) with a standardized dropdown, not a free-text field.
+3. **Reorder point for raw materials** — raw materials need their own ROP and safety stock, independent of finished goods. Ensure the model supports this.
+4. **Supplier link at creation** — when adding a raw material, immediately prompt which supplier provides it.
+
+---
+
+### 📝 Bill of Materials Screen
+
+**Current state:** Empty state ("No BOMs defined yet").
+
+**Issues & Improvements:**
+1. **BOM creation UX is unclear** — the screen exists but the workflow to create a BOM is not intuitive. Add a guided flow: "Select a product → Add raw material lines → Set quantities per unit".
+2. **No BOM costing view** — once BOMs are defined, show a "BOM Cost" breakdown: sum of (material qty × unit cost) = production cost per finished unit.
+3. **Version control** — BOMs change over time. Add versioning (BOM v1, v2) so historical production orders reference the correct BOM.
+4. **BOM preview from Products** — ✅ the inline BOM preview in the Products table is well done. Keep it.
+
+---
+
+### 🏗️ Manufacturers Screen
+
+**Current state:** Empty state ("No manufacturers yet").
+
+**Issues & Improvements:**
+1. **No manufacturer data** — with no manufacturers, the "Manufacture" flow in Replenishment cannot work.
+2. **Manufacturer vs Supplier distinction** — users may be confused about the difference. Add tooltips: *"Suppliers provide raw materials or finished goods. Manufacturers produce finished goods from raw materials."*
+3. **Portal link** — the app has a `/manufacturer-portal` public URL. Add a "Copy Portal Link" button in each manufacturer's row so the owner can share it.
+
+---
+
+### ⭐ Recommendations Screen
+
+**Current state:** Empty state with a "Generate" button.
+
+**Issues & Improvements:**
+1. **"Generate" button is not obvious** — it's in the top-right corner but isn't prominently labeled in the empty state. Make it a centered CTA button in the empty state area.
+2. **No explainability** — when recommendations are generated, users need to understand WHY a recommendation was made (e.g., "BOM requires 500 steel rods; current stock is 20; forecast demand next month is 300 units"). Add a "Why?" expandable row.
+3. **Separate purchase vs manufacture recommendations** — the two recommendation types (Purchase and Manufacture) should be in separate tabs for clarity.
+
+---
+
+### ⚙️ Production Orders Screen
+
+**Current state:** Empty state ("No production orders yet").
+
+**Issues & Improvements:**
+1. **Gantt chart view** — production orders have start dates, expected end dates, and status. A Gantt chart or timeline view would be far more useful than a flat table.
+2. **Status tracking detail** — each production order should show: materials ordered, materials received, production started, QC check, completed. A step-by-step progress tracker (stepper component) per order would be ideal.
+3. **No link to BOM** — a production order should immediately show which BOM it's executing against.
+
+---
+
+### 💰 Cash Flow Screen
+
+**Current state:** Empty state with $0 KPIs.
+
+**Issues & Improvements:**
+1. **Purely derived data** — cash flow is calculated from recommendations × product costs. With $0 product costs it will always show $0. Fix BUG-01 first.
+2. **3-month projection is static** — the cash flow projection uses the same number for all three months (base spend). This is not a real projection — it needs to consider: seasonal demand patterns, upcoming payment terms, and scheduled orders.
+3. **No income side** — cash flow only shows outflow (inventory spend). A complete cash flow needs inflow (revenue from sales) to be meaningful. Consider integrating with Shopify revenue data.
+4. **No "what-if" scenario** — allow users to simulate: "What if I order 20% more stock this month? How does that affect next month's cash position?"
+
+---
+
+### 📊 Financial Analytics Screen
+
+**Current state:** Loaded with tabs but all data at $0.
+
+**Issues & Improvements:**
+1. **Powered entirely by derived data** — all metrics are $0 because `unitCost` is $0. Fixed with BUG-01.
+2. **Missing ABC analysis** — a production-grade financial analytics module should include ABC inventory classification: A items (high value, 20% of products, 80% of cost), B items, C items.
+3. **No export** — add PDF/Excel export for the financial reports. This is typically needed for month-end reporting.
+4. **Trend comparison** — show month-over-month and year-over-year comparisons for all financial metrics.
+
+---
+
+### ⚙️ Settings Screen
+
+**Current state:** Three tabs: Global Parameters, Forecasting Defaults, User Management. Functional.
+
+**Issues & Improvements:**
+1. **User Management tab** — what does it show? If it allows inviting new users, ensure role assignment (SME Owner vs Inventory Manager) is enforced properly.
+2. **No audit log / activity log** — production systems need an audit trail: who changed what, when. Add an "Activity Log" tab in Settings.
+3. **No notification preferences** — users should be able to control which events trigger in-app notifications (low stock alerts, order approvals, sync errors).
+4. **Settings "Save Changes" button** — the button is full-width, which is unusual and looks like a system error button. Make it a standard-sized button aligned to the right.
+5. **No dark mode toggle** — while not critical, it's a modern expectation for power users who work long hours.
+
+---
+
+## Part 3: Navigation & Architecture Issues
+
+### NAV-01 — Sidebar Has Too Many Items (16+ nav items)
+The sidebar currently shows 16+ navigation items in a scrollable list. This violates the "5-second rule" — users can't quickly orient themselves.
+
+**Recommended restructure:**
+```
+📊  Dashboard
+──── INVENTORY ────
+📦  Products
+🚚  Suppliers
+🏭  Warehouses
+──── OPERATIONS ────
+📈  Demand & Forecasts
+🛒  Replenishment
+📋  Purchase Orders
+──── MANUFACTURING ────
+🧱  Raw Materials
+📝  Bill of Materials
+🏗️  Manufacturers
+⭐  Recommendations
+🔧  Production Orders
+──── FINANCE (Owner only) ────
+💰  Cash Flow
+📊  Financial Analytics
+──── SYSTEM ────
+🔗  Integrations
+⚙️  Settings
+```
+
+With dividers and section headings, this becomes scannable at a glance.
+
+### NAV-02 — Top Bar Title Is Hardcoded and Incomplete
+The [_TopBar](file:///c:/Users/akara/Development/projects/ma5zony/lib/widgets/main_layout.dart#330-377) uses a series of `if/else` string checks to set the page title. It misses many routes (Raw Materials, BOM, Manufacturers, etc.). Use GoRouter's current route name directly.
+
+### NAV-03 — No Breadcrumbs for Sub-Pages
+Pages like Order Detail (`/orders/:id`) and Production Order Detail (`/production-orders/:id`) have no breadcrumb navigation. Users can't tell where they are or navigate back without using the browser.
+
+### NAV-04 — No Mobile / Tablet Responsive Layout
+The sidebar at `width < 800px` collapses to just icons (72px wide) with no labels, and there's no hamburger menu. On tablets this makes the app nearly unusable. Add a proper drawer-based mobile nav.
+
+### NAV-05 — No Onboarding / First-Run Experience
+A new user who signs up sees a dashboard full of zeros and empty screens with no guidance. Add a first-run checklist widget (e.g., "Get started in 4 steps"):
+1. ✅ Connected Shopify
+2. ☐ Import your products (link → Products)
+3. ☐ Add your suppliers (link → Suppliers)
+4. ☐ Run your first forecast (link → Forecasts)
+
+---
+
+## Part 4: End-to-End User Journeys (Missing Core Workflows)
+
+A production-grade supply chain system needs to support connected, cohesive workflows rather than just siloed data management screens. The current UI lacks the connective tissue between related actions.
+
+### JOURNEY-01 — The "Procure-to-Pay" (P2P) Gap
+**Current State:** Replenishment triggers a 'Purchase Order'.
+**The Missing Links:** 
+- **Goods Receipt Notes (GRN):** Once an order is placed, how does the stock actually arrive? There is no screen to "Receive Goods", verify quantities against the PO, and update the actual stock levels in warehouses.
+- **Supplier Bills & Payment:** The Cash Flow screen won't work correctly without tracking when supplier bills are due (AP - Accounts Payable) and resolving them against Purchase Orders.
+
+### JOURNEY-02 — The "Order-to-Cash" (O2C) Gap
+**Current State:** Demand data drops in from Shopify (B2C), but there is no native B2B outbound workflow.
+**The Missing Links:**
+- **Sales Orders Module:** A screen to create outbound Wholesale/B2B manual sales orders.
+- **Fulfillment Pipeline:** A "Pick & Pack" screen for warehouse workers to fulfill Shopify & B2B orders.
+- **Invoicing & Accounts Receivable:** Tracking payments owed by wholesale clients, which is critical for accurate cash flow projections.
+
+### JOURNEY-03 — The "Plan-to-Produce" Gap
+**Current State:** BOM → Recommendation → Production Order.
+**The Missing Links:**
+- **Component Allocation:** When a Production Order is created, the raw materials must be "Allocated" or "Reserved" so they aren't accidentally used elsewhere.
+- **Work in Progress (WIP):** Moving a Production Order from "Draft" → "In Production" → "Completed", at which point it automatically deducts Raw Materials and adds Finished Goods to stock.
+
+---
+
+## Part 5: Frontend Architectural Overhaul (Codebase UX)
+
+Drawing on robust frontend architecture skills and patterns, the following changes will dramatically improve developer UX and long-term UI stability.
+
+### ARCH-01 — Refactor AppState (God Object) to MVVM
+Currently, the UI is heavily coupled to a monolithic `AppState` provider.
+- **Recommendation:** Implement the **Model-View-ViewModel (MVVM)** pattern or standard Flux structure. Break `AppState` into distinct domain stores (e.g., `ProductViewModel`, `OrderViewModel`, `ForecastViewModel`). This enables granular state loading, separation of concerns, and prevents unnecessary widget rebuilds.
+
+### ARCH-02 — Adopt Presentational vs. Container Components 
+Many UI screens fetch data and render complex widgets in the same file.
+- **Recommendation:** Separate screens into pure "Presentational" dumb widgets (e.g., `ProductTable`) and "Container" logic widgets (e.g., `ProductsView` that watches the ViewModel). This improves testability and reusability of UI components and reduces visual spaghetti code.
+
+### ARCH-03 — Optimized Loading via Progressive Disclosure
+- **Recommendation:** The current UI blocks the entire screen with a spinner on load. Implement skeleton loading screens (especially for the Dashboard) and lazy-load heavier analytical charts below the fold to achieve a sub-1-second "Time to Interactive" experience.
+
+---
+
+## Part 6: Backend Improvements
+
+### BE-01 — No Request Validation on API Routes
+The backend routes ([products.ts](file:///c:/Users/akara/Development/projects/ma5zony_backend/src/routes/products.ts), [suppliers.ts](file:///c:/Users/akara/Development/projects/ma5zony_backend/src/routes/suppliers.ts), etc.) do not validate request bodies. Any malformed payload goes straight to Firestore.
+
+**Fix:** Add a validation middleware using `zod` or manual checks:
+```typescript
+// Example: POST /api/products
+if (!req.body.name || !req.body.sku) {
+  return res.status(400).json({ error: 'name and sku are required' });
+}
+```
+
+### BE-02 — Forecast Endpoint Doesn't Handle Insufficient Data
+When fewer than `smaWindow` demand periods exist, the SMA calculation will produce `NaN` or throw. The endpoint should return a `422 Unprocessable Entity` with a clear message: *"Insufficient demand data: need at least 3 months of records."*
+
+### BE-03 — No Rate Limiting
+The backend API has no rate limiting. Any authenticated user could hammer the forecast endpoint repeatedly. Add `express-rate-limit`.
+
+### BE-04 — Shopify Sync Doesn't Write Demand Records Correctly
+Shopify order imports should write demand records to Firestore's `demand` collection. Based on the live data, this either isn't writing or is writing to the wrong collection/document structure. Audit the `importShopifyOrders` service and its Firestore write path.
+
+### BE-05 — No Pagination on API Endpoints
+All list endpoints (`/api/products`, `/api/demand`, etc.) return all records. With growing data, this will cause performance issues. Add cursor-based pagination using Firestore's `.startAfter()`.
+
+### BE-06 — No Firestore Indexes Defined
+Complex queries (demand records filtered by productId + date range) will fail without composite Firestore indexes. Define required indexes in `firestore.indexes.json`.
+
+### BE-07 — CORS is Open (`app.use(cors())`)
+The backend accepts requests from any origin. Restrict to your frontend domain:
+```typescript
+app.use(cors({ origin: ['https://your-app.web.app', 'http://localhost:8888'] }));
+```
+
+### BE-08 — No Health Monitoring
+Add a `/api/health` endpoint that returns: server uptime, Firebase connection status, and last Shopify sync timestamp. This enables monitoring and alerting in production.
+
+---
+
+## Part 7: New Features & Suggested Additions
+
+### FEAT-01 — 📱 Onboarding Wizard
+A guided 4-step setup flow after first login:
+1. Company profile (name, currency, fiscal year start)
+2. Connect Shopify or manually add first products
+3. Add suppliers
+4. Run first forecast
+
+### FEAT-02 — 🔔 Push/Email Notifications
+Currently, notifications exist in-app (bell icon). Extend to:
+- Email alerts for critical stock events
+- Daily/weekly digest report to owner
+- Slack/Teams webhook for production order status changes
+
+### FEAT-03 — 📊 Dashboard Customization
+Allow users to pin/unpin KPI cards, rearrange dashboard sections, and choose which charts appear. Save preferences to Firestore per user.
+
+### FEAT-04 — 📥 CSV/Excel Import for Products & Demand
+Not everyone has Shopify. Allow CSV upload for:
+- Products (bulk add with field mapping tool)
+- Historical demand data (date, product SKU, quantity)
+- Suppliers (name, email, lead time)
+
+### FEAT-05 — 🔍 Advanced Search & Filters
+Upgrade the global search to support:
+- Cross-entity search (products, suppliers, orders, raw materials)
+- Keyboard shortcut (`⌘K` / `Ctrl+K`) to open search
+- Filter by status, category, date range within search results
+
+### FEAT-06 — 📈 Analytics Export (PDF/CSV)
+Every analytics page (Financial Analytics, Forecasts, Replenishment) should have a "Download Report" button generating a formatted PDF or CSV for month-end reports and stakeholder presentations.
+
+### FEAT-07 — 🌍 Multi-Currency Support
+For businesses that source internationally, allow products/suppliers to have different currencies, with an exchange rate setting for financial calculations.
+
+### FEAT-08 — 🗺️ Warehouse Map View
+Visual map showing warehouse locations and their stock levels, useful for multi-location businesses.
+
+### FEAT-09 — 🔄 Automated Replenishment Triggers
+Allow owners to configure automatic purchase order creation when stock falls below ROP, without manual approval for trusted suppliers.
+
+### FEAT-10 — 📋 Audit Trail / Activity Log
+Record every data change: who added/edited/deleted a product, supplier, or order, and when. Essential for production B2B environments.
+
+---
+
+## Part 8: Prioritized Implementation Roadmap
+
+| Priority | Category | Item | Effort | Impact |
+|---|---|---|---|---|
+| 🔴 P0 | Bug | Fix product field names in Firestore (BUG-01) | Low | Very High |
+| 🔴 P0 | Bug | Fix forecast timeout & error handling (BUG-02) | Medium | Very High |
+| 🔴 P0 | Bug | Fix Shopify demand data import pipeline (BUG-03) | High | Very High |
+| 🟡 P1 | UX | Add navigation section headers to sidebar (NAV-01) | Low | High |
+| 🟡 P1 | UX | Add first-run onboarding checklist (NAV-05) | Medium | High |
+| 🟡 P1 | UX | Add password show/hide toggle to login (Login) | Low | Medium |
+| 🟡 P1 | UX | Dashboard: trend indicators on KPI cards | Medium | High |
+| 🟡 P1 | UX | Products: category filter + column sorting | Medium | High |
+| 🟡 P1 | Backend | Add request validation (BE-01) | Medium | High |
+| 🟡 P1 | Backend | Restrict CORS to known origins (BE-07) | Low | High |
+| 🟢 P2 | Feature | CSV import for products and demand (FEAT-04) | High | High |
+| 🟢 P2 | Feature | Dashboard date range picker (Dashboard) | Medium | Medium |
+| 🟢 P2 | Feature | Advanced global search (FEAT-05) | High | Medium |
+| 🟢 P2 | Backend | Add rate limiting (BE-03) | Low | Medium |
+| 🟢 P2 | Backend | Add Firestore pagination (BE-05) | High | Medium |
+| 🔵 P3 | Feature | Analytics PDF/CSV export (FEAT-06) | High | Medium |
+| 🔵 P3 | Feature | Push/email notifications (FEAT-02) | High | Medium |
+| 🔵 P3 | Feature | Audit trail / activity log (FEAT-10) | Medium | Medium |
+| 🔵 P3 | UX | Mobile responsive sidebar (NAV-04) | High | Medium |
+| 🔵 P3 | Feature | Multi-currency support (FEAT-07) | Very High | Low |
+
+---
+
+## Appendix: Screenshots Reference
+
+| Screenshot | Description |
+|---|---|
+| [login_page_1776447144366.png](file:///C:/Users/akara/.gemini/antigravity/brain/cbcc0d62-6444-4121-a57b-c87a50386c0e/login_page_1776447144366.png) | Login screen — clean but unbranded |
+| [dashboard_loaded_1776447195164.png](file:///C:/Users/akara/.gemini/antigravity/brain/cbcc0d62-6444-4121-a57b-c87a50386c0e/dashboard_loaded_1776447195164.png) | Owner dashboard — all KPIs at $0 |
+| [products_screen_1776447207940.png](file:///C:/Users/akara/.gemini/antigravity/brain/cbcc0d62-6444-4121-a57b-c87a50386c0e/products_screen_1776447207940.png) | Products — 18 rows, all Name/SKU/Category blank |
+| [suppliers_screen_1776447217436.png](file:///C:/Users/akara/.gemini/antigravity/brain/cbcc0d62-6444-4121-a57b-c87a50386c0e/suppliers_screen_1776447217436.png) | Suppliers — 2 duplicate dummy entries |
+| [forecasts_screen_after_1776447260666.png](file:///C:/Users/akara/.gemini/antigravity/brain/cbcc0d62-6444-4121-a57b-c87a50386c0e/forecasts_screen_after_1776447260666.png) | Forecasts — Run Forecast hangs, product dropdown empty |
+| [integrations_screen_1776447293988.png](file:///C:/Users/akara/.gemini/antigravity/brain/cbcc0d62-6444-4121-a57b-c87a50386c0e/integrations_screen_1776447293988.png) | Integrations — Shopify connected, last synced Apr 13 |
+| [recommendations_screen_1776447338008.png](file:///C:/Users/akara/.gemini/antigravity/brain/cbcc0d62-6444-4121-a57b-c87a50386c0e/recommendations_screen_1776447338008.png) | Recommendations — empty, Generate button top-right |
+| [settings_screen_final_1776447452342.png](file:///C:/Users/akara/.gemini/antigravity/brain/cbcc0d62-6444-4121-a57b-c87a50386c0e/settings_screen_final_1776447452342.png) | Settings — 3 tabs, functional layout |
+| `sidebar_full_view_1776447459586.png` | Full sidebar — 16+ items, no section grouping |
+
+---
+
+*Report generated by Antigravity AI QA Engine | Version 1.0 | April 17, 2026*

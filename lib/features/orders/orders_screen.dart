@@ -7,13 +7,43 @@ import 'package:ma5zony/providers/app_state.dart';
 import 'package:ma5zony/utils/constants.dart';
 import 'package:ma5zony/widgets/shared_widgets.dart';
 
-class OrdersScreen extends StatelessWidget {
+class OrdersScreen extends StatefulWidget {
   const OrdersScreen({super.key});
+
+  @override
+  State<OrdersScreen> createState() => _OrdersScreenState();
+}
+
+class _OrdersScreenState extends State<OrdersScreen>
+    with SingleTickerProviderStateMixin {
+  late final TabController _tabController;
+
+  static const _tabs = [
+    ('All', null),
+    ('Draft', OrderStatus.draft),
+    ('Confirmed', OrderStatus.confirmed),
+    ('Sent', OrderStatus.sent),
+    ('Completed', OrderStatus.completed),
+    ('Cancelled', OrderStatus.cancelled),
+  ];
+
+  @override
+  void initState() {
+    super.initState();
+    _tabController = TabController(length: _tabs.length, vsync: this);
+  }
+
+  @override
+  void dispose() {
+    _tabController.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
     final state = context.watch<AppState>();
-    final orders = state.purchaseOrders;
+    final allOrders = state.purchaseOrders;
+    final supplierMap = {for (final s in state.suppliers) s.id: s.name};
 
     if (state.isLoading) {
       return const Center(child: CircularProgressIndicator());
@@ -45,7 +75,7 @@ class OrdersScreen extends StatelessWidget {
               Expanded(
                 child: KPICard(
                   title: 'Total Orders',
-                  value: '${orders.length}',
+                  value: '${allOrders.length}',
                   icon: Icons.receipt_long,
                 ),
               ),
@@ -54,10 +84,10 @@ class OrdersScreen extends StatelessWidget {
                 child: KPICard(
                   title: 'Pending',
                   value:
-                      '${orders.where((o) => o.status == OrderStatus.confirmed || o.status == OrderStatus.sent).length}',
+                      '${allOrders.where((o) => o.status == OrderStatus.confirmed || o.status == OrderStatus.sent).length}',
                   icon: Icons.pending_actions,
                   color: AppColors.warning,
-                  isAlert: orders.any((o) =>
+                  isAlert: allOrders.any((o) =>
                       o.status == OrderStatus.confirmed ||
                       o.status == OrderStatus.sent),
                 ),
@@ -67,7 +97,7 @@ class OrdersScreen extends StatelessWidget {
                 child: KPICard(
                   title: 'Completed',
                   value:
-                      '${orders.where((o) => o.status == OrderStatus.completed).length}',
+                      '${allOrders.where((o) => o.status == OrderStatus.completed).length}',
                   icon: Icons.check_circle,
                   color: AppColors.success,
                 ),
@@ -76,95 +106,152 @@ class OrdersScreen extends StatelessWidget {
           ),
           const SizedBox(height: 24),
 
-          if (orders.isEmpty)
-            Card(
-              elevation: 2,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(12),
-              ),
-              child: Padding(
-                padding: const EdgeInsets.symmetric(vertical: 48),
-                child: Center(
-                  child: Column(
-                    children: [
-                      const Icon(Icons.receipt_long,
-                          size: 48, color: AppColors.textSecondary),
-                      const SizedBox(height: 12),
-                      Text(
-                        'No purchase orders yet.',
-                        style: AppTextStyles.body
-                            .copyWith(color: AppColors.textSecondary),
-                      ),
-                      const SizedBox(height: 8),
-                      Text(
-                        'Go to Replenishment to create an order from low-stock suggestions.',
-                        style: AppTextStyles.label,
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            )
-          else
-            Card(
-              elevation: 2,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(12),
-              ),
-              child: Padding(
-                padding: const EdgeInsets.all(20),
-                child: SizedBox(
-                  width: double.infinity,
-                  child: DataTable(
-                    columns: const [
-                      DataColumn(label: Text('Order ID')),
-                      DataColumn(label: Text('Date')),
-                      DataColumn(label: Text('Items')),
-                      DataColumn(label: Text('Total Cost')),
-                      DataColumn(label: Text('Status')),
-                      DataColumn(label: Text('Action')),
-                    ],
-                    rows: orders.map((order) {
-                      return DataRow(
-                        cells: [
-                          DataCell(
-                            Text(
-                              '#${order.id.substring(0, order.id.length > 8 ? 8 : order.id.length).toUpperCase()}',
-                              style: AppTextStyles.body
-                                  .copyWith(fontWeight: FontWeight.w600),
-                            ),
-                          ),
-                          DataCell(Text(
-                            DateFormat.yMMMd().format(order.createdAt),
-                          )),
-                          DataCell(Text(
-                            '${order.totalItems} items (${order.totalQuantity} units)',
-                          )),
-                          DataCell(Text(
-                            '\$${order.totalEstimatedCost.toStringAsFixed(2)}',
-                            style: AppTextStyles.body
-                                .copyWith(fontWeight: FontWeight.w600),
-                          )),
-                          DataCell(_OrderStatusChip(order.status)),
-                          DataCell(
-                            TextButton(
-                              onPressed: () =>
-                                  context.go('/orders/${order.id}'),
-                              child: const Text('View'),
-                            ),
-                          ),
-                        ],
-                      );
-                    }).toList(),
-                  ),
-                ),
-              ),
+          // Status tab bar
+          Card(
+            elevation: 0,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+              side: const BorderSide(color: AppColors.border),
             ),
+            child: Column(
+              children: [
+                TabBar(
+                  controller: _tabController,
+                  isScrollable: true,
+                  labelColor: AppColors.primary,
+                  unselectedLabelColor: AppColors.textSecondary,
+                  indicatorColor: AppColors.primary,
+                  indicatorSize: TabBarIndicatorSize.tab,
+                  onTap: (_) => setState(() {}),
+                  tabs: _tabs.map((t) {
+                    final count = t.$2 == null
+                        ? allOrders.length
+                        : allOrders.where((o) => o.status == t.$2).length;
+                    return Tab(
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(t.$1),
+                          const SizedBox(width: 6),
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 6, vertical: 1),
+                            decoration: BoxDecoration(
+                              color: AppColors.primary.withValues(alpha: 0.1),
+                              borderRadius: BorderRadius.circular(10),
+                            ),
+                            child: Text(
+                              '$count',
+                              style: const TextStyle(
+                                  fontSize: 11,
+                                  color: AppColors.primary,
+                                  fontWeight: FontWeight.w600),
+                            ),
+                          )
+                        ],
+                      ),
+                    );
+                  }).toList(),
+                ),
+                const Divider(height: 1),
+                Builder(builder: (context) {
+                  final selectedStatus = _tabs[_tabController.index].$2;
+                  final orders = selectedStatus == null
+                      ? allOrders
+                      : allOrders
+                          .where((o) => o.status == selectedStatus)
+                          .toList();
+
+                  if (orders.isEmpty) {
+                    return Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 48),
+                      child: EmptyStateWidget(
+                        icon: Icons.receipt_long_outlined,
+                        title: 'No purchase orders yet',
+                        description:
+                            'Go to Replenishment to create orders from\nlow-stock suggestions.',
+                        primaryLabel: 'Go to Replenishment',
+                        onPrimary: () => context.go('/replenishment'),
+                        secondaryLabel: 'Create Manually',
+                        onSecondary: () => context.go('/orders/create'),
+                      ),
+                    );
+                  }
+
+                  return Padding(
+                    padding: const EdgeInsets.all(16),
+                    child: SizedBox(
+                      width: double.infinity,
+                      child: DataTable(
+                        headingRowColor: WidgetStatePropertyAll(
+                          AppColors.primary.withValues(alpha: 0.04),
+                        ),
+                        columns: const [
+                          DataColumn(label: Text('PO Number')),
+                          DataColumn(label: Text('Supplier')),
+                          DataColumn(label: Text('Date')),
+                          DataColumn(label: Text('Items')),
+                          DataColumn(label: Text('Total Cost')),
+                          DataColumn(label: Text('Status')),
+                          DataColumn(label: Text('Action')),
+                        ],
+                        rows: orders.map((order) {
+                          // Human-readable PO number: first 8 chars of doc ID
+                          final poNum =
+                              'PO-${order.id.substring(0, order.id.length > 6 ? 6 : order.id.length).toUpperCase()}';
+                          // Resolve supplier name from first line item
+                          final firstSupplierId = order.items.isNotEmpty
+                              ? order.items.first.supplierId
+                              : null;
+                          final supplierName =
+                              supplierMap[firstSupplierId ?? ''] ?? '—';
+                          return DataRow(
+                            cells: [
+                              DataCell(
+                                Text(
+                                  poNum,
+                                  style: AppTextStyles.body.copyWith(
+                                    fontWeight: FontWeight.w700,
+                                    color: AppColors.primary,
+                                  ),
+                                ),
+                              ),
+                              DataCell(Text(supplierName)),
+                              DataCell(Text(
+                                DateFormat.yMMMd().format(order.createdAt),
+                              )),
+                              DataCell(Text(
+                                '${order.totalItems} items',
+                              )),
+                              DataCell(Text(
+                                '\$${order.totalEstimatedCost.toStringAsFixed(2)}',
+                                style: AppTextStyles.body
+                                    .copyWith(fontWeight: FontWeight.w600),
+                              )),
+                              DataCell(_OrderStatusChip(order.status)),
+                              DataCell(
+                                TextButton(
+                                  onPressed: () =>
+                                      context.go('/orders/${order.id}'),
+                                  child: const Text('View'),
+                                ),
+                              ),
+                            ],
+                          );
+                        }).toList(),
+                      ),
+                    ),
+                  );
+                }),
+              ],
+            ),
+          ),
         ],
       ),
     );
   }
 }
+
 
 class _OrderStatusChip extends StatelessWidget {
   final OrderStatus status;

@@ -20,10 +20,21 @@ class _IntegrationsScreenState extends State<IntegrationsScreen> {
   bool _importingOrders = false;
   final _domainController = TextEditingController();
 
+  // Session-local sync log (most recent first)
+  final List<_SyncLogEntry> _syncLog = [];
+
   @override
   void dispose() {
     _domainController.dispose();
     super.dispose();
+  }
+
+  void _log(String type, String message, {bool error = false}) {
+    setState(() {
+      _syncLog.insert(
+          0, _SyncLogEntry(type: type, message: message, error: error));
+      if (_syncLog.length > 20) _syncLog.removeLast();
+    });
   }
 
   @override
@@ -236,6 +247,7 @@ class _IntegrationsScreenState extends State<IntegrationsScreen> {
                                           if (mounted) {
                                             final newC = result['newCount'] ?? 0;
                                             final merged = result['mergedCount'] ?? 0;
+                                            _log('Products', '$newC new, $merged updated');
                                             messenger.showSnackBar(
                                               SnackBar(
                                                 content: Text(
@@ -285,6 +297,7 @@ class _IntegrationsScreenState extends State<IntegrationsScreen> {
                                               .read<AppState>()
                                               .syncShopifyInventory();
                                           if (mounted) {
+                                            _log('Inventory', 'Inventory synced');
                                             messenger.showSnackBar(
                                               const SnackBar(
                                                 content: Text(
@@ -336,6 +349,7 @@ class _IntegrationsScreenState extends State<IntegrationsScreen> {
                                           if (mounted) {
                                             final count =
                                                 result?['newRecordsImported'] ?? 0;
+                                            _log('Orders', '$count demand records imported');
                                             messenger.showSnackBar(
                                               SnackBar(
                                                 content: Text(
@@ -408,6 +422,37 @@ class _IntegrationsScreenState extends State<IntegrationsScreen> {
               ],
             ),
           ),
+
+          // Session sync log
+          if (_syncLog.isNotEmpty) ...[
+            const SizedBox(height: 24),
+            Card(
+              elevation: 2,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Padding(
+                padding: const EdgeInsets.all(20),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Text('Recent Activity', style: AppTextStyles.h3),
+                        const Spacer(),
+                        TextButton(
+                          onPressed: () => setState(() => _syncLog.clear()),
+                          child: const Text('Clear'),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 12),
+                    ..._syncLog.map((e) => _SyncLogTile(entry: e)),
+                  ],
+                ),
+              ),
+            ),
+          ],
         ],
       ),
     );
@@ -427,6 +472,50 @@ class _CapabilityItem extends StatelessWidget {
           const Icon(Icons.check_circle, color: AppColors.success, size: 16),
           const SizedBox(width: 8),
           Text(label, style: AppTextStyles.body),
+        ],
+      ),
+    );
+  }
+}
+
+// ─── Sync Log ─────────────────────────────────────────────────────────────────
+
+class _SyncLogEntry {
+  final String type;
+  final String message;
+  final DateTime at;
+  final bool error;
+  _SyncLogEntry({required this.type, required this.message, this.error = false})
+      : at = DateTime.now();
+}
+
+class _SyncLogTile extends StatelessWidget {
+  const _SyncLogTile({required this.entry});
+  final _SyncLogEntry entry;
+
+  @override
+  Widget build(BuildContext context) {
+    final color = entry.error ? AppColors.error : AppColors.success;
+    final icon = entry.error ? Icons.error_outline : Icons.check_circle_outline;
+    final time = DateFormat('HH:mm:ss').format(entry.at);
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Row(
+        children: [
+          Icon(icon, size: 16, color: color),
+          const SizedBox(width: 8),
+          Text(
+            '[${entry.type}]',
+            style: TextStyle(
+                fontWeight: FontWeight.w600, color: color, fontSize: 12),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(entry.message,
+                style: const TextStyle(fontSize: 12)),
+          ),
+          Text(time,
+              style: AppTextStyles.label.copyWith(fontSize: 11)),
         ],
       ),
     );
