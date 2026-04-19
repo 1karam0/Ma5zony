@@ -43,7 +43,10 @@ GoRouter buildAppRouter(AppState appState) => GoRouter(
     GoRoute(path: '/login', builder: (context, state) => const LoginScreen()),
     GoRoute(
       path: '/register',
-      builder: (context, state) => const RegisterScreen(),
+      builder: (context, state) {
+        final inviteToken = state.uri.queryParameters['invite'];
+        return RegisterScreen(inviteToken: inviteToken);
+      },
     ),
     // Public legal pages — no auth required
     GoRoute(
@@ -203,7 +206,7 @@ GoRouter buildAppRouter(AppState appState) => GoRouter(
   redirect: (context, state) {
     final loggedIn = appState.currentUser != null;
     final path = state.uri.toString();
-    final loggingIn = path == '/login' || path == '/register';
+    final loggingIn = path == '/login' || path.startsWith('/register');
 
     // Portals and legal pages are public — no auth redirect
     if (path.startsWith('/supplier-portal') ||

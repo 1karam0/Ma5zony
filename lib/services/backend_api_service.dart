@@ -213,6 +213,33 @@ class BackendApiService {
     final result = await _post('/api/team/invite', {'email': email});
     return (result as Map<String, dynamic>)['result'] as String;
   }
+
+  /// Validates a team invite token (no auth required — called before registration).
+  /// Returns `{email: String, ownerName: String}` on success.
+  /// Throws [BackendException] if invalid/expired.
+  Future<Map<String, dynamic>> validateInvite(String token) async {
+    final res = await http.get(
+      Uri.parse('$_baseUrl/api/team/invite/$token'),
+    );
+    if (res.statusCode >= 200 && res.statusCode < 300) {
+      return (jsonDecode(res.body) as Map<String, dynamic>);
+    }
+    String message;
+    try {
+      final body = jsonDecode(res.body) as Map<String, dynamic>;
+      message = (body['error'] ?? body['message'] ?? res.body) as String;
+    } catch (_) {
+      message = res.body;
+    }
+    throw BackendException(res.statusCode, message);
+  }
+
+  /// After registration, marks the invite as accepted and links the new user
+  /// to the owner (sets `ownerId`). Requires the newly signed-in user's auth token.
+  /// Throws [BackendException] on failure.
+  Future<void> acceptInvite(String token) async {
+    await _post('/api/team/invite/accept', {'token': token});
+  }
   // ── Account management ─────────────────────────────────────────────────────
 
   /// Permanently deletes the authenticated user's account and all their data.

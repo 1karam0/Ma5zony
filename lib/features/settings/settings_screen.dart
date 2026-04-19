@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:provider/provider.dart';
 import 'package:ma5zony/models/app_user.dart';
+import 'package:ma5zony/models/workflow_log.dart';
 import 'package:ma5zony/providers/app_state.dart';
 import 'package:ma5zony/services/backend_api_service.dart';
 import 'package:ma5zony/services/settings_service.dart';
@@ -15,7 +16,7 @@ class SettingsScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return DefaultTabController(
-      length: 4,
+      length: 5,
       child: Column(
         children: [
           Container(
@@ -31,10 +32,12 @@ class SettingsScreen extends StatelessWidget {
                     Tab(text: 'Forecasting Defaults'),
                     Tab(text: 'User Management'),
                     Tab(text: 'Preferences'),
+                    Tab(text: 'Activity Log'),
                   ],
                   labelColor: AppColors.primary,
                   unselectedLabelColor: AppColors.textSecondary,
                   indicatorColor: AppColors.primary,
+                  isScrollable: true,
                 ),
               ],
             ),
@@ -46,6 +49,7 @@ class SettingsScreen extends StatelessWidget {
                 _ForecastingDefaultsTab(),
                 _UserManagementTab(),
                 _PreferencesTab(),
+                _ActivityLogTab(),
               ],
             ),
           ),
@@ -749,5 +753,215 @@ class _DeleteAccountButtonState extends State<_DeleteAccountButton> {
         side: BorderSide(color: AppColors.error),
       ),
     );
+  }
+}
+
+// ── Activity Log Tab ────────────────────────────────────────────────────────
+
+class _ActivityLogTab extends StatefulWidget {
+  const _ActivityLogTab();
+
+  @override
+  State<_ActivityLogTab> createState() => _ActivityLogTabState();
+}
+
+class _ActivityLogTabState extends State<_ActivityLogTab> {
+  bool _loading = false;
+  String _filterType = 'all';
+
+  static const _entityTypes = [
+    ('all', 'All'),
+    ('product', 'Products'),
+    ('purchaseOrder', 'Purchase Orders'),
+    ('supplierOrder', 'Supplier Orders'),
+    ('productionOrder', 'Production Orders'),
+    ('rawMaterialOrder', 'Raw Material Orders'),
+    ('recommendation', 'Recommendations'),
+  ];
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    setState(() => _loading = true);
+    try {
+      await context.read<AppState>().loadWorkflowLogs();
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final logs = context.watch<AppState>().workflowLogs;
+    final filtered = _filterType == 'all'
+        ? logs
+        : logs.where((l) => l.entityType == _filterType).toList();
+
+    // Sort newest first
+    final sorted = [...filtered]
+      ..sort((a, b) => b.timestamp.compareTo(a.timestamp));
+
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(24),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Text('Activity Log', style: AppTextStyles.h3),
+              const Spacer(),
+              IconButton(
+                onPressed: _loading ? null : _load,
+                icon: _loading
+                    ? const SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.refresh),
+                tooltip: 'Refresh',
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Text(
+            'All significant actions performed in your workspace.',
+            style: AppTextStyles.body.copyWith(color: AppColors.textSecondary),
+          ),
+          const SizedBox(height: 16),
+          // Filter chips
+          Wrap(
+            spacing: 8,
+            children: _entityTypes.map(((String, String) t) {
+              final (value, label) = t;
+              final selected = _filterType == value;
+              return FilterChip(
+                label: Text(label),
+                selected: selected,
+                onSelected: (_) => setState(() => _filterType = value),
+                selectedColor: AppColors.primary.withValues(alpha: 0.15),
+                checkmarkColor: AppColors.primary,
+                labelStyle: TextStyle(
+                  color: selected ? AppColors.primary : AppColors.textPrimary,
+                  fontWeight:
+                      selected ? FontWeight.w600 : FontWeight.normal,
+                ),
+              );
+            }).toList(),
+          ),
+          const SizedBox(height: 16),
+          if (sorted.isEmpty)
+            Center(
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: 48),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(Icons.history, size: 48,
+                        color: AppColors.textSecondary.withValues(alpha: 0.4)),
+                    const SizedBox(height: 12),
+                    Text('No activity recorded yet.',
+                        style: AppTextStyles.body
+                            .copyWith(color: AppColors.textSecondary)),
+                  ],
+                ),
+              ),
+            )
+          else
+            Card(
+              elevation: 1,
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12)),
+              child: ListView.separated(
+                shrinkWrap: true,
+                physics: const NeverScrollableScrollPhysics(),
+                itemCount: sorted.length,
+                separatorBuilder: (context2, index) =>
+                    const Divider(height: 1, indent: 56),
+                itemBuilder: (_, i) => _LogTile(log: sorted[i]),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+class _LogTile extends StatelessWidget {
+  final WorkflowLog log;
+  const _LogTile({required this.log});
+
+  static const _iconMap = <String, IconData>{
+    'received': Icons.inventory_2,
+    'approved': Icons.check_circle,
+    'rejected': Icons.cancel,
+    'created': Icons.add_circle_outline,
+    'updated': Icons.edit,
+    'deleted': Icons.delete_outline,
+    'sent': Icons.email,
+    'completed': Icons.task_alt,
+    'generated': Icons.auto_awesome,
+    'ordered': Icons.shopping_cart,
+  };
+
+  static const _colorMap = <String, Color>{
+    'received': AppColors.success,
+    'approved': AppColors.success,
+    'completed': AppColors.success,
+    'rejected': AppColors.error,
+    'deleted': AppColors.error,
+    'created': AppColors.primary,
+    'generated': AppColors.primary,
+    'updated': AppColors.warning,
+    'sent': Colors.blue,
+    'ordered': Colors.blue,
+  };
+
+  @override
+  Widget build(BuildContext context) {
+    final icon = _iconMap[log.action] ?? Icons.circle;
+    final color = _colorMap[log.action] ?? AppColors.textSecondary;
+    final timeStr = _formatRelative(log.timestamp);
+
+    return ListTile(
+      leading: CircleAvatar(
+        radius: 18,
+        backgroundColor: color.withValues(alpha: 0.12),
+        child: Icon(icon, color: color, size: 16),
+      ),
+      title: Text(
+        '${_capitalize(log.action)} ${_humanize(log.entityType)}',
+        style: AppTextStyles.body.copyWith(fontWeight: FontWeight.w500),
+      ),
+      subtitle: log.details != null
+          ? Text(log.details!, style: AppTextStyles.label, maxLines: 2,
+              overflow: TextOverflow.ellipsis)
+          : null,
+      trailing: Text(timeStr,
+          style: AppTextStyles.label
+              .copyWith(color: AppColors.textSecondary, fontSize: 11)),
+    );
+  }
+
+  String _formatRelative(DateTime dt) {
+    final diff = DateTime.now().difference(dt);
+    if (diff.inMinutes < 1) return 'just now';
+    if (diff.inHours < 1) return '${diff.inMinutes}m ago';
+    if (diff.inDays < 1) return '${diff.inHours}h ago';
+    if (diff.inDays < 7) return '${diff.inDays}d ago';
+    return '${dt.day}/${dt.month}/${dt.year}';
+  }
+
+  String _capitalize(String s) =>
+      s.isEmpty ? s : s[0].toUpperCase() + s.substring(1);
+
+  String _humanize(String s) {
+    // camelCase → space-separated
+    return s.replaceAllMapped(
+        RegExp(r'([A-Z])'), (m) => ' ${m.group(1)!.toLowerCase()}');
   }
 }

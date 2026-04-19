@@ -492,45 +492,28 @@ class _SupplierOrderCardState extends State<_SupplierOrderCard> {
   }
 
   Future<void> _markReceived(BuildContext context, SupplierOrder so) async {
-    // Confirm dialog
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Confirm Receipt'),
-        content: Text(
-          'Mark all ${so.items.length} item(s) from ${so.supplierName} as received?\n\n'
-          'This will update stock levels for:\n'
-          '${so.items.map((i) => "• ${i.productName}: +${i.quantity} units").join("\n")}',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('Cancel'),
-          ),
-          ElevatedButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            style: ElevatedButton.styleFrom(
-              backgroundColor: AppColors.success,
-              foregroundColor: Colors.white,
-            ),
-            child: const Text('Confirm Receipt'),
-          ),
-        ],
-      ),
-    );
-
-    if (confirmed != true || !mounted) return;
-
-    setState(() => _receiving = true);
+    // Capture context-dependent objects before any await
     final messenger = ScaffoldMessenger.of(context);
     final appState = context.read<AppState>();
+
+    // Show GRN dialog
+    final result = await showDialog<Map<String, int>>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => _GrnDialog(supplierOrder: so),
+    );
+
+    if (result == null || !mounted) return;
+
+    setState(() => _receiving = true);
     try {
-      await appState.receiveSupplierOrder(so.id);
+      await appState.receiveSupplierOrder(so.id, receivedQuantities: result);
       if (mounted) {
+        final totalUnits = result.values.fold(0, (a, b) => a + b);
         messenger.showSnackBar(
           SnackBar(
             content: Text(
-              'Received ${so.items.length} item(s) from ${so.supplierName}. Stock updated!',
+              'GRN recorded — $totalUnits units received from ${so.supplierName}. Stock updated!',
             ),
             backgroundColor: AppColors.success,
           ),
@@ -545,5 +528,188 @@ class _SupplierOrderCardState extends State<_SupplierOrderCard> {
     } finally {
       if (mounted) setState(() => _receiving = false);
     }
+  }
+}
+
+/// GRN (Goods Receipt Note) dialog — lets user confirm received quantities
+/// per line item before updating stock.
+class _GrnDialog extends StatefulWidget {
+  final SupplierOrder supplierOrder;
+  const _GrnDialog({required this.supplierOrder});
+
+  @override
+  State<_GrnDialog> createState() => _GrnDialogState();
+}
+
+class _GrnDialogState extends State<_GrnDialog> {
+  late final Map<String, TextEditingController> _controllers;
+
+  @override
+  void initState() {
+    super.initState();
+    _controllers = {
+      for (final item in widget.supplierOrder.items)
+        item.productId: TextEditingController(text: '${item.quantity}'),
+    };
+  }
+
+  @override
+  void dispose() {
+    for (final c in _controllers.values) {
+      c.dispose();
+    }
+    super.dispose();
+  }
+
+  Map<String, int> _build() {
+    final result = <String, int>{};
+    for (final item in widget.supplierOrder.items) {
+      final v = int.tryParse(_controllers[item.productId]?.text ?? '') ?? 0;
+      result[item.productId] = v;
+    }
+    return result;
+  }
+
+  bool get _isValid => widget.supplierOrder.items.every((item) {
+        final v = int.tryParse(_controllers[item.productId]?.text ?? '');
+        return v != null && v >= 0;
+      });
+
+  @override
+  Widget build(BuildContext context) {
+    final so = widget.supplierOrder;
+    return AlertDialog(
+      title: Row(
+        children: [
+          const Icon(Icons.assignment_turned_in, color: AppColors.success),
+          const SizedBox(width: 8),
+          const Text('Goods Receipt Note (GRN)'),
+        ],
+      ),
+      content: SizedBox(
+        width: 500,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Confirm received quantities from ${so.supplierName}. '
+              'Enter the actual quantities delivered — stock will be updated accordingly.',
+              style: TextStyle(color: AppColors.textSecondary, fontSize: 13),
+            ),
+            const SizedBox(height: 16),
+            Table(
+              columnWidths: const {
+                0: FlexColumnWidth(3),
+                1: FlexColumnWidth(1.5),
+                2: FlexColumnWidth(1.5),
+              },
+              children: [
+                TableRow(
+                  decoration: BoxDecoration(
+                    border: Border(
+                        bottom: BorderSide(color: AppColors.border)),
+                  ),
+                  children: [
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 8),
+                      child: Text('Product',
+                          style: TextStyle(
+                              fontWeight: FontWeight.bold, fontSize: 12,
+                              color: AppColors.textSecondary)),
+                    ),
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 8),
+                      child: Text('Ordered',
+                          style: TextStyle(
+                              fontWeight: FontWeight.bold, fontSize: 12,
+                              color: AppColors.textSecondary),
+                          textAlign: TextAlign.center),
+                    ),
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 8),
+                      child: Text('Received',
+                          style: TextStyle(
+                              fontWeight: FontWeight.bold, fontSize: 12,
+                              color: AppColors.textSecondary),
+                          textAlign: TextAlign.center),
+                    ),
+                  ],
+                ),
+                ...so.items.map((item) => TableRow(
+                      children: [
+                        Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 8),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(item.productName,
+                                  style: const TextStyle(
+                                      fontWeight: FontWeight.w500)),
+                              Text(item.sku,
+                                  style: TextStyle(
+                                      fontSize: 11,
+                                      color: AppColors.textSecondary)),
+                            ],
+                          ),
+                        ),
+                        Center(
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(vertical: 8),
+                            child: Text('${item.quantity}',
+                                style: TextStyle(
+                                    color: AppColors.textSecondary)),
+                          ),
+                        ),
+                        Padding(
+                          padding: const EdgeInsets.symmetric(
+                              vertical: 6, horizontal: 8),
+                          child: StatefulBuilder(
+                            builder: (ctx, setFieldState) => TextFormField(
+                              controller: _controllers[item.productId],
+                              keyboardType: TextInputType.number,
+                              textAlign: TextAlign.center,
+                              decoration: InputDecoration(
+                                isDense: true,
+                                contentPadding: const EdgeInsets.symmetric(
+                                    horizontal: 8, vertical: 6),
+                                border: const OutlineInputBorder(),
+                                errorStyle: const TextStyle(fontSize: 10),
+                                errorText: () {
+                                  final v = int.tryParse(
+                                      _controllers[item.productId]?.text ?? '');
+                                  if (v == null || v < 0) {
+                                    return '≥ 0';
+                                  }
+                                  return null;
+                                }(),
+                              ),
+                              onChanged: (_) => setState(() {}),
+                            ),
+                          ),
+                        ),
+                      ],
+                    )),
+              ],
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context, null),
+          child: const Text('Cancel'),
+        ),
+        ElevatedButton.icon(
+          onPressed: _isValid ? () => Navigator.pop(context, _build()) : null,
+          icon: const Icon(Icons.check, size: 16),
+          label: const Text('Confirm Receipt & Update Stock'),
+          style: ElevatedButton.styleFrom(
+            backgroundColor: AppColors.success,
+            foregroundColor: Colors.white,
+          ),
+        ),
+      ],
+    );
   }
 }

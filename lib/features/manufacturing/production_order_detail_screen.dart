@@ -322,6 +322,8 @@ class _ActionButtonsState extends State<_ActionButtons> {
   Future<void> _onAdvance(BuildContext context, ProductionOrderStatus nextStatus) async {
     final order = widget.order;
     final state = widget.state;
+    // Capture messenger before any awaits
+    final messenger = ScaffoldMessenger.of(context);
 
     // Confirmation dialog for starting production
     if (nextStatus == ProductionOrderStatus.inProduction) {
@@ -366,7 +368,7 @@ class _ActionButtonsState extends State<_ActionButtons> {
     }
 
     // Confirmation dialog for completing production
-    if (nextStatus == ProductionOrderStatus.completed) {
+    if (nextStatus == ProductionOrderStatus.completed && context.mounted) {
       final productName = state.products
           .where((p) => p.id == order.finalProductId)
           .firstOrNull
@@ -394,7 +396,6 @@ class _ActionButtonsState extends State<_ActionButtons> {
     }
 
     setState(() => _advancing = true);
-    final messenger = ScaffoldMessenger.of(context);
     try {
       await state.updateProductionOrderStatus(order, nextStatus);
       if (mounted) {

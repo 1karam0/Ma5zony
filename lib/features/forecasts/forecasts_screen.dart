@@ -150,6 +150,7 @@ class _ForecastsScreenState extends State<ForecastsScreen> {
                         onPressed: _running || _selectedProductId == null
                             ? null
                             : () async {
+                                final messenger = ScaffoldMessenger.of(context);
                                 setState(() => _running = true);
                                 try {
                                   await context
@@ -170,7 +171,7 @@ class _ForecastsScreenState extends State<ForecastsScreen> {
                                   );
                                 } catch (e) {
                                   if (mounted) {
-                                    ScaffoldMessenger.of(context).showSnackBar(
+                                    messenger.showSnackBar(
                                       SnackBar(
                                         content: Text(
                                           'Forecast failed: ${e.toString().replaceAll('Exception: ', '')}',

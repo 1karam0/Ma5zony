@@ -436,3 +436,58 @@ class DependencyBanner extends StatelessWidget {
   }
 }
 
+// ── AppToast ─────────────────────────────────────────────────────────────────
+
+enum AppToastType { success, error, warning, info }
+
+/// Unified toast helper. Replaces raw `ScaffoldMessenger.of(context).showSnackBar`.
+///
+/// Usage:
+/// ```dart
+/// AppToast.show(context, 'Product saved');
+/// AppToast.show(context, 'Failed: $e', type: AppToastType.error);
+/// ```
+class AppToast {
+  AppToast._();
+
+  static void show(
+    BuildContext context,
+    String message, {
+    AppToastType type = AppToastType.success,
+    Duration duration = const Duration(seconds: 3),
+  }) {
+    final (Color bg, IconData icon) = switch (type) {
+      AppToastType.success => (AppColors.success, Icons.check_circle_outline),
+      AppToastType.error => (AppColors.error, Icons.error_outline),
+      AppToastType.warning => (AppColors.warning, Icons.warning_amber_outlined),
+      AppToastType.info => (AppColors.primary, Icons.info_outline),
+    };
+
+    ScaffoldMessenger.of(context)
+      ..clearSnackBars()
+      ..showSnackBar(
+        SnackBar(
+          content: Row(
+            children: [
+              Icon(icon, color: Colors.white, size: 18),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  message,
+                  style: const TextStyle(color: Colors.white),
+                ),
+              ),
+            ],
+          ),
+          backgroundColor: bg,
+          duration: duration,
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(8),
+          ),
+          margin: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+        ),
+      );
+  }
+}
+

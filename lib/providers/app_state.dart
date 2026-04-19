@@ -1046,7 +1046,14 @@ class AppState extends ChangeNotifier {
   /// Mark a supplier order as received: update status, increment raw material
   /// stock for each line item, and auto-complete the parent purchase order if
   /// all supplier orders are done.
-  Future<void> receiveSupplierOrder(String supplierOrderId) async {
+  ///
+  /// [receivedQuantities] is an optional map of `productId → actualReceived`.
+  /// When provided, stock is incremented by the actual quantity; otherwise the
+  /// full ordered quantity is used.
+  Future<void> receiveSupplierOrder(
+    String supplierOrderId, {
+    Map<String, int>? receivedQuantities,
+  }) async {
     if (_repo == null || _currentUser == null) return;
 
     final soIdx = _supplierOrders.indexWhere((o) => o.id == supplierOrderId);
@@ -1061,13 +1068,20 @@ class AppState extends ChangeNotifier {
     for (final item in so.items) {
       final pIdx = _products.indexWhere((p) => p.id == item.productId);
       if (pIdx != -1) {
-        _products[pIdx].currentStock += item.quantity;
+        final qty = receivedQuantities?[item.productId] ?? item.quantity;
+        _products[pIdx].currentStock += qty;
         await _repo!.updateProduct(_products[pIdx]);
       }
     }
 
     // 3. Log the receipt
     final logId = '${supplierOrderId}_received_${DateTime.now().millisecondsSinceEpoch}';
+    final qtyDesc = receivedQuantities != null
+        ? so.items
+            .map((i) =>
+                '${i.productName}: +${receivedQuantities[i.productId] ?? i.quantity}')
+            .join(', ')
+        : so.items.map((i) => '${i.productName}: +${i.quantity}').join(', ');
     await _repo!.addWorkflowLog(WorkflowLog(
       id: logId,
       entityType: 'supplierOrder',
@@ -1075,8 +1089,7 @@ class AppState extends ChangeNotifier {
       action: 'received',
       performedBy: _currentUser!.uid,
       timestamp: DateTime.now(),
-      details: 'Received ${so.items.length} item(s) from ${so.supplierName}. '
-          'Stock updated for ${so.items.map((i) => i.productName).join(", ")}.',
+      details: 'GRN — received from ${so.supplierName}. $qtyDesc.',
     ));
 
     // 4. Check if all supplier orders for this purchase order are delivered
