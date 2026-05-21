@@ -25,6 +25,8 @@ class _ReplenishmentScreenState extends State<ReplenishmentScreen> {
   final Set<String> _selectedIds = {};
   bool _selectAll = false;
   bool _sortByPriority = true;
+  final Map<String, bool> _approving = {};
+  bool _bulkApproving = false;
 
   void _exportCsv(
     BuildContext context,
@@ -102,60 +104,115 @@ class _ReplenishmentScreenState extends State<ReplenishmentScreen> {
       );
     }
     final isManufacture = product?.manufacturerId != null && product!.manufacturerId!.isNotEmpty;
+    final isApproving = _approving[r.productId] == true;
     return TextButton(
-      onPressed: () async {
-        final adjustedRec = _adjustedQty.containsKey(r.productId)
-            ? r.copyWith(suggestedOrderQty: _adjustedQty[r.productId])
-            : r;
-        await context.read<AppState>().approveRecommendation(adjustedRec);
-        if (context.mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('${isManufacture ? "Manufacturing" : "Purchase"} order for ${r.productName} approved!')),
-          );
-          if (isManufacture) {
-            context.go('/recommendations');
-          }
-        }
-      },
-      child: Text(isManufacture ? 'Manufacture' : 'Approve'),
+      onPressed: isApproving
+          ? null
+          : () => _approveSingle(context, r, isManufacture),
+      child: isApproving
+          ? const SizedBox(
+              width: 16,
+              height: 16,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            )
+          : Text(isManufacture ? 'Manufacture' : 'Approve'),
     );
   }
 
-  Future<void> _approveSelected(BuildContext context, List<ReplenishmentRecommendation> recs, Map<String, Product> productMap) async {
+  Future<void> _approveSingle(
+    BuildContext context,
+    ReplenishmentRecommendation r,
+    bool isManufacture,
+  ) async {
+    setState(() => _approving[r.productId] = true);
+    // Capture before any await.
     final state = context.read<AppState>();
     final messenger = ScaffoldMessenger.of(context);
-    int purchaseCount = 0;
-    int mfgCount = 0;
-    for (final r in recs) {
-      if (!_selectedIds.contains(r.productId)) continue;
-      if (state.approvedRecommendations.contains(r.productId)) continue;
+    final navigator = GoRouter.of(context);
+    try {
       final adjustedRec = _adjustedQty.containsKey(r.productId)
           ? r.copyWith(suggestedOrderQty: _adjustedQty[r.productId])
           : r;
       await state.approveRecommendation(adjustedRec);
-      final product = productMap[r.productId];
-      final isManufacture = product?.manufacturerId != null && product!.manufacturerId!.isNotEmpty;
+      final count = state.lastApprovalEmailsSent;
+      final emailNote = count > 0
+          ? ' — $count email${count == 1 ? '' : 's'} sent'
+          : ' (no supplier email on file)';
+      messenger.showSnackBar(SnackBar(
+        content: Text('${r.productName} approved$emailNote'),
+        backgroundColor: AppColors.success,
+      ));
       if (isManufacture) {
-        mfgCount++;
+        navigator.go('/recommendations');
       } else {
-        purchaseCount++;
+        navigator.go('/orders');
       }
+    } on CloudFunctionException catch (e) {
+      messenger.showSnackBar(SnackBar(
+        content: Text('Order created but email delivery failed: ${e.message}'),
+        backgroundColor: AppColors.warning,
+        duration: const Duration(seconds: 6),
+      ));
+    } catch (e) {
+      messenger.showSnackBar(SnackBar(
+        content: Text('Error: $e'),
+        backgroundColor: AppColors.error,
+      ));
+    } finally {
+      if (mounted) setState(() => _approving.remove(r.productId));
     }
-    if (!context.mounted) return;
-    final parts = <String>[];
-    if (purchaseCount > 0) parts.add('$purchaseCount purchase');
-    if (mfgCount > 0) parts.add('$mfgCount manufacturing');
-    messenger.showSnackBar(
-      SnackBar(content: Text('${parts.join(", ")} order(s) approved')),
-    );
-    setState(() {
-      _selectedIds.clear();
-      _selectAll = false;
-    });
-    if (purchaseCount > 0) {
-      context.go('/orders/create');
-    } else if (mfgCount > 0) {
-      context.go('/recommendations');
+  }
+
+  Future<void> _approveSelected(BuildContext context, List<ReplenishmentRecommendation> recs, Map<String, Product> productMap) async {
+    setState(() => _bulkApproving = true);
+    final state = context.read<AppState>();
+    final messenger = ScaffoldMessenger.of(context);
+    final navigator = GoRouter.of(context);
+    int purchaseCount = 0;
+    int mfgCount = 0;
+    int emailsFailed = 0;
+    try {
+      for (final r in recs) {
+        if (!_selectedIds.contains(r.productId)) continue;
+        if (state.approvedRecommendations.contains(r.productId)) continue;
+        final adjustedRec = _adjustedQty.containsKey(r.productId)
+            ? r.copyWith(suggestedOrderQty: _adjustedQty[r.productId])
+            : r;
+        try {
+          await state.approveRecommendation(adjustedRec);
+        } on CloudFunctionException {
+          emailsFailed++;
+        }
+        final product = productMap[r.productId];
+        final isManufacture = product?.manufacturerId != null && product!.manufacturerId!.isNotEmpty;
+        if (isManufacture) {
+          mfgCount++;
+        } else {
+          purchaseCount++;
+        }
+      }
+      if (!mounted) return;
+      final parts = <String>[];
+      if (purchaseCount > 0) parts.add('$purchaseCount purchase');
+      if (mfgCount > 0) parts.add('$mfgCount manufacturing');
+      final failNote = emailsFailed > 0
+          ? ' ($emailsFailed email failure${emailsFailed == 1 ? '' : 's'})'
+          : '';
+      messenger.showSnackBar(SnackBar(
+        content: Text('${parts.join(", ")} order(s) approved$failNote'),
+        backgroundColor: emailsFailed > 0 ? AppColors.warning : AppColors.success,
+      ));
+      setState(() {
+        _selectedIds.clear();
+        _selectAll = false;
+      });
+      if (mfgCount > 0) {
+        navigator.go('/recommendations');
+      } else if (purchaseCount > 0) {
+        navigator.go('/orders');
+      }
+    } finally {
+      if (mounted) setState(() => _bulkApproving = false);
     }
   }
 
@@ -230,7 +287,7 @@ class _ReplenishmentScreenState extends State<ReplenishmentScreen> {
               Expanded(
                 child: KPICard(
                   title: 'Est. Order Cost',
-                  value: '\$${estimatedCost.toStringAsFixed(0)}',
+                  value: 'EGP ${estimatedCost.toStringAsFixed(0)}',
                   icon: Icons.attach_money,
                 ),
               ),
@@ -322,9 +379,20 @@ class _ReplenishmentScreenState extends State<ReplenishmentScreen> {
                         const Spacer(),
                         if (_selectedIds.isNotEmpty)
                           ElevatedButton.icon(
-                            onPressed: () => _approveSelected(context, recommendations, productMap),
-                            icon: const Icon(Icons.check_circle),
-                            label: Text('Approve ${_selectedIds.length} & Create Order'),
+                            onPressed: _bulkApproving
+                                ? null
+                                : () => _approveSelected(context, recommendations, productMap),
+                            icon: _bulkApproving
+                                ? const SizedBox(
+                                    width: 16,
+                                    height: 16,
+                                    child: CircularProgressIndicator(
+                                        strokeWidth: 2, color: Colors.white),
+                                  )
+                                : const Icon(Icons.check_circle),
+                            label: Text(_bulkApproving
+                                ? 'Approving…'
+                                : 'Approve ${_selectedIds.length} & Create Order'),
                             style: ElevatedButton.styleFrom(
                               backgroundColor: AppColors.success,
                               foregroundColor: Colors.white,
@@ -354,20 +422,19 @@ class _ReplenishmentScreenState extends State<ReplenishmentScreen> {
                             ],
                           ),
                         )
-                      : SizedBox(
-                          width: double.infinity,
+                      : HorizontallyScrollableTable(
                           child: DataTable(
-                            columns: const [
-                              DataColumn(label: SizedBox(width: 24)),
-                              DataColumn(label: Text('Product')),
-                              DataColumn(label: Text('Type')),
-                              DataColumn(label: Text('Stock')),
-                              DataColumn(label: Text('Forecast')),
-                              DataColumn(label: Text('ROP')),
-                              DataColumn(label: Text('Order Qty')),
-                              DataColumn(label: Text('Est. Arrival')),
-                              DataColumn(label: Text('Status')),
-                              DataColumn(label: Text('Action')),
+                            columns: [
+                              const DataColumn(label: SizedBox(width: 24)),
+                              DataColumn(label: Text('PRODUCT', style: AppTextStyles.tableHeader)),
+                              DataColumn(label: Text('TYPE', style: AppTextStyles.tableHeader)),
+                              DataColumn(label: Text('STOCK', style: AppTextStyles.tableHeader), numeric: true),
+                              DataColumn(label: Text('FORECAST', style: AppTextStyles.tableHeader), numeric: true),
+                              DataColumn(label: Text('ROP', style: AppTextStyles.tableHeader), numeric: true),
+                              DataColumn(label: Text('ORDER QTY', style: AppTextStyles.tableHeader), numeric: true),
+                              DataColumn(label: Text('EST. ARRIVAL', style: AppTextStyles.tableHeader)),
+                              DataColumn(label: Text('STATUS', style: AppTextStyles.tableHeader)),
+                              DataColumn(label: Text('ACTION', style: AppTextStyles.tableHeader)),
                             ],
                             rows: recommendations.map((r) {
                               final product = productMap[r.productId];
@@ -379,6 +446,7 @@ class _ReplenishmentScreenState extends State<ReplenishmentScreen> {
                                   ? ((adjustedVal - r.suggestedOrderQty) / r.suggestedOrderQty * 100).round()
                                   : 0;
                               return DataRow(
+                                color: AppColors.dataRowColor,
                                 selected: isSelected,
                                 cells: [
                                   DataCell(

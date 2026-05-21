@@ -69,13 +69,17 @@ class _GlobalParametersTab extends StatefulWidget {
 class _GlobalParametersTabState extends State<_GlobalParametersTab> {
   late TextEditingController _serviceLevelCtrl;
   late TextEditingController _leadTimeCtrl;
+  late TextEditingController _orderingCostCtrl;
+  late TextEditingController _holdingRateCtrl;
   String? _planningBucket;
   bool _initialized = false;
 
   void _initFromSettings(UserSettings s) {
     if (_initialized) return;
-    _serviceLevelCtrl = TextEditingController(text: '${s.serviceLevelTarget}');
+    _serviceLevelCtrl = TextEditingController(text: '${s.serviceLevelTarget.toInt()}');
     _leadTimeCtrl = TextEditingController(text: '${s.defaultLeadTimeDays}');
+    _orderingCostCtrl = TextEditingController(text: s.orderingCost.toStringAsFixed(0));
+    _holdingRateCtrl = TextEditingController(text: (s.holdingRate * 100).toStringAsFixed(0));
     _planningBucket = s.planningTimeBucket;
     _initialized = true;
   }
@@ -85,6 +89,8 @@ class _GlobalParametersTabState extends State<_GlobalParametersTab> {
     if (_initialized) {
       _serviceLevelCtrl.dispose();
       _leadTimeCtrl.dispose();
+      _orderingCostCtrl.dispose();
+      _holdingRateCtrl.dispose();
     }
     super.dispose();
   }
@@ -97,80 +103,162 @@ class _GlobalParametersTabState extends State<_GlobalParametersTab> {
     return SingleChildScrollView(
       padding: const EdgeInsets.all(24),
       child: SizedBox(
-        width: 600,
-        child: Card(
-          elevation: 2,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(12),
-          ),
-          child: Padding(
-            padding: const EdgeInsets.all(24.0),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text('Inventory Policies', style: AppTextStyles.h3),
-                const SizedBox(height: 24),
-                TextFormField(
-                  controller: _serviceLevelCtrl,
-                  decoration: const InputDecoration(
-                    labelText: 'Service Level Target (%)',
-                    border: OutlineInputBorder(),
-                  ),
-                  keyboardType: TextInputType.number,
-                ),
-                const SizedBox(height: 16),
-                TextFormField(
-                  controller: _leadTimeCtrl,
-                  decoration: const InputDecoration(
-                    labelText: 'Default Lead Time (Days)',
-                    border: OutlineInputBorder(),
-                  ),
-                  keyboardType: TextInputType.number,
-                ),
-                const SizedBox(height: 16),
-                DropdownButtonFormField<String>(
-                  initialValue: _planningBucket,
-                  decoration: const InputDecoration(
-                    labelText: 'Planning Time Bucket',
-                    border: OutlineInputBorder(),
-                  ),
-                  items: const [
-                    DropdownMenuItem(value: 'Daily', child: Text('Daily')),
-                    DropdownMenuItem(value: 'Weekly', child: Text('Weekly')),
-                    DropdownMenuItem(value: 'Monthly', child: Text('Monthly')),
-                  ],
-                  onChanged: (v) => setState(() => _planningBucket = v),
-                ),
-                const SizedBox(height: 32),
-                SizedBox(
-                  width: double.infinity,
-                  child: ElevatedButton(
-                    onPressed: () async {
-                      final appState = context.read<AppState>();
-                      final updated = appState.settings.copyWith(
-                        serviceLevelTarget:
-                            double.tryParse(_serviceLevelCtrl.text),
-                        defaultLeadTimeDays:
-                            int.tryParse(_leadTimeCtrl.text),
-                        planningTimeBucket: _planningBucket,
-                      );
-                      await appState.saveSettings(updated);
-                      if (context.mounted) {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(content: Text('Settings saved')),
-                        );
-                      }
-                    },
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: AppColors.primary,
-                      foregroundColor: Colors.white,
+        width: 640,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // ── Service Level & Lead Time ──────────────────────────────
+            Card(
+              elevation: 2,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              child: Padding(
+                padding: const EdgeInsets.all(24.0),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        const Icon(Icons.policy, color: AppColors.primary, size: 20),
+                        const SizedBox(width: 8),
+                        Text('Inventory Policies', style: AppTextStyles.h3),
+                      ],
                     ),
-                    child: const Text('Save Changes'),
-                  ),
+                    const SizedBox(height: 6),
+                    Text(
+                      'These values control Safety Stock (Z-score) and EOQ calculations across all products.',
+                      style: AppTextStyles.bodySmall.copyWith(color: AppColors.textSecondary),
+                    ),
+                    const SizedBox(height: 20),
+                    TextFormField(
+                      controller: _serviceLevelCtrl,
+                      decoration: const InputDecoration(
+                        labelText: 'Service Level Target (%)',
+                        border: OutlineInputBorder(),
+                        hintText: '95',
+                        helperText: '90% → Z=1.28  |  95% → Z=1.65  |  99% → Z=2.33',
+                        prefixIcon: Icon(Icons.verified_outlined),
+                      ),
+                      keyboardType: TextInputType.number,
+                    ),
+                    const SizedBox(height: 16),
+                    TextFormField(
+                      controller: _leadTimeCtrl,
+                      decoration: const InputDecoration(
+                        labelText: 'Default Lead Time (days)',
+                        border: OutlineInputBorder(),
+                        hintText: '7',
+                        helperText: 'Used when a product or supplier has no lead time set.',
+                        prefixIcon: Icon(Icons.schedule_outlined),
+                      ),
+                      keyboardType: TextInputType.number,
+                    ),
+                    const SizedBox(height: 16),
+                    DropdownButtonFormField<String>(
+                      initialValue: _planningBucket,
+                      decoration: const InputDecoration(
+                        labelText: 'Planning Time Bucket',
+                        border: OutlineInputBorder(),
+                        prefixIcon: Icon(Icons.calendar_month_outlined),
+                      ),
+                      items: const [
+                        DropdownMenuItem(value: 'Daily', child: Text('Daily')),
+                        DropdownMenuItem(value: 'Weekly', child: Text('Weekly')),
+                        DropdownMenuItem(value: 'Monthly', child: Text('Monthly')),
+                      ],
+                      onChanged: (v) => setState(() => _planningBucket = v),
+                    ),
+                  ],
                 ),
-              ],
+              ),
             ),
-          ),
+
+            const SizedBox(height: 20),
+
+            // ── EOQ Parameters ─────────────────────────────────────────
+            Card(
+              elevation: 2,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              child: Padding(
+                padding: const EdgeInsets.all(24.0),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        const Icon(Icons.calculate, color: AppColors.warning, size: 20),
+                        const SizedBox(width: 8),
+                        Text('EOQ Parameters', style: AppTextStyles.h3),
+                      ],
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      'Used in the EOQ formula: EOQ = √(2 × D × S / H). '
+                      'Ordering cost (S) and holding rate apply to all products unless overridden.',
+                      style: AppTextStyles.bodySmall.copyWith(color: AppColors.textSecondary),
+                    ),
+                    const SizedBox(height: 20),
+                    TextFormField(
+                      controller: _orderingCostCtrl,
+                      decoration: const InputDecoration(
+                        labelText: 'Ordering Cost per Order (\$)',
+                        border: OutlineInputBorder(),
+                        hintText: '250',
+                        helperText: 'Fixed cost each time you place a purchase order (S in EOQ).',
+                        prefixIcon: Icon(Icons.receipt_outlined),
+                        prefixText: 'EGP ',
+                      ),
+                      keyboardType: TextInputType.number,
+                    ),
+                    const SizedBox(height: 16),
+                    TextFormField(
+                      controller: _holdingRateCtrl,
+                      decoration: const InputDecoration(
+                        labelText: 'Annual Holding Rate (% of unit cost)',
+                        border: OutlineInputBorder(),
+                        hintText: '20',
+                        helperText: 'Annual cost to hold 1 unit = unit cost × rate (H in EOQ). Typically 20–30%.',
+                        prefixIcon: Icon(Icons.warehouse_outlined),
+                        suffixText: '%',
+                      ),
+                      keyboardType: TextInputType.number,
+                    ),
+                  ],
+                ),
+              ),
+            ),
+
+            const SizedBox(height: 24),
+
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton.icon(
+                onPressed: () async {
+                  final appState = context.read<AppState>();
+                  final holdingRateParsed = double.tryParse(_holdingRateCtrl.text);
+                  final updated = appState.settings.copyWith(
+                    serviceLevelTarget: double.tryParse(_serviceLevelCtrl.text),
+                    defaultLeadTimeDays: int.tryParse(_leadTimeCtrl.text),
+                    planningTimeBucket: _planningBucket,
+                    orderingCost: double.tryParse(_orderingCostCtrl.text),
+                    holdingRate: holdingRateParsed != null ? holdingRateParsed / 100 : null,
+                  );
+                  await appState.saveSettings(updated);
+                  if (context.mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('Settings saved')),
+                    );
+                  }
+                },
+                icon: const Icon(Icons.save),
+                label: const Text('Save Changes'),
+                style: ElevatedButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(vertical: 14),
+                  backgroundColor: AppColors.primary,
+                  foregroundColor: Colors.white,
+                ),
+              ),
+            ),
+          ],
         ),
       ),
     );
@@ -586,6 +674,38 @@ class _PreferencesTab extends StatelessWidget {
                       ),
                       value: isDark,
                       onChanged: (_) => state.toggleTheme(),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(height: 24),
+
+            // Onboarding card
+            Card(
+              elevation: 2,
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12)),
+              child: Padding(
+                padding: const EdgeInsets.all(24),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('Onboarding', style: AppTextStyles.h3),
+                    const SizedBox(height: 8),
+                    Text(
+                      'Re-open the setup wizard to add suppliers, products, warehouses, or import demand data.',
+                      style: AppTextStyles.body
+                          .copyWith(color: AppColors.textSecondary),
+                    ),
+                    const SizedBox(height: 16),
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: ElevatedButton.icon(
+                        onPressed: () => context.go('/setup'),
+                        icon: const Icon(Icons.auto_awesome),
+                        label: const Text('Open Setup Wizard'),
+                      ),
                     ),
                   ],
                 ),

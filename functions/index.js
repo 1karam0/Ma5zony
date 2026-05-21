@@ -24,9 +24,37 @@ const SHOPIFY_API_KEY = defineSecret("SHOPIFY_API_KEY");
 const SHOPIFY_API_SECRET = defineSecret("SHOPIFY_API_SECRET");
 
 /** Shopify API version — override with SHOPIFY_API_VERSION env var. */
-const SHOPIFY_API_VERSION = process.env.SHOPIFY_API_VERSION || "2025-01";
+const SHOPIFY_API_VERSION = process.env.SHOPIFY_API_VERSION || "2025-04";
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
+
+/** Execute a Shopify GraphQL Admin API query. */
+async function shopifyGraphQL(shopDomain, accessToken, query, variables = {}) {
+  const postData = JSON.stringify({ query, variables });
+  const result = await httpsRequest(
+    {
+      hostname: shopDomain,
+      path: `/admin/api/${SHOPIFY_API_VERSION}/graphql.json`,
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Shopify-Access-Token": accessToken,
+        "Content-Length": Buffer.byteLength(postData),
+      },
+    },
+    postData
+  );
+
+  if (result.statusCode !== 200) {
+    throw new Error(`Shopify GraphQL error: HTTP ${result.statusCode}`);
+  }
+
+  const parsed = JSON.parse(result.body);
+  if (parsed.errors && parsed.errors.length > 0) {
+    throw new Error(`Shopify GraphQL error: ${parsed.errors[0].message}`);
+  }
+  return parsed.data;
+}
 
 /** Promisified HTTPS request helper (no external deps). */
 function httpsRequest(options, postData) {
@@ -66,9 +94,10 @@ const ALLOWED_ORIGINS = [..._productionOrigins, ..._extraOrigins];
 /** Set CORS headers and handle preflight. Returns true if preflight handled. */
 function handleCors(req, res) {
   const origin = req.headers.origin || "";
-  const isDev = process.env.NODE_ENV !== "production";
-  const isLocalhostInDev = isDev && /^http:\/\/localhost(:\d+)?$/.test(origin);
-  if (ALLOWED_ORIGINS.includes(origin) || isLocalhostInDev) {
+  // Always allow localhost for local development (all ports).
+  // All endpoints still require a valid Firebase Auth token, so this is safe.
+  const isLocalhost = /^http:\/\/localhost(:\d+)?$/.test(origin);
+  if (ALLOWED_ORIGINS.includes(origin) || isLocalhost) {
     res.set("Access-Control-Allow-Origin", origin);
   } else {
     res.set("Access-Control-Allow-Origin", ALLOWED_ORIGINS[0]);
@@ -253,7 +282,7 @@ exports.shopifyOAuthCallback = onRequest(
   }
 );
 
-// ── 3. shopifyImportProducts ─────────────────────────────────────────────────
+// ── 3. shopifyImportProducts (GraphQL) ───────────────────────────────────────
 
 exports.shopifyImportProducts = onRequest(
   { secrets: [SHOPIFY_API_KEY, SHOPIFY_API_SECRET] },
@@ -277,59 +306,98 @@ exports.shopifyImportProducts = onRequest(
 
     const { shopDomain, accessToken } = connDoc.data();
 
-    const prodRes = await httpsRequest({
-      hostname: shopDomain,
-      path: `/admin/api/${SHOPIFY_API_VERSION}/products.json?limit=250`,
-      method: "GET",
-      headers: { "X-Shopify-Access-Token": accessToken },
-    });
-
-    if (prodRes.statusCode !== 200) {
-      res.status(502).json({ error: "Shopify API error fetching products." });
-      return;
-    }
-
-    const { products } = JSON.parse(prodRes.body);
-    const imported = [];
-
-    const batch = db.batch();
-    for (const sp of products) {
-      // Import each variant as a separate SKU so multi-variant products
-      // are fully represented (e.g. a T-shirt in S/M/L becomes 3 products).
-      const variants = sp.variants && sp.variants.length > 0 ? sp.variants : [{}];
-      for (const variant of variants) {
-        const variantSuffix = variants.length > 1 ? `_${variant.id || variant.title || 'var'}` : '';
-        const docId = `shopify_${sp.id}${variantSuffix}`;
-        const docData = {
-          sku: variant.sku || `SHOP-${sp.id}${variantSuffix}`,
-          name: variants.length > 1
-            ? `${sp.title} — ${variant.title || variant.option1 || ''}`
-            : sp.title,
-          category: sp.product_type || "Uncategorised",
-          unitCost: parseFloat(variant.price) || 0,
-          currentStock: variant.inventory_quantity ?? 0,
-          supplierId: null,
-          isActive: sp.status === "active",
-          shopifyProductId: String(sp.id),
-          shopifyVariantId: variant.id ? String(variant.id) : null,
-        };
-
-        const ref = db
-          .collection("users")
-          .doc(uid)
-          .collection("products")
-          .doc(docId);
-        batch.set(ref, docData, { merge: true });
-        imported.push({ id: ref.id, ...docData });
+    // GraphQL query with cursor-based pagination
+    const PRODUCTS_QUERY = `
+      query FetchProducts($cursor: String) {
+        products(first: 100, after: $cursor) {
+          pageInfo { hasNextPage endCursor }
+          edges {
+            node {
+              id
+              title
+              productType
+              status
+              variants(first: 50) {
+                edges {
+                  node {
+                    id
+                    title
+                    sku
+                    price
+                    inventoryQuantity
+                  }
+                }
+              }
+            }
+          }
+        }
       }
-    }
-    await batch.commit();
+    `;
 
-    res.json({ result: { count: imported.length, products: imported } });
+    try {
+      const imported = [];
+      const batch = db.batch();
+      let cursor = null;
+      let hasNextPage = true;
+
+      while (hasNextPage) {
+        const data = await shopifyGraphQL(
+          shopDomain,
+          accessToken,
+          PRODUCTS_QUERY,
+          { cursor }
+        );
+
+        const { edges, pageInfo } = data.products;
+        hasNextPage = pageInfo.hasNextPage;
+        cursor = pageInfo.endCursor;
+
+        for (const { node: sp } of edges) {
+          // Extract numeric ID from Shopify GID (e.g. "gid://shopify/Product/123" → "123")
+          const shopifyId = sp.id.split("/").pop();
+          const variants = sp.variants.edges.map((e) => e.node);
+          const multiVariant = variants.length > 1;
+
+          for (const variant of variants) {
+            const variantId = variant.id.split("/").pop();
+            const variantSuffix = multiVariant ? `_${variantId}` : "";
+            const docId = `shopify_${shopifyId}${variantSuffix}`;
+
+            const docData = {
+              sku: variant.sku || `SHOP-${shopifyId}${variantSuffix}`,
+              name: multiVariant
+                ? `${sp.title} — ${variant.title || ""}`
+                : sp.title,
+              category: sp.productType || "Uncategorised",
+              unitCost: parseFloat(variant.price) || 0,
+              currentStock: variant.inventoryQuantity ?? 0,
+              supplierId: null,
+              isActive: sp.status === "ACTIVE",
+              shopifyProductId: shopifyId,
+              shopifyVariantId: variantId,
+            };
+
+            const ref = db
+              .collection("users")
+              .doc(uid)
+              .collection("products")
+              .doc(docId);
+            batch.set(ref, docData, { merge: true });
+            imported.push({ id: ref.id, ...docData });
+          }
+        }
+      }
+
+      await batch.commit();
+      res.json({ result: { count: imported.length, products: imported } });
+    } catch (err) {
+      console.error("shopifyImportProducts error:", err);
+      res.status(502).json({ error: err.message || "Shopify API error fetching products." });
+    }
   }
 );
 
-// ── 4. shopifySyncInventory ──────────────────────────────────────────────────
+// ── 4. shopifySyncInventory (GraphQL) ────────────────────────────────────────
 
 exports.shopifySyncStock = onRequest(
   { secrets: [SHOPIFY_API_KEY, SHOPIFY_API_SECRET] },
@@ -353,46 +421,74 @@ exports.shopifySyncStock = onRequest(
 
     const { shopDomain, accessToken } = connDoc.data();
 
-    const prodRes = await httpsRequest({
-      hostname: shopDomain,
-      path: `/admin/api/${SHOPIFY_API_VERSION}/products.json?limit=250&fields=id,variants`,
-      method: "GET",
-      headers: { "X-Shopify-Access-Token": accessToken },
-    });
+    const SYNC_QUERY = `
+      query SyncInventory($cursor: String) {
+        products(first: 100, after: $cursor) {
+          pageInfo { hasNextPage endCursor }
+          edges {
+            node {
+              id
+              variants(first: 50) {
+                edges {
+                  node {
+                    id
+                    inventoryQuantity
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    `;
 
-    if (prodRes.statusCode !== 200) {
-      res.status(502).json({ error: "Shopify API error." });
-      return;
-    }
+    try {
+      const batch = db.batch();
+      let synced = 0;
+      let cursor = null;
+      let hasNextPage = true;
 
-    const { products } = JSON.parse(prodRes.body);
-    const batch = db.batch();
-    let synced = 0;
+      while (hasNextPage) {
+        const data = await shopifyGraphQL(shopDomain, accessToken, SYNC_QUERY, { cursor });
+        const { edges, pageInfo } = data.products;
+        hasNextPage = pageInfo.hasNextPage;
+        cursor = pageInfo.endCursor;
 
-    for (const sp of products) {
-      const variant = sp.variants?.[0];
-      if (!variant) continue;
+        for (const { node: sp } of edges) {
+          const shopifyId = sp.id.split("/").pop();
+          const variants = sp.variants.edges.map((e) => e.node);
+          const multiVariant = variants.length > 1;
 
-      const ref = db
+          for (const variant of variants) {
+            const variantId = variant.id.split("/").pop();
+            const variantSuffix = multiVariant ? `_${variantId}` : "";
+            const ref = db
+              .collection("users")
+              .doc(uid)
+              .collection("products")
+              .doc(`shopify_${shopifyId}${variantSuffix}`);
+            batch.set(ref, {
+              currentStock: variant.inventoryQuantity ?? 0,
+            }, { merge: true });
+            synced++;
+          }
+        }
+      }
+
+      await batch.commit();
+
+      await db
         .collection("users")
         .doc(uid)
-        .collection("products")
-        .doc(`shopify_${sp.id}`);
-      batch.set(ref, {
-        currentStock: variant.inventory_quantity ?? 0,
-      }, { merge: true });
-      synced++;
+        .collection("shopify")
+        .doc("connection")
+        .update({ lastSyncAt: admin.firestore.FieldValue.serverTimestamp() });
+
+      res.json({ result: { synced } });
+    } catch (err) {
+      console.error("shopifySyncStock error:", err);
+      res.status(502).json({ error: err.message || "Shopify API error." });
     }
-    await batch.commit();
-
-    await db
-      .collection("users")
-      .doc(uid)
-      .collection("shopify")
-      .doc("connection")
-      .update({ lastSyncAt: admin.firestore.FieldValue.serverTimestamp() });
-
-    res.json({ result: { synced } });
   }
 );
 
@@ -414,8 +510,9 @@ exports.shopifyDisconnectStore = onRequest(async (req, res) => {
   res.json({ result: { success: true } });
 });
 
-// ── 6. shopifyImportOrders ───────────────────────────────────────────────────
-// Fetches order history from Shopify and writes demand records to Firestore.
+// ── 6. shopifyImportOrders (GraphQL) ─────────────────────────────────────────
+// Fetches order history from Shopify using GraphQL and writes demand records
+// to Firestore, aggregated into monthly buckets per product.
 
 exports.shopifyImportOrders = onRequest(
   { secrets: [SHOPIFY_API_KEY, SHOPIFY_API_SECRET] },
@@ -439,127 +536,132 @@ exports.shopifyImportOrders = onRequest(
 
     const { shopDomain, accessToken } = connDoc.data();
 
-    // Paginate through all orders (max 50 pages = 12,500 orders as a safety guard)
-    const MAX_PAGES = 50;
-    let allOrders = [];
-    let nextPageUrl = `/admin/api/${SHOPIFY_API_VERSION}/orders.json?limit=250&status=any`;
-    let pageCount = 0;
-
-    while (nextPageUrl && pageCount < MAX_PAGES) {
-      pageCount++;
-      const orderRes = await httpsRequest({
-        hostname: shopDomain,
-        path: nextPageUrl,
-        method: "GET",
-        headers: { "X-Shopify-Access-Token": accessToken },
-      });
-
-      if (orderRes.statusCode !== 200) {
-        res.status(502).json({ error: "Shopify API error fetching orders." });
-        return;
-      }
-
-      let parsed;
-      try {
-        parsed = JSON.parse(orderRes.body);
-      } catch {
-        res.status(502).json({ error: "Invalid JSON from Shopify orders API." });
-        return;
-      }
-      allOrders = allOrders.concat(parsed.orders || []);
-
-      // Shopify REST cursor-based pagination via Link header.
-      if (!parsed.orders || parsed.orders.length < 250) {
-        nextPageUrl = null;
-      } else {
-        const linkHeader = orderRes.headers && orderRes.headers.link;
-        if (linkHeader) {
-          try {
-            const nextMatch = linkHeader.match(/<([^>]+)>;\s*rel="next"/);
-            if (nextMatch) {
-              const nextUrl = new URL(nextMatch[1]);
-              nextPageUrl = nextUrl.pathname + nextUrl.search;
-            } else {
-              nextPageUrl = null;
+    const ORDERS_QUERY = `
+      query FetchOrders($cursor: String) {
+        orders(first: 100, after: $cursor) {
+          pageInfo { hasNextPage endCursor }
+          edges {
+            node {
+              id
+              createdAt
+              lineItems(first: 50) {
+                edges {
+                  node {
+                    quantity
+                    product { id }
+                    variant { id }
+                  }
+                }
+              }
             }
-          } catch {
-            // If Link header parsing fails, stop paginating safely
-            nextPageUrl = null;
           }
-        } else {
-          nextPageUrl = null;
         }
       }
-    }
+    `;
 
-    // Deduplicate: check which Shopify order IDs already exist
-    const existingSnap = await db
-      .collection("users")
-      .doc(uid)
-      .collection("demandRecords")
-      .where("source", "==", "shopify")
-      .get();
+    try {
+      console.log(`shopifyImportOrders: starting for shop=${shopDomain}`);
+      // Collect all line items from orders
+      const lineItems = []; // { shopifyProductId, shopifyVariantId, quantity, orderDate }
+      let cursor = null;
+      let hasNextPage = true;
+      let totalOrders = 0;
+      const MAX_PAGES = 50;
+      let page = 0;
 
-    const existingOrderIds = new Set(
-      existingSnap.docs
-        .map((d) => d.data().shopifyOrderId)
-        .filter(Boolean)
-    );
+      while (hasNextPage && page < MAX_PAGES) {
+        page++;
+        const data = await shopifyGraphQL(shopDomain, accessToken, ORDERS_QUERY, { cursor });
+        if (!data || !data.orders) {
+          console.error("shopifyImportOrders: unexpected response structure", JSON.stringify(data));
+          throw new Error("Unexpected response from Shopify orders API");
+        }
+        const { edges, pageInfo } = data.orders;
+        hasNextPage = pageInfo.hasNextPage;
+        cursor = pageInfo.endCursor;
 
-    // Map line items to demand records
-    const batch = db.batch();
-    let imported = 0;
+        for (const { node: order } of edges) {
+          totalOrders++;
+          const orderId = order.id.split("/").pop();
+          const orderDate = order.createdAt || new Date().toISOString();
 
-    for (const order of allOrders) {
-      const orderId = String(order.id);
-      if (existingOrderIds.has(orderId)) continue;
+          for (const { node: item } of order.lineItems.edges) {
+            if (!item.product || !item.product.id) continue;
+            const shopifyProductId = item.product.id.split("/").pop();
+            const shopifyVariantId = item.variant ? item.variant.id.split("/").pop() : null;
 
-      const orderDate = order.created_at
-        ? new Date(order.created_at).toISOString()
-        : new Date().toISOString();
+            lineItems.push({
+              shopifyProductId,
+              shopifyVariantId,
+              quantity: item.quantity || 0,
+              orderDate,
+              orderId,
+            });
+          }
+        }
+      }
 
-      for (const item of order.line_items || []) {
-        const shopifyProductId = String(item.product_id || "");
-        if (!shopifyProductId || shopifyProductId === "null") continue;
+      // Aggregate line items by productId + year-month
+      // Key: "shopify_<productId>_YYYY-MM" → { periodStart ISO, totalQuantity }
+      const monthlyMap = {};
 
-        // Look up internal product by shopifyProductId
-        const productRef = db
-          .collection("users")
-          .doc(uid)
-          .collection("products")
-          .doc(`shopify_${shopifyProductId}`);
+      for (const item of lineItems) {
+        const d = new Date(item.orderDate);
+        const year = d.getUTCFullYear();
+        const month = String(d.getUTCMonth() + 1).padStart(2, "0");
+        const key = `shopify_${item.shopifyProductId}_${year}-${month}`;
+
+        if (!monthlyMap[key]) {
+          monthlyMap[key] = {
+            productId: `shopify_${item.shopifyProductId}`,
+            // First day of the month in UTC
+            periodStart: new Date(Date.UTC(year, d.getUTCMonth(), 1)).toISOString(),
+            quantity: 0,
+          };
+        }
+        monthlyMap[key].quantity += item.quantity || 0;
+      }
+
+      // Use deterministic doc IDs (key) so re-imports overwrite cleanly
+      const batch = db.batch();
+      let imported = 0;
+
+      for (const [key, record] of Object.entries(monthlyMap)) {
+        if (record.quantity <= 0) continue;
 
         const ref = db
           .collection("users")
           .doc(uid)
           .collection("demandRecords")
-          .doc(); // auto-ID
+          .doc(key);
 
         batch.set(ref, {
-          productId: `shopify_${shopifyProductId}`,
-          periodStart: orderDate,
-          quantity: item.quantity || 0,
+          productId: record.productId,
+          periodStart: record.periodStart,
+          quantity: record.quantity,
           source: "shopify",
-          shopifyOrderId: orderId,
+          updatedAt: new Date().toISOString(),
         });
 
         imported++;
       }
-    }
 
-    if (imported > 0) {
-      await batch.commit();
-    }
+      if (imported > 0) {
+        await batch.commit();
+      }
 
-    res.json({
-      result: {
-        totalOrders: allOrders.length,
-        newRecordsImported: imported,
-        skippedDuplicates: allOrders.length > 0
-          ? existingOrderIds.size
-          : 0,
-      },
-    });
+      console.log(`shopifyImportOrders: done. totalOrders=${totalOrders}, monthlyBuckets=${imported}`);
+      res.json({
+        result: {
+          totalOrders,
+          newRecordsImported: imported,
+          monthlyBuckets: imported,
+        },
+      });
+    } catch (err) {
+      console.error("shopifyImportOrders error:", err.message, err.stack);
+      res.status(502).json({ error: err.message || "Shopify API error fetching orders." });
+    }
   }
 );
 
@@ -794,6 +896,30 @@ exports.sendFactoryEmails = onRequest(
         const order = doc.data();
         const portalUrl = `${siteUrl}/#/factory-portal?token=${order.accessToken}`;
 
+        // Support new grouped schema (order.materials array) and legacy single-material docs.
+        const materials =
+          Array.isArray(order.materials) && order.materials.length > 0
+            ? order.materials
+            : [
+                {
+                  materialName: order.materialName || "—",
+                  quantity: order.quantity || 0,
+                  unit: order.unit || "pcs",
+                },
+              ];
+
+        const itemCount = materials.length;
+        const materialRows = materials
+          .map(
+            (m) => `
+            <tr>
+              <td style="padding:8px;border:1px solid #ddd">${m.materialName || "—"}</td>
+              <td style="padding:8px;border:1px solid #ddd;text-align:center">${m.quantity || 0}</td>
+              <td style="padding:8px;border:1px solid #ddd">${m.unit || "pcs"}</td>
+            </tr>`
+          )
+          .join("");
+
         const html = `
           <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto">
             <div style="background:#1a73e8;color:white;padding:20px;border-radius:8px 8px 0 0">
@@ -801,7 +927,7 @@ exports.sendFactoryEmails = onRequest(
             </div>
             <div style="padding:20px;border:1px solid #ddd;border-top:none;border-radius:0 0 8px 8px">
               <p>Hello <strong>${order.supplierName || "Supplier"}</strong>,</p>
-              <p>You have received a new raw material order:</p>
+              <p>You have received a new raw material order containing <strong>${itemCount} item${itemCount === 1 ? "" : "s"}</strong>:</p>
 
               <table style="width:100%;border-collapse:collapse;margin:16px 0">
                 <tr style="background:#f5f5f5">
@@ -809,11 +935,7 @@ exports.sendFactoryEmails = onRequest(
                   <th style="padding:8px;border:1px solid #ddd;text-align:center">Quantity</th>
                   <th style="padding:8px;border:1px solid #ddd;text-align:left">Unit</th>
                 </tr>
-                <tr>
-                  <td style="padding:8px;border:1px solid #ddd">${order.materialName || "—"}</td>
-                  <td style="padding:8px;border:1px solid #ddd;text-align:center">${order.quantity || 0}</td>
-                  <td style="padding:8px;border:1px solid #ddd">${order.unit || "pcs"}</td>
-                </tr>
+                ${materialRows}
               </table>
 
               <p><strong>Next Steps:</strong></p>
@@ -842,7 +964,7 @@ exports.sendFactoryEmails = onRequest(
           await transporter.sendMail({
             from: fromAddress,
             to: order.supplierEmail || order.factoryEmail,
-            subject: `Raw Material Order — ${order.materialName || "Material"}`,
+            subject: `Raw Material Order — ${itemCount} item${itemCount === 1 ? "" : "s"} (${order.supplierName || "Supplier"})`,
             html: html,
           });
           results.push({
@@ -923,8 +1045,13 @@ exports.sendManufacturerEmails = onRequest(
         const order = doc.data();
         const portalUrl = `${siteUrl}/#/manufacturer-portal?token=${order.accessToken}`;
 
-        // Build materials table if available
+        // Build materials table if available, including supplier column.
         let materialsHtml = "";
+        const incomingSuppliers =
+          Array.isArray(order.incomingSuppliers) && order.incomingSuppliers.length > 0
+            ? order.incomingSuppliers
+            : null;
+
         if (order.rawMaterialOrders && order.rawMaterialOrders.length > 0) {
           const rows = order.rawMaterialOrders
             .map(
@@ -932,18 +1059,25 @@ exports.sendManufacturerEmails = onRequest(
             <tr>
               <td style="padding:8px;border:1px solid #ddd">${rm.materialName || "—"}</td>
               <td style="padding:8px;border:1px solid #ddd;text-align:center">${rm.quantity || 0}</td>
-              <td style="padding:8px;border:1px solid #ddd">${rm.status || "pending"}</td>
+              <td style="padding:8px;border:1px solid #ddd">${rm.unit || "pcs"}</td>
+              <td style="padding:8px;border:1px solid #ddd">${rm.supplierName || "—"}</td>
             </tr>`
             )
             .join("");
 
+          const supplierNote = incomingSuppliers
+            ? `<p>Materials are being ordered from: <strong>${incomingSuppliers.join(", ")}</strong>. They will be delivered to you shortly.</p>`
+            : "";
+
           materialsHtml = `
-            <h3 style="margin:16px 0 8px">Required Materials</h3>
+            ${supplierNote}
+            <h3 style="margin:16px 0 8px">Materials Ordered</h3>
             <table style="width:100%;border-collapse:collapse;margin:0 0 16px">
               <tr style="background:#f5f5f5">
                 <th style="padding:8px;border:1px solid #ddd;text-align:left">Material</th>
                 <th style="padding:8px;border:1px solid #ddd;text-align:center">Quantity</th>
-                <th style="padding:8px;border:1px solid #ddd;text-align:left">Status</th>
+                <th style="padding:8px;border:1px solid #ddd;text-align:left">Unit</th>
+                <th style="padding:8px;border:1px solid #ddd;text-align:left">Supplier</th>
               </tr>
               ${rows}
             </table>`;
@@ -952,11 +1086,11 @@ exports.sendManufacturerEmails = onRequest(
         const html = `
           <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto">
             <div style="background:#1a73e8;color:white;padding:20px;border-radius:8px 8px 0 0">
-              <h2 style="margin:0">Ma5zony — Production Order Ready</h2>
+              <h2 style="margin:0">Ma5zony — Production Order Approved</h2>
             </div>
             <div style="padding:20px;border:1px solid #ddd;border-top:none;border-radius:0 0 8px 8px">
               <p>Hello <strong>${order.manufacturerName || "Manufacturer"}</strong>,</p>
-              <p>All materials are ready for your production order:</p>
+              <p>A production order has been approved and material sourcing is underway. Please expect the raw materials to arrive shortly.</p>
 
               <table style="width:100%;border-collapse:collapse;margin:16px 0">
                 <tr style="background:#f5f5f5">
@@ -976,7 +1110,7 @@ exports.sendManufacturerEmails = onRequest(
               <p><strong>Next Steps:</strong></p>
               <ol>
                 <li>Click the button below to open your manufacturer portal</li>
-                <li>Start production when ready</li>
+                <li>Start production once all materials have arrived</li>
                 <li>Mark as completed when finished</li>
               </ol>
 
@@ -998,7 +1132,7 @@ exports.sendManufacturerEmails = onRequest(
           await transporter.sendMail({
             from: fromAddress,
             to: order.manufacturerEmail,
-            subject: `Production Order Ready — ${order.productName || "Product"}`,
+            subject: `Production Order Approved — ${order.productName || "Product"}`,
             html: html,
           });
           results.push({
@@ -1019,6 +1153,162 @@ exports.sendManufacturerEmails = onRequest(
       res.json({ results });
     } catch (err) {
       console.error("sendManufacturerEmails error:", err);
+      res.status(500).json({ error: err.message });
+    }
+  }
+);
+
+// ── Send Email to Supplier for Raw Material Purchase Order ───────────────────
+
+/**
+ * Called when a rawMaterialPurchaseOrder status changes to "sent".
+ * Reads the multi-item PO from users/{uid}/rawMaterialPurchaseOrders/{id},
+ * fetches the supplier email, and sends an HTML email with a line-items table.
+ *
+ * POST /sendRawMaterialSupplierEmail
+ * Body: { uid, rawMaterialPurchaseOrderId, appUrl }
+ */
+exports.sendRawMaterialSupplierEmail = onRequest(
+  {
+    cors: true,
+    secrets: [SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS],
+  },
+  async (req, res) => {
+    if (req.method !== "POST") {
+      res.status(405).json({ error: "POST only" });
+      return;
+    }
+
+    const callerUid = await verifyAuth(req);
+    const { uid, rawMaterialPurchaseOrderId, appUrl } = req.body;
+    if (!callerUid || callerUid !== uid) {
+      res.status(401).json({ error: "Unauthorized" });
+      return;
+    }
+    if (!uid || !rawMaterialPurchaseOrderId) {
+      res.status(400).json({ error: "uid and rawMaterialPurchaseOrderId required" });
+      return;
+    }
+
+    const siteUrl = appUrl || "https://ma5zony.web.app";
+
+    try {
+      // Fetch the purchase order
+      const poRef = db
+        .collection("users")
+        .doc(uid)
+        .collection("rawMaterialPurchaseOrders")
+        .doc(rawMaterialPurchaseOrderId);
+      const poSnap = await poRef.get();
+
+      if (!poSnap.exists) {
+        res.status(404).json({ error: "Purchase order not found" });
+        return;
+      }
+
+      const po = poSnap.data();
+
+      // Fetch the supplier to get their email
+      const supplierSnap = await db
+        .collection("users")
+        .doc(uid)
+        .collection("suppliers")
+        .doc(po.supplierId)
+        .get();
+
+      if (!supplierSnap.exists) {
+        res.status(404).json({ error: "Supplier not found" });
+        return;
+      }
+
+      const supplier = supplierSnap.data();
+      const supplierEmail = supplier.contactEmail || supplier.email;
+      if (!supplierEmail) {
+        res.status(400).json({ error: "Supplier has no email address" });
+        return;
+      }
+
+      const items = Array.isArray(po.items) ? po.items : [];
+      const grandTotal = items.reduce(
+        (sum, item) => sum + (item.unitCost || 0) * (item.quantityOrdered || 0),
+        0
+      );
+
+      const itemsHtml = items
+        .map(
+          (item) => `
+          <tr>
+            <td style="padding:8px;border:1px solid #ddd">${item.rawMaterialName || "—"}</td>
+            <td style="padding:8px;border:1px solid #ddd;text-align:center">${item.quantityOrdered || 0}</td>
+            <td style="padding:8px;border:1px solid #ddd">${item.unitOfMeasure || "pcs"}</td>
+            <td style="padding:8px;border:1px solid #ddd;text-align:right">EGP ${(item.unitCost || 0).toFixed(2)}</td>
+            <td style="padding:8px;border:1px solid #ddd;text-align:right">EGP ${((item.unitCost || 0) * (item.quantityOrdered || 0)).toFixed(2)}</td>
+          </tr>`
+        )
+        .join("");
+
+      const html = `
+        <div style="font-family:Arial,sans-serif;max-width:620px;margin:0 auto">
+          <div style="background:#1a73e8;color:white;padding:20px;border-radius:8px 8px 0 0">
+            <h2 style="margin:0">Ma5zony — Raw Material Purchase Order</h2>
+          </div>
+          <div style="padding:20px;border:1px solid #ddd;border-top:none;border-radius:0 0 8px 8px">
+            <p>Hello <strong>${po.supplierName || supplier.name || "Supplier"}</strong>,</p>
+            <p>You have received a new raw material purchase order. Please review the details below and confirm availability.</p>
+
+            <table style="width:100%;border-collapse:collapse;margin:16px 0">
+              <tr style="background:#f5f5f5">
+                <th style="padding:8px;border:1px solid #ddd;text-align:left">Material</th>
+                <th style="padding:8px;border:1px solid #ddd;text-align:center">Qty</th>
+                <th style="padding:8px;border:1px solid #ddd;text-align:left">Unit</th>
+                <th style="padding:8px;border:1px solid #ddd;text-align:right">Unit Cost</th>
+                <th style="padding:8px;border:1px solid #ddd;text-align:right">Total</th>
+              </tr>
+              ${itemsHtml}
+              <tr style="background:#f5f5f5;font-weight:bold">
+                <td colspan="4" style="padding:8px;border:1px solid #ddd;text-align:right">Grand Total:</td>
+                <td style="padding:8px;border:1px solid #ddd;text-align:right">EGP ${grandTotal.toFixed(2)}</td>
+              </tr>
+            </table>
+
+            <p><strong>Next Steps:</strong></p>
+            <ol>
+              <li>Review the materials and quantities listed above</li>
+              <li>Confirm availability and estimated delivery date</li>
+              <li>Reply to this email or contact us directly</li>
+            </ol>
+
+            <p style="color:#666;font-size:12px;margin-top:24px">
+              This order was generated by Ma5zony — <a href="${siteUrl}">${siteUrl}</a>
+            </p>
+          </div>
+        </div>`;
+
+      const { transporter, fromAddress } = createMailTransporter();
+
+      await transporter.sendMail({
+        from: fromAddress,
+        to: supplierEmail,
+        subject: `Raw Material Order — ${items.length} item${items.length === 1 ? "" : "s"} (EGP ${grandTotal.toFixed(2)})`,
+        html,
+      });
+
+      // Mark the PO status as "sent" if it was "draft"
+      if (po.status === "draft") {
+        await poRef.update({ status: "sent", sentAt: admin.firestore.FieldValue.serverTimestamp() });
+      }
+
+      res.json({
+        result: {
+          supplier: po.supplierName,
+          email: supplierEmail,
+          itemCount: items.length,
+          grandTotal,
+          status: "sent",
+        },
+      });
+    } catch (err) {
+      console.error("sendRawMaterialSupplierEmail error:", err);
       res.status(500).json({ error: err.message });
     }
   }

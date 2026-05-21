@@ -65,49 +65,13 @@ class _ProductsScreenState extends State<ProductsScreen> {
             if (lowStockCount == 0) return const SizedBox.shrink();
             return Padding(
               padding: const EdgeInsets.only(bottom: 16),
-              child: Card(
-                color: Colors.red.shade50,
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12),
-                  side: BorderSide(color: Colors.red.shade200),
-                ),
-                child: Padding(
-                  padding: const EdgeInsets.all(16),
-                  child: Row(
-                    children: [
-                      const Icon(Icons.warning_amber,
-                          color: Colors.red, size: 28),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              '$lowStockCount product(s) are running low on stock',
-                              style: const TextStyle(
-                                fontWeight: FontWeight.bold,
-                                color: Colors.red,
-                              ),
-                            ),
-                            const SizedBox(height: 4),
-                            const Text(
-                              'Create a purchase order to restock from your suppliers.',
-                            ),
-                          ],
-                        ),
-                      ),
-                      const SizedBox(width: 12),
-                      ElevatedButton.icon(
-                        onPressed: () => context.go('/orders/create'),
-                        icon: const Icon(Icons.shopping_cart),
-                        label: const Text('Create Order'),
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: Colors.red,
-                          foregroundColor: Colors.white,
-                        ),
-                      ),
-                    ],
-                  ),
+              child: AlertBanner(
+                severity: AlertSeverity.error,
+                title: '$lowStockCount item(s) critically low or at zero stock',
+                message: 'Review your replenishment recommendations and create purchase orders.',
+                action: TextButton(
+                  onPressed: () => context.go('/replenishment'),
+                  child: const Text('View Replenishment'),
                 ),
               ),
             );
@@ -213,44 +177,39 @@ class _ProductsScreenState extends State<ProductsScreen> {
                     ),
             )
           else
-            Card(
-            elevation: 2,
-            shape: RoundedRectangleBorder(
+            Container(
+            decoration: BoxDecoration(
+              color: AppColors.surface,
               borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: AppColors.border),
             ),
-            child: SizedBox(
-              width: double.infinity,
-              child: Theme(
-                data: Theme.of(context).copyWith(cardColor: Colors.white),
-                child: PaginatedDataTable(
-                  header: Text(
-                    '${products.length} Products',
-                    style: AppTextStyles.h3,
-                  ),
-                  columns: const [
-                    DataColumn(label: Text('SKU')),
-                    DataColumn(label: Text('Name')),
-                    DataColumn(label: Text('Category')),
-                    DataColumn(label: Text('Unit Cost')),
-                    DataColumn(label: Text('Stock')),
-                    DataColumn(label: Text('Supplier')),
-                    DataColumn(label: Text('Manufacturer')),
-                    DataColumn(label: Text('BOM')),
-                    DataColumn(label: Text('Status')),
-                    DataColumn(label: Text('Actions')),
-                  ],
-                  source: _ProductDataSource(
-                    products: products,
-                    supplierMap: suppliers,
-                    manufacturerMap: manufacturers,
-                    bomMap: bomMap,
-                    rawMaterials: state.rawMaterials,
-                    rawMaterialSupplierMap: suppliers,
-                    context: context,
-                  ),
-                  rowsPerPage: 10,
-                  showCheckboxColumn: false,
+            child: Theme(
+              data: Theme.of(context).copyWith(cardColor: Colors.white),
+              child: PaginatedDataTable(
+                header: Text(
+                  '${products.length} Products',
+                  style: AppTextStyles.h3,
                 ),
+                columns: [
+                  DataColumn(label: Text('NAME / SKU', style: AppTextStyles.tableHeader)),
+                  DataColumn(label: Text('CATEGORY', style: AppTextStyles.tableHeader)),
+                  DataColumn(label: Text('STOCK', style: AppTextStyles.tableHeader), numeric: true),
+                  DataColumn(label: Text('UNIT COST', style: AppTextStyles.tableHeader), numeric: true),
+                  DataColumn(label: Text('SUPPLY CHAIN', style: AppTextStyles.tableHeader)),
+                  DataColumn(label: Text('STATUS', style: AppTextStyles.tableHeader)),
+                  DataColumn(label: Text('ACTIONS', style: AppTextStyles.tableHeader)),
+                ],
+                source: _ProductDataSource(
+                  products: products,
+                  supplierMap: suppliers,
+                  manufacturerMap: manufacturers,
+                  bomMap: bomMap,
+                  rawMaterials: state.rawMaterials,
+                  rawMaterialSupplierMap: suppliers,
+                  context: context,
+                ),
+                rowsPerPage: 10,
+                showCheckboxColumn: false,
               ),
             ),
           ),
@@ -269,6 +228,7 @@ class _ProductsScreenState extends State<ProductsScreen> {
       builder: (ctx) => _AddProductDialog(
         suppliers: state.suppliers,
         manufacturers: state.manufacturers,
+        warehouses: state.warehouses,
       ),
     );
   }
@@ -313,73 +273,81 @@ class _ProductDataSource extends DataTableSource {
         ? 'Critical'
         : (recMap.containsKey(p.id) ? 'Low' : 'OK');
 
-    final mfrName = manufacturerMap[p.manufacturerId ?? ''] ?? '—';
-    final bom = bomMap[p.id];
-    final bomLabel = bom != null ? '${bom.materials.length} material(s)' : 'Not defined';
-
     return DataRow(
       cells: [
-        DataCell(Text(p.sku)),
+        // Name + SKU
         DataCell(
-          Text(
-            p.name,
-            style: AppTextStyles.body.copyWith(fontWeight: FontWeight.w600),
+          SizedBox(
+            width: 260,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Text(
+                  p.name,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: AppTextStyles.tableCell
+                      .copyWith(fontWeight: FontWeight.w600),
+                ),
+                Text(
+                  p.sku,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: AppTextStyles.bodySmall,
+                ),
+              ],
+            ),
           ),
         ),
-        DataCell(Text(p.category)),
-        DataCell(Text('\$${p.unitCost.toStringAsFixed(2)}')),
-        DataCell(Text('${p.currentStock} units')),
-        DataCell(Text(supplierMap[p.supplierId ?? ''] ?? '—')),
-        DataCell(Text(mfrName)),
-        DataCell(
-          bom != null
-              ? InkWell(
-                  onTap: () => _showBomPreview(context, p, bom),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      const Icon(Icons.list_alt, size: 16, color: AppColors.primary),
-                      const SizedBox(width: 4),
-                      Text(bomLabel,
-                          style: const TextStyle(
-                            color: AppColors.primary,
-                            decoration: TextDecoration.underline,
-                          )),
-                    ],
-                  ),
-                )
-              : InkWell(
-                  onTap: () => _showBomPreview(context, p, null),
-                  child: Text(bomLabel,
-                      style: const TextStyle(color: AppColors.textSecondary)),
-                ),
-        ),
+        // Category
+        DataCell(Text(p.category, style: AppTextStyles.tableCell)),
+        // Stock (right-aligned via numeric: true on the column)
+        DataCell(Text(
+          '${p.currentStock}',
+          style: AppTextStyles.tableNum,
+          textAlign: TextAlign.right,
+        )),
+        // Unit Cost
+        DataCell(Text(
+          'EGP ${p.unitCost.toStringAsFixed(2)}',
+          style: AppTextStyles.tableNum,
+          textAlign: TextAlign.right,
+        )),
+        // Supply Chain Health
+        DataCell(_SupplyChainCell(
+          product: p,
+          bomMap: bomMap,
+          rawMaterials: rawMaterials,
+          context: context,
+        )),
+        // Status
         DataCell(StatusChip(status)),
+        // Actions
         DataCell(
           Row(
             mainAxisSize: MainAxisSize.min,
             children: [
               IconButton(
-                icon: const Icon(Icons.edit, size: 20),
+                icon: const Icon(Icons.edit_outlined, size: 18),
                 onPressed: () {
-                  final state = context.read<AppState>();
+                  final st = context.read<AppState>();
                   showDialog(
                     context: context,
                     builder: (_) => _AddProductDialog(
-                      suppliers: state.suppliers,
-                      manufacturers: state.manufacturers,
+                      suppliers: st.suppliers,
+                      manufacturers: st.manufacturers,
+                      warehouses: st.warehouses,
                       existingProduct: p,
                     ),
                   );
                 },
                 tooltip: 'Edit',
+                color: AppColors.textSecondary,
               ),
               IconButton(
-                icon: const Icon(
-                  Icons.delete,
-                  size: 20,
-                  color: AppColors.error,
-                ),
+                icon: const Icon(Icons.delete_outline, size: 18),
+                color: AppColors.error,
                 onPressed: () async {
                   final confirmed = await showDialog<bool>(
                     context: context,
@@ -405,7 +373,7 @@ class _ProductDataSource extends DataTableSource {
                     } catch (e) {
                       if (context.mounted) {
                         ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(content: Text('Failed to delete product: $e')),
+                          SnackBar(content: Text('Failed to delete: $e')),
                         );
                       }
                     }
@@ -426,83 +394,117 @@ class _ProductDataSource extends DataTableSource {
   int get rowCount => products.length;
   @override
   int get selectedRowCount => 0;
+}
 
-  void _showBomPreview(BuildContext context, Product product, BillOfMaterials? bom) {
-    final rmMap = {for (final m in rawMaterials) m.id: m};
-    showDialog(
-      context: context,
-      builder: (_) => AlertDialog(
-        title: Row(
-          children: [
-            const Icon(Icons.list_alt, color: AppColors.primary),
-            const SizedBox(width: 8),
-            Expanded(child: Text('BOM — ${product.name}')),
-          ],
-        ),
-        content: SizedBox(
-          width: 550,
-          child: bom == null || bom.materials.isEmpty
-              ? Column(
+// ─── Supply Chain Cell ────────────────────────────────────────────────────────
+
+class _SupplyChainCell extends StatelessWidget {
+  final Product product;
+  final Map<String, BillOfMaterials> bomMap;
+  final List rawMaterials;
+  final BuildContext context;
+
+  const _SupplyChainCell({
+    required this.product,
+    required this.bomMap,
+    required this.rawMaterials,
+    required this.context,
+  });
+
+  @override
+  Widget build(BuildContext ctx) {
+    final bom = bomMap[product.id];
+    final hasBom = bom != null;
+
+    // Supplier: at least one material in BOM has a supplier
+    final hasSupplier = bom != null &&
+        bom.materials.any((m) => rawMaterials.any(
+            (r) => r.id == m.rawMaterialId &&
+                r.supplierId != null &&
+                (r.supplierId as String).isNotEmpty));
+
+    final hasWarehouse =
+        product.warehouseId != null && product.warehouseId!.isNotEmpty;
+
+    // Determine the first missing step to direct user to
+    String? fixPath;
+    String? fixLabel;
+    if (!hasBom) {
+      fixPath = '/bom';
+      fixLabel = 'Set up BOM';
+    } else if (!hasSupplier) {
+      fixPath = '/suppliers';
+      fixLabel = 'Add Supplier';
+    } else if (!hasWarehouse) {
+      fixPath = '/warehouses';
+      fixLabel = 'Assign Warehouse';
+    }
+
+    final allGood = hasBom && hasSupplier && hasWarehouse;
+
+    return SizedBox(
+      width: 220,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Row(
+            children: [
+              _ChainBadge(label: 'BOM', ok: hasBom),
+              const SizedBox(width: 4),
+              _ChainBadge(label: 'Supplier', ok: hasSupplier),
+              const SizedBox(width: 4),
+              _ChainBadge(label: 'Warehouse', ok: hasWarehouse),
+            ],
+          ),
+          if (!allGood && fixPath != null)
+            InkWell(
+              onTap: () => context.go(fixPath!),
+              child: Padding(
+                padding: const EdgeInsets.only(top: 3),
+                child: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    const Icon(Icons.info_outline,
-                        size: 48, color: AppColors.textSecondary),
-                    const SizedBox(height: 12),
-                    const Text('No Bill of Materials defined for this product.'),
-                    const SizedBox(height: 16),
-                    ElevatedButton.icon(
-                      icon: const Icon(Icons.add),
-                      label: const Text('Define BOM'),
-                      onPressed: () {
-                        Navigator.pop(context);
-                        GoRouter.of(context).go('/bom');
-                      },
-                    ),
+                    Text(fixLabel!,
+                        style: const TextStyle(
+                            fontSize: 10,
+                            color: AppColors.primary,
+                            fontWeight: FontWeight.w600)),
+                    const Icon(Icons.arrow_forward_ios,
+                        size: 8, color: AppColors.primary),
                   ],
-                )
-              : SingleChildScrollView(
-                  child: DataTable(
-                    columns: const [
-                      DataColumn(label: Text('Material')),
-                      DataColumn(label: Text('Supplier')),
-                      DataColumn(label: Text('Qty / Unit')),
-                      DataColumn(label: Text('Unit Cost')),
-                      DataColumn(label: Text('Line Cost')),
-                    ],
-                    rows: bom.materials.map((line) {
-                      final rm = rmMap[line.rawMaterialId];
-                      final unitCost = rm?.unitCost ?? 0.0;
-                      final lineCost = line.quantityPerUnit * unitCost;
-                      final supplierName =
-                          rawMaterialSupplierMap[rm?.supplierId ?? ''] ?? '—';
-                      return DataRow(cells: [
-                        DataCell(Text(rm?.name ?? line.rawMaterialId)),
-                        DataCell(Text(supplierName)),
-                        DataCell(Text(
-                            '${line.quantityPerUnit} ${rm?.unit ?? ''}')),
-                        DataCell(
-                            Text('\$${unitCost.toStringAsFixed(2)}')),
-                        DataCell(
-                            Text('\$${lineCost.toStringAsFixed(2)}')),
-                      ]);
-                    }).toList(),
-                  ),
                 ),
-        ),
-        actions: [
-          if (bom != null)
-            TextButton.icon(
-              icon: const Icon(Icons.edit),
-              label: const Text('Edit BOM'),
-              onPressed: () {
-                Navigator.pop(context);
-                GoRouter.of(context).go('/bom');
-              },
+              ),
             ),
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Close'),
-          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ChainBadge extends StatelessWidget {
+  final String label;
+  final bool ok;
+  const _ChainBadge({required this.label, required this.ok});
+
+  @override
+  Widget build(BuildContext context) {
+    final color = ok ? AppColors.success : AppColors.error;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.1),
+        borderRadius: BorderRadius.circular(4),
+        border: Border.all(color: color.withValues(alpha: 0.35)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(ok ? Icons.check : Icons.close, size: 9, color: color),
+          const SizedBox(width: 2),
+          Text(label,
+              style: TextStyle(
+                  fontSize: 9, fontWeight: FontWeight.w600, color: color)),
         ],
       ),
     );
@@ -611,7 +613,7 @@ class _ImportDialogState extends State<_ImportDialog> {
                     ),
                     title: Text(p.name),
                     subtitle: Text(
-                      '${p.sku} - \$${p.unitCost.toStringAsFixed(2)}',
+                      '${p.sku} - EGP ${p.unitCost.toStringAsFixed(2)}',
                     ),
                     trailing: Checkbox(
                       value: _selectedIds.contains(p.id),
@@ -671,7 +673,8 @@ class _AddProductDialog extends StatefulWidget {
   final List suppliers;
   final List manufacturers;
   final Product? existingProduct;
-  const _AddProductDialog({required this.suppliers, required this.manufacturers, this.existingProduct});
+  final List<dynamic> warehouses;
+  const _AddProductDialog({required this.suppliers, required this.manufacturers, required this.warehouses, this.existingProduct});
 
   @override
   State<_AddProductDialog> createState() => _AddProductDialogState();
@@ -687,6 +690,7 @@ class _AddProductDialogState extends State<_AddProductDialog> {
   final _leadTimeCtrl = TextEditingController(text: '0');
   String? _selectedSupplierId;
   String? _selectedManufacturerId;
+  String? _selectedWarehouseId;
 
   bool get _isEdit => widget.existingProduct != null;
 
@@ -703,6 +707,7 @@ class _AddProductDialogState extends State<_AddProductDialog> {
       _leadTimeCtrl.text = '${p.leadTimeDays}';
       _selectedSupplierId = p.supplierId;
       _selectedManufacturerId = p.manufacturerId;
+      _selectedWarehouseId = p.warehouseId;
     }
   }
 
@@ -754,7 +759,7 @@ class _AddProductDialogState extends State<_AddProductDialog> {
                         controller: _costCtrl,
                         decoration: const InputDecoration(
                           labelText: 'Unit Cost',
-                          prefixText: '\$',
+                          prefixText: 'EGP ',
                         ),
                         keyboardType: TextInputType.number,
                         validator: (v) {
@@ -838,6 +843,27 @@ class _AddProductDialogState extends State<_AddProductDialog> {
                     ),
                   ],
                 ),
+                const SizedBox(height: 16),
+                DropdownButtonFormField<String?>(
+                  decoration: const InputDecoration(
+                    labelText: 'Warehouse',
+                    helperText: 'Where this product is stored',
+                  ),
+                  initialValue: _selectedWarehouseId,
+                  items: [
+                    const DropdownMenuItem<String?>(
+                      value: null,
+                      child: Text('Unassigned'),
+                    ),
+                    ...widget.warehouses.map<DropdownMenuItem<String?>>(
+                      (w) => DropdownMenuItem<String?>(
+                        value: w.id as String,
+                        child: Text('${w.name} — ${w.city}, ${w.country}'),
+                      ),
+                    ),
+                  ],
+                  onChanged: (v) => setState(() => _selectedWarehouseId = v),
+                ),
               ],
             ),
           ),
@@ -853,39 +879,48 @@ class _AddProductDialogState extends State<_AddProductDialog> {
             backgroundColor: AppColors.primary,
             foregroundColor: Colors.white,
           ),
-          onPressed: () async {
-            if (!_formKey.currentState!.validate()) return;
-            final product = Product(
-              id: widget.existingProduct?.id ?? '',
-              sku: _skuCtrl.text.trim(),
-              name: _nameCtrl.text.trim(),
-              category: _categoryCtrl.text.trim(),
-              unitCost: double.tryParse(_costCtrl.text) ?? 0,
-              currentStock: int.tryParse(_stockCtrl.text) ?? 0,
-              supplierId: _selectedSupplierId,
-              manufacturerId: _selectedManufacturerId,
-              leadTimeDays: int.tryParse(_leadTimeCtrl.text) ?? 0,
-            );
-            final appState = context.read<AppState>();
-            final messenger = ScaffoldMessenger.of(context);
-            final nav = Navigator.of(context);
-            try {
-              if (_isEdit) {
-                await appState.updateProduct(product);
-              } else {
-                await appState.addProduct(product);
-              }
-              nav.pop();
-            } catch (e) {
-              messenger.showSnackBar(
-                SnackBar(content: Text('Failed to save product: $e'), backgroundColor: Colors.red),
-              );
-            }
-          },
+          onPressed: _save,
           child: Text(_isEdit ? 'Save Changes' : 'Save Product'),
         ),
       ],
     );
+  }
+
+  Future<void> _save() async {
+    if (!_formKey.currentState!.validate()) return;
+    final product = Product(
+      id: widget.existingProduct?.id ?? '',
+      sku: _skuCtrl.text.trim(),
+      name: _nameCtrl.text.trim(),
+      category: _categoryCtrl.text.trim(),
+      unitCost: double.tryParse(_costCtrl.text) ?? 0,
+      currentStock: int.tryParse(_stockCtrl.text) ?? 0,
+      supplierId: _selectedSupplierId,
+      manufacturerId: _selectedManufacturerId,
+      warehouseId: _selectedWarehouseId,
+      leadTimeDays: int.tryParse(_leadTimeCtrl.text) ?? 0,
+    );
+    final appState = context.read<AppState>();
+    try {
+      if (_isEdit) {
+        await appState.updateProduct(product);
+      } else {
+        await appState.addProduct(product);
+      }
+      if (!mounted) return;
+      Navigator.pop(context);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(_isEdit ? 'Product updated' : 'Product saved')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Failed to save product: $e'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    }
   }
 
   @override

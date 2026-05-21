@@ -224,7 +224,7 @@ class _OrdersScreenState extends State<OrdersScreen>
                                 '${order.totalItems} items',
                               )),
                               DataCell(Text(
-                                '\$${order.totalEstimatedCost.toStringAsFixed(2)}',
+                                'EGP ${order.totalEstimatedCost.toStringAsFixed(2)}',
                                 style: AppTextStyles.body
                                     .copyWith(fontWeight: FontWeight.w600),
                               )),

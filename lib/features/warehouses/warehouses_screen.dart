@@ -48,7 +48,7 @@ class WarehousesScreen extends StatelessWidget {
               Expanded(
                 child: KPICard(
                   title: 'Total Stock Value',
-                  value: '\$${totalValue.toStringAsFixed(0)}',
+                  value: 'EGP ${totalValue.toStringAsFixed(0)}',
                   icon: Icons.monetization_on,
                 ),
               ),
@@ -128,7 +128,30 @@ class WarehousesScreen extends StatelessWidget {
                           ),
                         ),
                       ),
-                      DataCell(Text('${w.city}, ${w.country}')),
+                      DataCell(
+                        Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text('${w.city}, ${w.country}'),
+                            if ((w.address ?? '').trim().isNotEmpty)
+                              Padding(
+                                padding: const EdgeInsets.only(top: 2),
+                                child: ConstrainedBox(
+                                  constraints: const BoxConstraints(maxWidth: 240),
+                                  child: Text(
+                                    w.address!.split('\n').first,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: AppTextStyles.label.copyWith(
+                                      color: AppColors.textSecondary,
+                                    ),
+                                  ),
+                                ),
+                              ),
+                          ],
+                        ),
+                      ),
                       DataCell(Text('${w.totalStock} units')),
                       DataCell(Text('$skuCount SKUs')),
                       const DataCell(StatusChip('Active')),
@@ -136,6 +159,16 @@ class WarehousesScreen extends StatelessWidget {
                         Row(
                           mainAxisSize: MainAxisSize.min,
                           children: [
+                            IconButton(
+                              icon: const Icon(Icons.inventory_2_outlined,
+                                  size: 20),
+                              onPressed: () => showDialog(
+                                context: context,
+                                builder: (_) =>
+                                    _AssignProductsDialog(warehouse: w),
+                              ),
+                              tooltip: 'Manage Products',
+                            ),
                             IconButton(
                               icon: const Icon(Icons.edit, size: 20),
                               onPressed: () => _showWarehouseDialog(context, w),
@@ -254,43 +287,57 @@ class WarehousesScreen extends StatelessWidget {
     final nameCtrl = TextEditingController(text: existing?.name ?? '');
     final cityCtrl = TextEditingController(text: existing?.city ?? '');
     final countryCtrl = TextEditingController(text: existing?.country ?? '');
+    final addressCtrl = TextEditingController(text: existing?.address ?? '');
     final formKey = GlobalKey<FormState>();
     final isEdit = existing != null;
     showDialog(
       context: context,
+      useRootNavigator: false,
       builder: (ctx) => AlertDialog(
         title: Text(isEdit ? 'Edit Warehouse' : 'Add New Warehouse'),
         content: SizedBox(
-          width: 400,
+          width: 420,
           child: Form(
             key: formKey,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                TextFormField(
-                  controller: nameCtrl,
-                  decoration: const InputDecoration(labelText: 'Warehouse Name'),
-                  validator: (v) => v == null || v.trim().isEmpty ? 'Name is required' : null,
-                ),
-                const SizedBox(height: 16),
-                Row(
-                  children: [
-                    Expanded(
-                      child: TextFormField(
-                        controller: cityCtrl,
-                        decoration: const InputDecoration(labelText: 'City'),
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  TextFormField(
+                    controller: nameCtrl,
+                    decoration: const InputDecoration(labelText: 'Warehouse Name'),
+                    validator: (v) => v == null || v.trim().isEmpty ? 'Name is required' : null,
+                  ),
+                  const SizedBox(height: 16),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: TextFormField(
+                          controller: cityCtrl,
+                          decoration: const InputDecoration(labelText: 'City'),
+                        ),
                       ),
-                    ),
-                    const SizedBox(width: 16),
-                    Expanded(
-                      child: TextFormField(
-                        controller: countryCtrl,
-                        decoration: const InputDecoration(labelText: 'Country'),
+                      const SizedBox(width: 16),
+                      Expanded(
+                        child: TextFormField(
+                          controller: countryCtrl,
+                          decoration: const InputDecoration(labelText: 'Country'),
+                        ),
                       ),
+                    ],
+                  ),
+                  const SizedBox(height: 16),
+                  TextFormField(
+                    controller: addressCtrl,
+                    decoration: const InputDecoration(
+                      labelText: 'Full Address (optional)',
+                      hintText: 'e.g. 42 Industrial Road, Zone 5',
+                      prefixIcon: Icon(Icons.location_on_outlined),
                     ),
-                  ],
-                ),
-              ],
+                    maxLines: 2,
+                  ),
+                ],
+              ),
             ),
           ),
         ),
@@ -306,33 +353,324 @@ class WarehousesScreen extends StatelessWidget {
             ),
             onPressed: () async {
               if (!formKey.currentState!.validate()) return;
+              final navigator = Navigator.of(ctx);
+              final messenger = ScaffoldMessenger.of(ctx);
+              final appState = context.read<AppState>();
               final warehouse = Warehouse(
                 id: existing?.id ?? '',
                 name: nameCtrl.text.trim(),
                 city: cityCtrl.text.trim(),
                 country: countryCtrl.text.trim(),
+                address: addressCtrl.text.trim().isEmpty
+                    ? null
+                    : addressCtrl.text.trim(),
                 totalStock: existing?.totalStock ?? 0,
               );
-              final appState = context.read<AppState>();
-              final messenger = ScaffoldMessenger.of(context);
-              final nav = Navigator.of(ctx);
               try {
                 if (isEdit) {
                   await appState.updateWarehouse(warehouse);
                 } else {
                   await appState.addWarehouse(warehouse);
                 }
-                nav.pop();
+                navigator.pop();
+                messenger.showSnackBar(SnackBar(
+                  content: Text(isEdit
+                      ? 'Warehouse updated successfully'
+                      : 'Warehouse added successfully'),
+                  backgroundColor: AppColors.success,
+                ));
               } catch (e) {
-                messenger.showSnackBar(
-                  SnackBar(content: Text('Failed to save warehouse: $e'), backgroundColor: Colors.red),
-                );
+                messenger.showSnackBar(SnackBar(
+                  content: Text('Error: $e'),
+                  backgroundColor: AppColors.error,
+                ));
               }
             },
             child: Text(isEdit ? 'Save Changes' : 'Add Warehouse'),
           ),
         ],
       ),
+    );
+  }
+}
+
+// ─── Assign Products Dialog ───────────────────────────────────────────────────
+
+class _AssignProductsDialog extends StatefulWidget {
+  final Warehouse warehouse;
+  const _AssignProductsDialog({required this.warehouse});
+
+  @override
+  State<_AssignProductsDialog> createState() => _AssignProductsDialogState();
+}
+
+class _AssignProductsDialogState extends State<_AssignProductsDialog> {
+  final Set<String> _selected = {};
+  String _search = '';
+  bool _saving = false;
+  bool _seeded = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final state = context.watch<AppState>();
+    final allProducts = state.products;
+
+    if (!_seeded) {
+      // Pre-check products already assigned to this warehouse
+      for (final p in allProducts) {
+        if (p.warehouseId == widget.warehouse.id) _selected.add(p.id);
+      }
+      _seeded = true;
+    }
+
+    // Show all products. Products assigned to other warehouses appear with a
+    // "Currently at [Other Warehouse]" badge and can still be selected to move.
+    final visible = allProducts.where((p) {
+      if (_search.isEmpty) return true;
+      final q = _search.toLowerCase();
+      return p.name.toLowerCase().contains(q) ||
+          p.sku.toLowerCase().contains(q);
+    }).toList();
+
+    final warehousesById = {for (final w in state.warehouses) w.id: w};
+
+    return AlertDialog(
+      title: Text('Manage Products — ${widget.warehouse.name}'),
+      content: SizedBox(
+        width: 560,
+        height: 520,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Select which products are stored in this warehouse. Selecting a product currently at another warehouse will move it here after confirmation.',
+              style: AppTextStyles.bodySmall
+                  .copyWith(color: AppColors.textSecondary),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              decoration: const InputDecoration(
+                prefixIcon: Icon(Icons.search, size: 18),
+                hintText: 'Search by name or SKU',
+                isDense: true,
+                border: OutlineInputBorder(),
+              ),
+              onChanged: (v) => setState(() => _search = v),
+            ),
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                TextButton(
+                  onPressed: visible.isEmpty
+                      ? null
+                      : () => setState(
+                          () => _selected.addAll(visible.map((p) => p.id))),
+                  child: const Text('Select all visible'),
+                ),
+                TextButton(
+                  onPressed: _selected.isEmpty
+                      ? null
+                      : () => setState(_selected.clear),
+                  child: const Text('Clear'),
+                ),
+                const Spacer(),
+                Text('${_selected.length} selected',
+                    style: AppTextStyles.bodySmall),
+              ],
+            ),
+            const Divider(height: 1),
+            Expanded(
+              child: visible.isEmpty
+                  ? Center(
+                      child: Text(
+                        allProducts.isEmpty
+                            ? 'No products in inventory yet. Add or import products first.'
+                            : 'No products match your search.',
+                        style: AppTextStyles.bodySmall
+                            .copyWith(color: AppColors.textSecondary),
+                        textAlign: TextAlign.center,
+                      ),
+                    )
+                  : ListView.builder(
+                      itemCount: visible.length,
+                      itemBuilder: (_, i) {
+                        final p = visible[i];
+                        final checked = _selected.contains(p.id);
+                        final atOther = p.warehouseId != null &&
+                            p.warehouseId != widget.warehouse.id;
+                        final otherName = atOther
+                            ? (warehousesById[p.warehouseId]?.name ?? 'another warehouse')
+                            : null;
+                        return CheckboxListTile(
+                          dense: true,
+                          value: checked,
+                          onChanged: (v) => setState(() {
+                            if (v == true) {
+                              _selected.add(p.id);
+                            } else {
+                              _selected.remove(p.id);
+                            }
+                          }),
+                          title: Row(
+                            children: [
+                              Expanded(
+                                child: Text(p.name,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis),
+                              ),
+                              if (atOther) ...[
+                                const SizedBox(width: 6),
+                                Container(
+                                  padding: const EdgeInsets.symmetric(
+                                      horizontal: 6, vertical: 2),
+                                  decoration: BoxDecoration(
+                                    color: AppColors.warning
+                                        .withValues(alpha: 0.15),
+                                    borderRadius: BorderRadius.circular(8),
+                                    border: Border.all(
+                                        color: AppColors.warning
+                                            .withValues(alpha: 0.4)),
+                                  ),
+                                  child: Text(
+                                    'At $otherName',
+                                    style: const TextStyle(
+                                        fontSize: 10,
+                                        fontWeight: FontWeight.w600,
+                                        color: AppColors.warning),
+                                  ),
+                                ),
+                              ],
+                            ],
+                          ),
+                          subtitle: Text(
+                              '${p.sku} · ${p.category} · ${p.currentStock} in stock'),
+                          controlAffinity: ListTileControlAffinity.leading,
+                        );
+                      },
+                    ),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: _saving ? null : () => Navigator.pop(context),
+          child: const Text('Cancel'),
+        ),
+        ElevatedButton(
+          style: ElevatedButton.styleFrom(
+            backgroundColor: AppColors.primary,
+            foregroundColor: Colors.white,
+          ),
+          onPressed: _saving
+              ? null
+              : () async {
+                  final navigator = Navigator.of(context);
+                  final messenger = ScaffoldMessenger.of(context);
+                  final appState = context.read<AppState>();
+
+                  // Detect moves from another warehouse so we can ask the
+                  // user before reassigning. Pure additions / unassigns skip
+                  // the confirmation.
+                  final moves = allProducts.where((p) =>
+                      _selected.contains(p.id) &&
+                      p.warehouseId != null &&
+                      p.warehouseId != widget.warehouse.id).toList();
+                  if (moves.isNotEmpty) {
+                    final confirmed = await showDialog<bool>(
+                      context: context,
+                      builder: (ctx) => AlertDialog(
+                        title: const Text('Move products?'),
+                        content: SingleChildScrollView(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Text(
+                                  '${moves.length} product${moves.length == 1 ? '' : 's'} will be moved to "${widget.warehouse.name}":'),
+                              const SizedBox(height: 8),
+                              ...moves.take(8).map((p) {
+                                final from = warehousesById[p.warehouseId]?.name ?? 'another warehouse';
+                                return Padding(
+                                  padding: const EdgeInsets.symmetric(vertical: 2),
+                                  child: Text('• ${p.name} — from $from',
+                                      style: AppTextStyles.bodySmall),
+                                );
+                              }),
+                              if (moves.length > 8)
+                                Padding(
+                                  padding: const EdgeInsets.only(top: 4),
+                                  child: Text('+ ${moves.length - 8} more…',
+                                      style: AppTextStyles.bodySmall.copyWith(
+                                          color: AppColors.textSecondary)),
+                                ),
+                            ],
+                          ),
+                        ),
+                        actions: [
+                          TextButton(
+                              onPressed: () => Navigator.pop(ctx, false),
+                              child: const Text('Cancel')),
+                          ElevatedButton(
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: AppColors.primary,
+                              foregroundColor: Colors.white,
+                            ),
+                            onPressed: () => Navigator.pop(ctx, true),
+                            child: const Text('Move'),
+                          ),
+                        ],
+                      ),
+                    );
+                    if (confirmed != true) return;
+                  }
+
+                  setState(() => _saving = true);
+
+                  // Diff: products to add to this warehouse vs to unassign
+                  final currentlyAssigned = allProducts
+                      .where((p) => p.warehouseId == widget.warehouse.id)
+                      .map((p) => p.id)
+                      .toSet();
+                  final toAssign = _selected
+                      .where((id) => !currentlyAssigned.contains(id))
+                      .toList();
+                  final toUnassign = currentlyAssigned
+                      .where((id) => !_selected.contains(id))
+                      .toList();
+
+                  try {
+                    if (toAssign.isNotEmpty) {
+                      await appState.assignProductsToWarehouse(
+                          widget.warehouse.id, toAssign);
+                    }
+                    if (toUnassign.isNotEmpty) {
+                      await appState.assignProductsToWarehouse(
+                          null, toUnassign);
+                    }
+                    navigator.pop();
+                    messenger.showSnackBar(SnackBar(
+                      content: Text(
+                          'Saved: ${toAssign.length} assigned, ${toUnassign.length} unassigned'),
+                      backgroundColor: AppColors.success,
+                    ));
+                  } catch (e) {
+                    if (mounted) setState(() => _saving = false);
+                    messenger.showSnackBar(SnackBar(
+                      content: Text('Error: $e'),
+                      backgroundColor: AppColors.error,
+                    ));
+                  }
+                },
+          child: _saving
+              ? const SizedBox(
+                  width: 14,
+                  height: 14,
+                  child: CircularProgressIndicator(
+                      strokeWidth: 2, color: Colors.white))
+              : const Text('Save Assignments'),
+        ),
+      ],
     );
   }
 }

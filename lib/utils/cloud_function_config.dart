@@ -54,4 +54,7 @@ class CloudFunctionConfig {
 
   static String get sendManufacturerEmails =>
       _url('sendmanufactureremails');
+
+  static String get sendRawMaterialSupplierEmail =>
+      _url('sendrawmaterialsupplieremail');
 }

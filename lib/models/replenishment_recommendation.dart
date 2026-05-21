@@ -1,3 +1,7 @@
+/// A single replenishment recommendation for a product.
+///
+/// Contains the analysis results from the forecasting and inventory policy
+/// pipeline, along with actionable ordering guidance.
 class ReplenishmentRecommendation {
   final String productId;
   final String productName;
@@ -8,6 +12,21 @@ class ReplenishmentRecommendation {
   final int suggestedOrderQty;
   final DateTime recommendedOrderDate;
 
+  /// Urgency level: 'Critical', 'Warning', or 'Normal'
+  final String urgency;
+
+  /// ABC-XYZ classification label (e.g. 'AX', 'BY', 'CZ')
+  final String? abcXyzClass;
+
+  /// Which forecasting algorithm was used
+  final String? algorithmUsed;
+
+  /// Safety stock component
+  final int? safetyStock;
+
+  /// EOQ value used
+  final double? eoq;
+
   ReplenishmentRecommendation({
     required this.productId,
     required this.productName,
@@ -17,6 +36,11 @@ class ReplenishmentRecommendation {
     required this.reorderPoint,
     required this.suggestedOrderQty,
     required this.recommendedOrderDate,
+    this.urgency = 'Normal',
+    this.abcXyzClass,
+    this.algorithmUsed,
+    this.safetyStock,
+    this.eoq,
   });
 
   String get status {
@@ -37,6 +61,11 @@ class ReplenishmentRecommendation {
       reorderPoint: reorderPoint,
       suggestedOrderQty: suggestedOrderQty ?? this.suggestedOrderQty,
       recommendedOrderDate: recommendedOrderDate,
+      urgency: urgency,
+      abcXyzClass: abcXyzClass,
+      algorithmUsed: algorithmUsed,
+      safetyStock: safetyStock,
+      eoq: eoq,
     );
   }
 
@@ -52,6 +81,11 @@ class ReplenishmentRecommendation {
       recommendedOrderDate: DateTime.parse(
         json['recommendedOrderDate'] as String,
       ),
+      urgency: json['urgency'] as String? ?? 'Normal',
+      abcXyzClass: json['abcXyzClass'] as String?,
+      algorithmUsed: json['algorithmUsed'] as String?,
+      safetyStock: (json['safetyStock'] as num?)?.toInt(),
+      eoq: (json['eoq'] as num?)?.toDouble(),
     );
   }
 
@@ -65,6 +99,11 @@ class ReplenishmentRecommendation {
       'reorderPoint': reorderPoint,
       'suggestedOrderQty': suggestedOrderQty,
       'recommendedOrderDate': recommendedOrderDate.toIso8601String(),
+      'urgency': urgency,
+      if (abcXyzClass != null) 'abcXyzClass': abcXyzClass,
+      if (algorithmUsed != null) 'algorithmUsed': algorithmUsed,
+      if (safetyStock != null) 'safetyStock': safetyStock,
+      if (eoq != null) 'eoq': eoq,
     };
   }
 }

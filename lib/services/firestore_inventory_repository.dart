@@ -39,9 +39,6 @@ class FirestoreInventoryRepository implements InventoryRepository {
   CollectionReference<Map<String, dynamic>> get _demandCol =>
       _db.collection('users').doc(uid).collection('demandRecords');
 
-  /// Secondary demand collection written by the Shopify Cloud Function.
-  CollectionReference<Map<String, dynamic>> get _demandImportedCol =>
-      _db.collection('users').doc(uid).collection('demand');
 
   // ── Read ─────────────────────────────────────────────────────────────────
 
@@ -99,14 +96,8 @@ class FirestoreInventoryRepository implements InventoryRepository {
       }
     }
 
-    // Load both collections in parallel
-    final results = await Future.wait([
-      _demandCol.orderBy('periodStart').get(),
-      _demandImportedCol.orderBy('periodStart').get(),
-    ]);
-    for (final snap in results) {
-      parseSnap(snap);
-    }
+    final snap = await _demandCol.orderBy('periodStart').get();
+    parseSnap(snap);
 
     // Sort each product's records chronologically
     for (final key in map.keys) {

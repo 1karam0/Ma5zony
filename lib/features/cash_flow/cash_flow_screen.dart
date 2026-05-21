@@ -57,7 +57,7 @@ class _CashFlowScreenState extends State<CashFlowScreen> {
                 child: KPICard(
                   title: 'Total Available',
                   value: latest != null
-                      ? '\$${latest.totalAvailable.toStringAsFixed(0)}'
+                      ? 'EGP ${latest.totalAvailable.toStringAsFixed(0)}'
                       : '—',
                   icon: Icons.account_balance,
                   color: AppColors.success,
@@ -68,7 +68,7 @@ class _CashFlowScreenState extends State<CashFlowScreen> {
                 child: KPICard(
                   title: 'Allocated to Production',
                   value: latest != null
-                      ? '\$${latest.allocatedToProduction.toStringAsFixed(0)}'
+                      ? 'EGP ${latest.allocatedToProduction.toStringAsFixed(0)}'
                       : '—',
                   icon: Icons.factory,
                   color: AppColors.warning,
@@ -79,7 +79,7 @@ class _CashFlowScreenState extends State<CashFlowScreen> {
                 child: KPICard(
                   title: 'Remaining Budget',
                   value: latest != null
-                      ? '\$${latest.remainingBudget.toStringAsFixed(0)}'
+                      ? 'EGP ${latest.remainingBudget.toStringAsFixed(0)}'
                       : '—',
                   icon: Icons.account_balance_wallet,
                   color: AppColors.primary,
@@ -95,8 +95,7 @@ class _CashFlowScreenState extends State<CashFlowScreen> {
                 style: AppTextStyles.h3),
             const SizedBox(height: 12),
             Card(
-              child: SizedBox(
-                width: double.infinity,
+              child: HorizontallyScrollableTable(
                 child: DataTable(
                   columns: const [
                     DataColumn(label: Text('Category')),
@@ -109,7 +108,7 @@ class _CashFlowScreenState extends State<CashFlowScreen> {
                     return DataRow(cells: [
                       DataCell(Text(entry.category)),
                       DataCell(Text(
-                        '${isNegative ? '-' : '+'}\$${entry.amount.abs().toStringAsFixed(2)}',
+                        '${isNegative ? '-' : '+'}EGP ${entry.amount.abs().toStringAsFixed(2)}',
                         style: TextStyle(
                           color: isNegative ? AppColors.error : AppColors.success,
                           fontWeight: FontWeight.w600,
@@ -145,8 +144,7 @@ class _CashFlowScreenState extends State<CashFlowScreen> {
             Text('History', style: AppTextStyles.h3),
             const SizedBox(height: 12),
             Card(
-              child: SizedBox(
-                width: double.infinity,
+              child: HorizontallyScrollableTable(
                 child: DataTable(
                   columns: const [
                     DataColumn(label: Text('Date')),
@@ -159,11 +157,11 @@ class _CashFlowScreenState extends State<CashFlowScreen> {
                     return DataRow(cells: [
                       DataCell(Text(_formatDate(s.uploadedAt))),
                       DataCell(
-                          Text('\$${s.totalAvailable.toStringAsFixed(0)}')),
+                          Text('EGP ${s.totalAvailable.toStringAsFixed(0)}')),
                       DataCell(Text(
-                          '\$${s.allocatedToProduction.toStringAsFixed(0)}')),
+                          'EGP ${s.allocatedToProduction.toStringAsFixed(0)}')),
                       DataCell(
-                          Text('\$${s.remainingBudget.toStringAsFixed(0)}')),
+                          Text('EGP ${s.remainingBudget.toStringAsFixed(0)}')),
                       DataCell(Text('${s.entries.length}')),
                     ]);
                   }).toList(),

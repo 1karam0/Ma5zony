@@ -111,7 +111,7 @@ class _ProductionOrderDetailScreenState
                       _DetailItem(
                           label: 'Est. Cost',
                           value:
-                              '\$${order.estimatedCost.toStringAsFixed(2)}'),
+                              'EGP ${order.estimatedCost.toStringAsFixed(2)}'),
                       _DetailItem(
                           label: 'Created',
                           value: _formatDate(order.createdAt)),

@@ -133,7 +133,7 @@ class _ManufacturerPortalScreenState extends State<ManufacturerPortalScreen> {
                       _DetailRow(
                           label: 'Estimated Cost',
                           value:
-                              '\$${estimatedCost.toStringAsFixed(2)}'),
+                              'EGP ${estimatedCost.toStringAsFixed(2)}'),
                       _DetailRow(
                           label: 'Status',
                           value: _statusLabel(status)),

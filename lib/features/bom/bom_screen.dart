@@ -5,6 +5,8 @@ import 'package:ma5zony/providers/app_state.dart';
 import 'package:ma5zony/utils/constants.dart';
 import 'package:ma5zony/widgets/shared_widgets.dart';
 
+const _kUomOptions = ['units', 'g', 'kg', 'm', 'cm', 'L', 'mL', 'pcs'];
+
 class BomScreen extends StatefulWidget {
   const BomScreen({super.key});
 
@@ -40,19 +42,12 @@ class _BomScreenState extends State<BomScreen> {
           ),
           const SizedBox(height: 8),
           if (state.boms.isEmpty)
-            const Padding(
-              padding: EdgeInsets.all(32),
-              child: Center(
-                child: Column(
-                  children: [
-                    Icon(Icons.list_alt,
-                        size: 48, color: AppColors.textSecondary),
-                    SizedBox(height: 8),
-                    Text('No BOMs defined yet',
-                        style: TextStyle(color: AppColors.textSecondary)),
-                  ],
-                ),
-              ),
+            EmptyStateWidget(
+              icon: Icons.account_tree_outlined,
+              title: 'No Bills of Materials yet',
+              description: 'Create BOMs to define the raw materials needed for each product.',
+              primaryLabel: 'Add BOM',
+              onPrimary: () => _showFormDialog(context, state),
             )
           else
             ...state.boms.map((bom) {
@@ -62,13 +57,43 @@ class _BomScreenState extends State<BomScreen> {
                 margin: const EdgeInsets.only(bottom: 12),
                 child: ExpansionTile(
                   leading: const Icon(Icons.list_alt, color: AppColors.primary),
-                  title: Text(productName, style: AppTextStyles.h3),
+                  title: Row(
+                    children: [
+                      Text(productName, style: AppTextStyles.h3),
+                      const SizedBox(width: 10),
+                      _ActiveBadge(isActive: bom.isActive),
+                    ],
+                  ),
                   subtitle:
                       Text('${bom.materials.length} material(s)',
                           style: AppTextStyles.bodySmall),
                   trailing: Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
+                      if (!bom.isActive)
+                        TextButton.icon(
+                          icon: const Icon(Icons.check_circle_outline,
+                              size: 16, color: AppColors.success),
+                          label: const Text('Set Active',
+                              style: TextStyle(
+                                  color: AppColors.success, fontSize: 12)),
+                          style: TextButton.styleFrom(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 8, vertical: 4)),
+                          onPressed: () async {
+                            try {
+                              await context
+                                  .read<AppState>()
+                                  .setActiveBOM(bom.id, bom.finalProductId);
+                            } catch (e) {
+                              if (context.mounted) {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  SnackBar(content: Text('Error: $e')),
+                                );
+                              }
+                            }
+                          },
+                        ),
                       IconButton(
                         icon: const Icon(Icons.edit, size: 18),
                         tooltip: 'Edit',
@@ -91,20 +116,20 @@ class _BomScreenState extends State<BomScreen> {
                         columns: const [
                           DataColumn(label: Text('Material')),
                           DataColumn(label: Text('Qty / Unit')),
+                          DataColumn(label: Text('UoM')),
                           DataColumn(label: Text('Unit Cost')),
                           DataColumn(label: Text('Line Cost')),
                         ],
                         rows: bom.materials.map((line) {
                           final rm = rawMaterials[line.rawMaterialId];
                           final unitCost = rm?.unitCost ?? 0;
-                          final lineCost =
-                              line.quantityPerUnit * unitCost;
+                          final lineCost = line.quantityPerUnit * unitCost;
                           return DataRow(cells: [
                             DataCell(Text(rm?.name ?? line.rawMaterialId)),
-                            DataCell(Text(
-                                '${line.quantityPerUnit} ${rm?.unit ?? ''}')),
-                            DataCell(Text('\$${unitCost.toStringAsFixed(2)}')),
-                            DataCell(Text('\$${lineCost.toStringAsFixed(2)}')),
+                            DataCell(Text('${line.quantityPerUnit}')),
+                            DataCell(Text(line.unitOfMeasure)),
+                            DataCell(Text('EGP ${unitCost.toStringAsFixed(2)}')),
+                            DataCell(Text('EGP ${lineCost.toStringAsFixed(2)}')),
                           ]);
                         }).toList(),
                       ),
@@ -116,7 +141,7 @@ class _BomScreenState extends State<BomScreen> {
                         mainAxisAlignment: MainAxisAlignment.end,
                         children: [
                           Text(
-                            'Total per unit: \$${_totalCost(bom, rawMaterials).toStringAsFixed(2)}',
+                            'Est. cost per unit: EGP ${_totalCost(bom, rawMaterials).toStringAsFixed(2)}',
                             style: AppTextStyles.h3,
                           ),
                         ],
@@ -158,8 +183,37 @@ class _BomScreenState extends State<BomScreen> {
       context: ctx,
       builder: (_) => AlertDialog(
         title: const Text('Delete BOM'),
-        content: Text(
-            'Delete BOM for "${products[bom.finalProductId] ?? bom.id}"?'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('Delete BOM for "${products[bom.finalProductId] ?? bom.id}"?'),
+            if (bom.isActive) ...[
+              const SizedBox(height: 12),
+              Container(
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: AppColors.warning.withValues(alpha: 0.1),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(
+                      color: AppColors.warning.withValues(alpha: 0.4)),
+                ),
+                child: const Row(
+                  children: [
+                    Icon(Icons.warning_amber, color: AppColors.warning, size: 18),
+                    SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        'This is the active BOM. Deleting it will disable raw material order creation for this product until a new BOM is set as active.',
+                        style: TextStyle(fontSize: 13, color: AppColors.warning),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ],
+        ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx),
@@ -192,6 +246,34 @@ class _BomScreenState extends State<BomScreen> {
   }
 }
 
+// ─── Active Badge ─────────────────────────────────────────────────────────────
+
+class _ActiveBadge extends StatelessWidget {
+  final bool isActive;
+  const _ActiveBadge({required this.isActive});
+
+  @override
+  Widget build(BuildContext context) {
+    final color = isActive ? AppColors.success : AppColors.textSecondary;
+    final label = isActive ? 'Active' : 'Inactive';
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.1),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: color.withValues(alpha: 0.4)),
+      ),
+      child: Text(
+        label,
+        style: TextStyle(
+            fontSize: 11, fontWeight: FontWeight.w700, color: color),
+      ),
+    );
+  }
+}
+
+// ─── BOM Form Dialog ──────────────────────────────────────────────────────────
+
 class _BomFormDialog extends StatefulWidget {
   final AppState state;
   final BillOfMaterials? existing;
@@ -216,9 +298,13 @@ class _BomFormDialogState extends State<_BomFormDialog> {
     if (_isEdit) {
       _productId = widget.existing!.finalProductId;
       for (final m in widget.existing!.materials) {
+        final uom = _kUomOptions.contains(m.unitOfMeasure)
+            ? m.unitOfMeasure
+            : 'units';
         _lines.add(_MaterialLine(
           materialId: m.rawMaterialId,
           qtyCtrl: TextEditingController(text: '${m.quantityPerUnit}'),
+          uom: uom,
         ));
       }
     }
@@ -239,7 +325,7 @@ class _BomFormDialogState extends State<_BomFormDialog> {
     return AlertDialog(
       title: Text(_isEdit ? 'Edit BOM' : 'Create BOM'),
       content: SizedBox(
-        width: 500,
+        width: 560,
         child: Form(
           key: _formKey,
           child: SingleChildScrollView(
@@ -302,6 +388,21 @@ class _BomFormDialogState extends State<_BomFormDialog> {
                             },
                           ),
                         ),
+                        const SizedBox(width: 8),
+                        SizedBox(
+                          width: 90,
+                          child: DropdownButtonFormField<String>(
+                            value: line.uom,
+                            decoration: const InputDecoration(
+                                labelText: 'UoM', isDense: true),
+                            items: _kUomOptions
+                                .map((u) =>
+                                    DropdownMenuItem(value: u, child: Text(u)))
+                                .toList(),
+                            onChanged: (v) =>
+                                setState(() => line.uom = v ?? 'units'),
+                          ),
+                        ),
                         IconButton(
                           icon: const Icon(Icons.remove_circle,
                               color: AppColors.error),
@@ -354,10 +455,12 @@ class _BomFormDialogState extends State<_BomFormDialog> {
       final bom = BillOfMaterials(
         id: widget.existing?.id ?? '',
         finalProductId: _productId!,
+        isActive: widget.existing?.isActive ?? true,
         materials: _lines
             .map((l) => BomMaterial(
                   rawMaterialId: l.materialId!,
                   quantityPerUnit: double.parse(l.qtyCtrl.text.trim()),
+                  unitOfMeasure: l.uom,
                 ))
             .toList(),
       );
@@ -387,6 +490,7 @@ class _BomFormDialogState extends State<_BomFormDialog> {
 class _MaterialLine {
   String? materialId;
   final TextEditingController qtyCtrl;
+  String uom;
 
-  _MaterialLine({this.materialId, required this.qtyCtrl});
+  _MaterialLine({this.materialId, required this.qtyCtrl, this.uom = 'units'});
 }

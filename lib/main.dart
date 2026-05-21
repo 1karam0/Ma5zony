@@ -12,11 +12,21 @@ const _sentryDsn = String.fromEnvironment('SENTRY_DSN');
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  // Capture all Flutter errors into window.__flutterErrors for Playwright inspection
+  FlutterError.onError = (FlutterErrorDetails details) {
+    // ignore: avoid_print
+    print('[FLUTTER-ERROR] ${details.exceptionAsString()}');
+    FlutterError.dumpErrorToConsole(details);
+  };
+
   await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
 
+  final appState = AppState()..loadAll();
+
   final app = MultiProvider(
-    providers: [ChangeNotifierProvider(create: (_) => AppState()..loadAll())],
-    child: const Ma5zonyApp(),
+    providers: [ChangeNotifierProvider.value(value: appState)],
+    child: Ma5zonyApp(appState: appState),
   );
 
   if (_sentryDsn.isEmpty) {

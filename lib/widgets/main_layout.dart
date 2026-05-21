@@ -1,10 +1,171 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
 import 'package:provider/provider.dart';
+
 import 'package:ma5zony/models/app_notification.dart';
-import 'package:ma5zony/utils/constants.dart';
+import 'package:ma5zony/models/app_user.dart';
+import 'package:ma5zony/models/manufacturing_recommendation.dart';
+import 'package:ma5zony/models/production_order.dart';
 import 'package:ma5zony/providers/app_state.dart';
-import 'package:ma5zony/utils/role_guard.dart';
+import 'package:ma5zony/utils/constants.dart';
+import 'package:ma5zony/widgets/command_palette.dart';
+
+// ── Nav data ──────────────────────────────────────────────────────────────────
+
+/// A labelled nav category with a representative icon and its route entries.
+class _NavGroup {
+  final String label;
+  final IconData icon;
+  final List<NavRouteEntry> entries;
+  const _NavGroup({
+    required this.label,
+    required this.icon,
+    required this.entries,
+  });
+}
+
+// All nav groups (role filtering applied at runtime via _visibleGroupsForUser)
+const _kGroupDashboard = _NavGroup(
+  label: 'Dashboard',
+  icon: Icons.space_dashboard_outlined,
+  entries: [
+    NavRouteEntry(icon: Icons.space_dashboard_outlined, label: 'Dashboard', path: '/dashboard'),
+  ],
+);
+
+// Products is the anchor of the entire supply chain — direct link, always visible
+const _kGroupProducts = _NavGroup(
+  label: 'Products',
+  icon: Icons.inventory_2_outlined,
+  entries: [
+    NavRouteEntry(icon: Icons.inventory_2_outlined, label: 'Products', path: '/products'),
+  ],
+);
+
+// Supply chain setup: follow the chain — Supplier → Raw Material → BOM → Manufacturer → Warehouse
+const _kGroupSupplyChain = _NavGroup(
+  label: 'Supply Chain Setup',
+  icon: Icons.account_tree_outlined,
+  entries: [
+    NavRouteEntry(icon: Icons.local_shipping_outlined, label: 'Suppliers', path: '/suppliers'),
+    NavRouteEntry(icon: Icons.category_outlined, label: 'Raw Materials', path: '/raw-materials'),
+    NavRouteEntry(icon: Icons.account_tree_outlined, label: 'Bill of Materials', path: '/bom'),
+    NavRouteEntry(icon: Icons.factory_outlined, label: 'Manufacturers', path: '/manufacturers'),
+    NavRouteEntry(icon: Icons.warehouse_outlined, label: 'Warehouses', path: '/warehouses'),
+  ],
+);
+
+// Operational: demand analysis, forecasting, and all order types
+const _kGroupDemandOrders = _NavGroup(
+  label: 'Demand & Orders',
+  icon: Icons.trending_up_outlined,
+  entries: [
+    NavRouteEntry(icon: Icons.query_stats, label: 'Forecasts', path: '/forecasts'),
+    NavRouteEntry(icon: Icons.show_chart, label: 'Sales History', path: '/demand-data'),
+    NavRouteEntry(icon: Icons.receipt_long_outlined, label: 'Purchase Orders', path: '/orders'),
+    NavRouteEntry(icon: Icons.inventory_outlined, label: 'Material Orders', path: '/orders/raw-materials'),
+    NavRouteEntry(icon: Icons.precision_manufacturing_outlined, label: 'Production Orders', path: '/production-orders'),
+    NavRouteEntry(icon: Icons.auto_awesome_motion_outlined, label: 'Reorder Alerts', path: '/replenishment'),
+    NavRouteEntry(icon: Icons.grid_view_outlined, label: 'Product Analysis', path: '/classification'),
+  ],
+);
+
+const _kGroupFinanceSystem = _NavGroup(
+  label: 'Finance & Settings',
+  icon: Icons.account_balance_wallet_outlined,
+  entries: [
+    NavRouteEntry(icon: Icons.account_balance_wallet_outlined, label: 'Cash Flow', path: '/cash-flow'),
+    NavRouteEntry(icon: Icons.bar_chart_outlined, label: 'Financial Analytics', path: '/financial-analytics'),
+    NavRouteEntry(icon: Icons.cable_outlined, label: 'Integrations', path: '/integrations'),
+    NavRouteEntry(icon: Icons.tune, label: 'Settings', path: '/settings'),
+    NavRouteEntry(icon: Icons.rocket_launch_outlined, label: 'Setup Wizard', path: '/setup'),
+  ],
+);
+
+// Focused Manufacturing group for the Manufacturer role
+const _kGroupManufacturerFocused = _NavGroup(
+  label: 'Manufacturing',
+  icon: Icons.factory_outlined,
+  entries: [
+    NavRouteEntry(icon: Icons.precision_manufacturing_outlined, label: 'Production Orders', path: '/production-orders'),
+    NavRouteEntry(icon: Icons.auto_awesome_motion_outlined, label: 'Reorder Alerts', path: '/replenishment'),
+    NavRouteEntry(icon: Icons.account_tree_outlined, label: 'Bill of Materials', path: '/bom'),
+  ],
+);
+
+// Focused group for the Raw Material Factory role
+const _kGroupRawMaterials = _NavGroup(
+  label: 'Materials',
+  icon: Icons.category_outlined,
+  entries: [
+    NavRouteEntry(icon: Icons.category_outlined, label: 'Raw Materials', path: '/raw-materials'),
+    NavRouteEntry(icon: Icons.local_shipping_outlined, label: 'Suppliers', path: '/suppliers'),
+  ],
+);
+
+/// Returns nav groups visible to [user] based on their role.
+List<_NavGroup> _visibleGroupsForUser(AppUser? user) {
+  if (user == null) {
+    return [_kGroupDashboard, _kGroupProducts, _kGroupSupplyChain, _kGroupDemandOrders, _kGroupFinanceSystem];
+  }
+  return switch (user.role) {
+    AppUser.roleSmeOwner => [
+        _kGroupDashboard, _kGroupProducts, _kGroupSupplyChain,
+        _kGroupDemandOrders, _kGroupFinanceSystem,
+      ],
+    AppUser.roleInventoryManager => [
+        _kGroupDashboard, _kGroupProducts, _kGroupSupplyChain,
+        _kGroupDemandOrders, _kGroupFinanceSystem,
+      ],
+    AppUser.roleManufacturer => [
+        _kGroupDashboard, _kGroupManufacturerFocused,
+      ],
+    AppUser.roleRawMaterialFactory => [
+        _kGroupDashboard, _kGroupRawMaterials,
+      ],
+    _ => [_kGroupDashboard, _kGroupProducts, _kGroupSupplyChain, _kGroupDemandOrders, _kGroupFinanceSystem],
+  };
+}
+
+// ── Route → page title ────────────────────────────────────────────────────────
+
+const List<(String, String)> _kRouteTitles = [
+  ('/orders/raw-materials/create', 'Create RM Order'),
+  ('/orders/raw-materials', 'Raw Material Orders'),
+  ('/orders/create', 'Create Purchase Order'),
+  ('/orders/', 'Order Detail'),
+  ('/orders', 'Purchase Orders'),
+  ('/production-orders/', 'Production Order Detail'),
+  ('/production-orders', 'Production Orders'),
+  ('/forecasts/compare', 'Forecast Algorithm Comparison'),
+  ('/forecasts', 'Demand Forecasting'),
+  ('/setup', 'Setup Wizard'),
+  ('/dashboard', 'Dashboard'),
+  ('/products', 'Products'),
+  ('/suppliers', 'Suppliers'),
+  ('/warehouses', 'Warehouses'),
+  ('/demand-data', 'Sales History'),
+  ('/classification', 'ABC-XYZ Classification'),
+  ('/replenishment', 'Reorder Alerts'),
+  ('/integrations', 'Integrations'),
+  ('/settings', 'Settings'),
+  ('/financial-analytics', 'Financial Analytics'),
+  ('/raw-materials', 'Raw Materials'),
+  ('/bom', 'Bill of Materials'),
+  ('/manufacturers', 'Manufacturers'),
+  ('/recommendations', 'Production Recommendations'),
+  ('/cash-flow', 'Cash Flow'),
+];
+
+String _titleForRoute(String location) {
+  for (final (prefix, title) in _kRouteTitles) {
+    if (location.startsWith(prefix)) return title;
+  }
+  return 'Ma5zony';
+}
+
+// ── MainLayout ─────────────────────────────────────────────────────────────────
 
 class MainLayout extends StatefulWidget {
   final Widget child;
@@ -19,47 +180,87 @@ class _MainLayoutState extends State<MainLayout> {
   String? _lastError;
 
   @override
-  Widget build(BuildContext context) {
-    final isDesktop = MediaQuery.of(context).size.width >= 800;
-    final isMobile = MediaQuery.of(context).size.width < 600;
-    final state = context.watch<AppState>();
+  void initState() {
+    super.initState();
+    HardwareKeyboard.instance.addHandler(_onKeyEvent);
+  }
 
-    // Show error snackbar when errorMessage changes
+  @override
+  void dispose() {
+    HardwareKeyboard.instance.removeHandler(_onKeyEvent);
+    super.dispose();
+  }
+
+  bool _onKeyEvent(KeyEvent event) {
+    if (event is! KeyDownEvent) return false;
+    final isCtrlOrMeta = HardwareKeyboard.instance.isControlPressed ||
+        HardwareKeyboard.instance.isMetaPressed;
+    if (isCtrlOrMeta && event.logicalKey == LogicalKeyboardKey.keyK) {
+      _openCommandPalette();
+      return true;
+    }
+    return false;
+  }
+
+  void _openCommandPalette() {
+    if (!mounted) return;
+    final user = context.read<AppState>().currentUser;
+    final entries = _visibleGroupsForUser(user).expand((g) => g.entries).toList();
+    showDialog<void>(
+      context: context,
+      barrierColor: Colors.black45,
+      builder: (_) => CommandPalette(entries: entries),
+    );
+  }
+
+  void _showErrorIfNeeded(AppState state) {
     final error = state.errorMessage;
     if (error != null && error != _lastError) {
       _lastError = error;
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text(error),
-              backgroundColor: Colors.red[700],
-              behavior: SnackBarBehavior.floating,
-              action: SnackBarAction(
-                label: 'Dismiss',
-                textColor: Colors.white,
-                onPressed: () => state.clearError(),
-              ),
-            ),
-          );
-        }
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(error),
+          backgroundColor: Colors.red[700],
+          behavior: SnackBarBehavior.floating,
+          action: SnackBarAction(
+            label: 'Dismiss',
+            textColor: Colors.white,
+            onPressed: () => state.clearError(),
+          ),
+        ));
       });
     }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final state = context.watch<AppState>();
+    _showErrorIfNeeded(state);
+
+    final isMobile = MediaQuery.sizeOf(context).width < 600;
+    if (isMobile) return _buildMobileLayout(state);
+
+    final user = state.currentUser;
+    final groups = _visibleGroupsForUser(user);
+    final badges = _buildBadges(state);
 
     return Scaffold(
-      // Mobile drawer (< 600px): sidebar slides in from left
-      drawer: isMobile
-          ? Drawer(
-              child: _Sidebar(isDesktop: true),
-            )
-          : null,
       body: Row(
         children: [
-          if (!isMobile) _Sidebar(isDesktop: isDesktop),
+          _Sidebar(
+            groups: groups,
+            badges: badges,
+            user: user,
+            onLogout: () {
+              state.logout();
+              context.go('/login');
+            },
+          ),
           Expanded(
             child: Column(
               children: [
-                _TopBar(isMobile: isMobile),
+                _TopBar(isMobile: false, onOpenPalette: _openCommandPalette),
                 Expanded(child: widget.child),
               ],
             ),
@@ -68,333 +269,412 @@ class _MainLayoutState extends State<MainLayout> {
       ),
     );
   }
+
+  Widget _buildMobileLayout(AppState state) {
+    final user = state.currentUser;
+    final groups = _visibleGroupsForUser(user);
+    final badges = _buildBadges(state);
+
+    return Scaffold(
+      drawer: Drawer(
+        width: 260,
+        child: _Sidebar(
+          groups: groups,
+          badges: badges,
+          user: user,
+          onNavTap: () => Navigator.of(context).pop(),
+          onLogout: () {
+            Navigator.of(context).pop();
+            state.logout();
+            context.go('/login');
+          },
+        ),
+      ),
+      body: Column(
+        children: [
+          _TopBar(isMobile: true, onOpenPalette: _openCommandPalette),
+          Expanded(child: widget.child),
+        ],
+      ),
+    );
+  }
+
+  Map<String, int> _buildBadges(AppState state) => {
+        '/dashboard': state.hasUrgentStockAlerts ? state.criticalStockProducts.length : 0,
+        '/replenishment': state.openRecommendations,
+        '/orders': state.purchaseOrders
+            .where((o) =>
+                o.status.name == 'pending' || o.status.name == 'confirmed')
+            .length,
+        '/recommendations': state.mfgRecommendations
+            .where((r) => r.status == RecommendationStatus.pending)
+            .length,
+        '/production-orders': state.productionOrders
+            .where((o) =>
+                o.status == ProductionOrderStatus.draft ||
+                o.status == ProductionOrderStatus.approved ||
+                o.status == ProductionOrderStatus.inProduction)
+            .length,
+        '/orders/raw-materials': state.rmPurchaseOrders
+            .where((o) => o.status == 'draft')
+            .length,
+      };
 }
 
-class _Sidebar extends StatelessWidget {
-  final bool isDesktop;
+// ── Sidebar (permanent, always expanded) ─────────────────────────────────────
 
-  const _Sidebar({required this.isDesktop});
+class _Sidebar extends StatefulWidget {
+  final List<_NavGroup> groups;
+  final Map<String, int> badges;
+  final AppUser? user;
+  final VoidCallback onLogout;
+  final VoidCallback? onNavTap;
+
+  const _Sidebar({
+    required this.groups,
+    required this.badges,
+    required this.user,
+    required this.onLogout,
+    this.onNavTap,
+  });
+
+  @override
+  State<_Sidebar> createState() => _SidebarState();
+}
+
+class _SidebarState extends State<_Sidebar> {
+  late Set<int> _expanded;
+  String? _trackedLoc;
+
+  @override
+  void initState() {
+    super.initState();
+    _expanded = {};
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final loc = GoRouterState.of(context).uri.toString();
+    if (loc == _trackedLoc) return;
+    _trackedLoc = loc;
+    for (int i = 0; i < widget.groups.length; i++) {
+      final hasActive = widget.groups[i].entries.any((e) =>
+          loc == e.path || (e.path != '/dashboard' && loc.startsWith(e.path)));
+      if (hasActive) _expanded = {..._expanded, i};
+    }
+  }
+
+  void _toggle(int i) => setState(() {
+        if (_expanded.contains(i)) {
+          _expanded = _expanded.difference({i});
+        } else {
+          _expanded = {..._expanded, i};
+        }
+      });
 
   @override
   Widget build(BuildContext context) {
-    final user = context.watch<AppState>().currentUser;
-    final userIsOwner = isOwner(user);
-
     return Container(
-      width: isDesktop ? kSidebarWidth : kSidebarCollapsedWidth,
-      decoration: BoxDecoration(
-        color: Colors.white,
-        border: Border(
-          right: BorderSide(color: AppColors.border),
-        ),
+      width: kSidebarWidth,
+      decoration: const BoxDecoration(
+        color: AppColors.sidebarBg,
+        border: Border(right: BorderSide(color: Color(0x18FFFFFF))),
       ),
       child: Column(
         children: [
-          // ── Logo / brand ────────────────────────────────────────────
+          // Brand header
           SizedBox(
-            height: 64,
-            child: Center(
-              child: isDesktop
-                  ? Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Icon(Icons.inventory_2,
-                            color: AppColors.primary, size: 20),
-                        const SizedBox(width: 8),
-                        Text(
-                          'Ma5zony',
-                          style: AppTextStyles.h2.copyWith(
-                            color: AppColors.primary,
-                          ),
-                        ),
-                      ],
-                    )
-                  : const Icon(Icons.inventory_2,
-                      color: AppColors.primary),
-            ),
-          ),
-          const Divider(height: 1),
-
-          // ── Nav items ───────────────────────────────────────────────
-          Expanded(
-            child: ListView(
-              padding: const EdgeInsets.symmetric(vertical: 8),
-              children: [
-                _NavItem(
-                  icon: Icons.dashboard_outlined,
-                  label: 'Dashboard',
-                  path: '/dashboard',
-                  isDesktop: isDesktop,
-                ),
-
-                // ── INVENTORY ───────────────────────────────────────
-                _SectionDivider(label: 'INVENTORY', isDesktop: isDesktop),
-                _NavItem(
-                  icon: Icons.inventory_2_outlined,
-                  label: 'Products',
-                  path: '/products',
-                  isDesktop: isDesktop,
-                ),
-                _NavItem(
-                  icon: Icons.local_shipping_outlined,
-                  label: 'Suppliers',
-                  path: '/suppliers',
-                  isDesktop: isDesktop,
-                ),
-                _NavItem(
-                  icon: Icons.warehouse_outlined,
-                  label: 'Warehouses',
-                  path: '/warehouses',
-                  isDesktop: isDesktop,
-                ),
-
-                // ── OPERATIONS ──────────────────────────────────────
-                _SectionDivider(label: 'OPERATIONS', isDesktop: isDesktop),
-                _NavItem(
-                  icon: Icons.analytics_outlined,
-                  label: 'Demand Data',
-                  path: '/demand-data',
-                  isDesktop: isDesktop,
-                ),
-                _NavItem(
-                  icon: Icons.trending_up,
-                  label: 'Forecasts',
-                  path: '/forecasts',
-                  isDesktop: isDesktop,
-                ),
-                _NavItem(
-                  icon: Icons.shopping_cart_outlined,
-                  label: 'Replenishment',
-                  path: '/replenishment',
-                  isDesktop: isDesktop,
-                ),
-                _NavItem(
-                  icon: Icons.receipt_long_outlined,
-                  label: 'Purchase Orders',
-                  path: '/orders',
-                  isDesktop: isDesktop,
-                ),
-
-                // ── MANUFACTURING ────────────────────────────────────
-                _SectionDivider(label: 'MANUFACTURING', isDesktop: isDesktop),
-                _NavItem(
-                  icon: Icons.category_outlined,
-                  label: 'Raw Materials',
-                  path: '/raw-materials',
-                  isDesktop: isDesktop,
-                ),
-                _NavItem(
-                  icon: Icons.list_alt_outlined,
-                  label: 'Bill of Materials',
-                  path: '/bom',
-                  isDesktop: isDesktop,
-                ),
-                _NavItem(
-                  icon: Icons.factory_outlined,
-                  label: 'Manufacturers',
-                  path: '/manufacturers',
-                  isDesktop: isDesktop,
-                ),
-                _NavItem(
-                  icon: Icons.auto_awesome_outlined,
-                  label: 'Recommendations',
-                  path: '/recommendations',
-                  isDesktop: isDesktop,
-                ),
-                _NavItem(
-                  icon: Icons.precision_manufacturing_outlined,
-                  label: 'Production Orders',
-                  path: '/production-orders',
-                  isDesktop: isDesktop,
-                ),
-
-                // ── FINANCE (owner only) ─────────────────────────────
-                if (userIsOwner) ...[
-                  _SectionDivider(label: 'FINANCE', isDesktop: isDesktop),
-                  _NavItem(
-                    icon: Icons.account_balance_wallet_outlined,
-                    label: 'Cash Flow',
-                    path: '/cash-flow',
-                    isDesktop: isDesktop,
+            height: kTopBarHeight,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: Row(
+                children: [
+                  Container(
+                    width: 28,
+                    height: 28,
+                    decoration: BoxDecoration(
+                      color: AppColors.primary,
+                      borderRadius: BorderRadius.circular(7),
+                    ),
+                    child: const Icon(Icons.inventory_2, color: Colors.white, size: 16),
                   ),
-                  _NavItem(
-                    icon: Icons.bar_chart_outlined,
-                    label: 'Financial Analytics',
-                    path: '/financial-analytics',
-                    isDesktop: isDesktop,
+                  const SizedBox(width: 10),
+                  Text(
+                    'Ma5zony',
+                    style: AppTextStyles.h2.copyWith(
+                      color: Colors.white,
+                      fontWeight: FontWeight.w700,
+                      fontSize: 18,
+                    ),
                   ),
                 ],
+              ),
+            ),
+          ),
 
-                // ── SYSTEM ───────────────────────────────────────────
-                _SectionDivider(label: 'SYSTEM', isDesktop: isDesktop),
-                _NavItem(
-                  icon: Icons.integration_instructions_outlined,
-                  label: 'Integrations',
-                  path: '/integrations',
-                  isDesktop: isDesktop,
-                ),
-                _NavItem(
-                  icon: Icons.settings_outlined,
-                  label: 'Settings',
-                  path: '/settings',
-                  isDesktop: isDesktop,
-                ),
+          // Nav groups
+          Expanded(
+            child: ListView(
+              padding: const EdgeInsets.symmetric(vertical: 6),
+              children: [
+                for (int i = 0; i < widget.groups.length; i++)
+                  _SidebarGroup(
+                    group: widget.groups[i],
+                    badges: widget.badges,
+                    expanded: _expanded.contains(i),
+                    onToggle: () => _toggle(i),
+                    onNavigate: (path) {
+                      context.go(path);
+                      widget.onNavTap?.call();
+                    },
+                  ),
               ],
             ),
           ),
-          const Divider(height: 1),
-          _UserItem(isDesktop: isDesktop),
+
+          // User row
+          Container(
+            decoration: BoxDecoration(
+              border: Border(top: BorderSide(color: Colors.white.withValues(alpha: 0.07))),
+            ),
+            child: _UserFlyoutItem(user: widget.user, onTap: widget.onLogout),
+          ),
         ],
       ),
     );
   }
 }
 
-class _NavItem extends StatelessWidget {
-  final IconData icon;
-  final String label;
-  final String path;
-  final bool isDesktop;
+// ── Sidebar group (category with click-to-expand sub-items) ──────────────────
 
-  const _NavItem({
-    required this.icon,
-    required this.label,
-    required this.path,
-    required this.isDesktop,
+class _SidebarGroup extends StatelessWidget {
+  final _NavGroup group;
+  final Map<String, int> badges;
+  final bool expanded;
+  final VoidCallback onToggle;
+  final void Function(String) onNavigate;
+
+  const _SidebarGroup({
+    required this.group,
+    required this.badges,
+    required this.expanded,
+    required this.onToggle,
+    required this.onNavigate,
   });
 
   @override
   Widget build(BuildContext context) {
-    final currentPath = GoRouterState.of(context).uri.toString();
-    final isSelected = currentPath == path ||
-        (path != '/dashboard' && currentPath.startsWith(path));
-    return InkWell(
-      onTap: () => context.go(path),
-      borderRadius: BorderRadius.circular(8),
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 150),
-        height: 44,
-        margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 1),
-        decoration: BoxDecoration(
-          color: isSelected
-              ? AppColors.primary.withValues(alpha: 0.1)
-              : Colors.transparent,
-          borderRadius: BorderRadius.circular(8),
-          border: isSelected
-              ? Border.all(
-                  color: AppColors.primary.withValues(alpha: 0.2), width: 1)
-              : null,
-        ),
-        child: Row(
-          children: [
-            const SizedBox(width: 14),
-            Icon(
-              icon,
-              color:
-                  isSelected ? AppColors.primary : AppColors.textSecondary,
-              size: 18,
-            ),
-            if (isDesktop) ...[
-              const SizedBox(width: 10),
-              Text(
-                label,
-                style: isSelected
-                    ? AppTextStyles.body.copyWith(
-                        color: AppColors.primary,
-                        fontWeight: FontWeight.w600,
-                        fontSize: 13,
-                      )
-                    : AppTextStyles.body.copyWith(fontSize: 13),
-              ),
-            ],
-          ],
-        ),
-      ),
-    );
-  }
-}
+    final loc = GoRouterState.of(context).uri.toString();
+    final groupHasActive = group.entries.any((e) =>
+        loc == e.path || (e.path != '/dashboard' && loc.startsWith(e.path)));
+    final totalBadge = group.entries.fold(0, (s, e) => s + (badges[e.path] ?? 0));
+    final isSingle = group.entries.length == 1;
 
-/// Section label shown between nav-item groups in the expanded sidebar.
-class _SectionDivider extends StatelessWidget {
-  final String label;
-  final bool isDesktop;
-  const _SectionDivider({required this.label, required this.isDesktop});
-
-  @override
-  Widget build(BuildContext context) {
-    if (!isDesktop) {
-      // Collapsed sidebar: just a subtle line
-      return Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-        child: Divider(height: 1, color: AppColors.border),
-      );
-    }
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(18, 14, 16, 2),
-      child: Text(
-        label,
-        style: AppTextStyles.label.copyWith(
-          fontSize: 10,
-          letterSpacing: 1.1,
-          color: AppColors.textSecondary.withValues(alpha: 0.6),
-          fontWeight: FontWeight.w600,
-        ),
-      ),
-    );
-  }
-}
-
-class _UserItem extends StatelessWidget {
-  final bool isDesktop;
-
-  const _UserItem({required this.isDesktop});
-
-  @override
-  Widget build(BuildContext context) {
-    final user = context.watch<AppState>().currentUser;
-    if (user == null) return const SizedBox.shrink();
-
-    return Container(
-      padding: const EdgeInsets.all(16),
-      child: InkWell(
-        onTap: () {
-          context.read<AppState>().logout();
-          context.go('/login');
-        },
-        child: Row(
-          children: [
-            const CircleAvatar(
-              backgroundColor: AppColors.primary,
-              radius: 16,
-              child: Icon(Icons.person, color: Colors.white, size: 16),
-            ),
-            if (isDesktop) ...[
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      user.name,
-                      style: AppTextStyles.body.copyWith(
-                        fontWeight: FontWeight.w500,
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        // Category header
+        InkWell(
+          onTap: isSingle ? () => onNavigate(group.entries.first.path) : onToggle,
+          hoverColor: AppColors.sidebarBgHover,
+          splashColor: Colors.transparent,
+          child: SizedBox(
+            height: 40,
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                // Accent bar
+                AnimatedContainer(
+                  duration: const Duration(milliseconds: 150),
+                  width: 3,
+                  height: groupHasActive ? 20 : 0,
+                  decoration: BoxDecoration(
+                    color: AppColors.sidebarAccent,
+                    borderRadius: const BorderRadius.horizontal(right: Radius.circular(2)),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                // Icon
+                AnimatedContainer(
+                  duration: const Duration(milliseconds: 150),
+                  width: 28,
+                  height: 28,
+                  decoration: BoxDecoration(
+                    color: groupHasActive
+                        ? AppColors.sidebarAccent.withValues(alpha: 0.18)
+                        : Colors.transparent,
+                    borderRadius: BorderRadius.circular(7),
+                  ),
+                  child: Icon(
+                    group.icon,
+                    size: 16,
+                    color: groupHasActive ? AppColors.sidebarTextActive : AppColors.sidebarText,
+                  ),
+                ),
+                const SizedBox(width: 10),
+                // Label
+                Expanded(
+                  child: Text(
+                    group.label,
+                    style: (groupHasActive
+                            ? AppTextStyles.sidebarItemActive
+                            : AppTextStyles.sidebarItem)
+                        .copyWith(fontWeight: FontWeight.w600, fontSize: 13),
+                  ),
+                ),
+                // Badge when collapsed
+                if (totalBadge > 0 && !expanded)
+                  Container(
+                    margin: const EdgeInsets.only(right: 4),
+                    padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                    decoration: BoxDecoration(
+                      color: AppColors.warning,
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: Text(
+                      '$totalBadge',
+                      style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w700, color: Colors.white),
+                    ),
+                  ),
+                // Chevron
+                if (!isSingle)
+                  Padding(
+                    padding: const EdgeInsets.only(right: 8),
+                    child: AnimatedRotation(
+                      turns: expanded ? 0.25 : 0,
+                      duration: const Duration(milliseconds: 200),
+                      child: Icon(
+                        Icons.chevron_right,
+                        size: 16,
+                        color: AppColors.sidebarText.withValues(alpha: 0.45),
                       ),
-                      overflow: TextOverflow.ellipsis,
                     ),
-                    Text(
-                      user.role,
-                      style: AppTextStyles.label,
-                      overflow: TextOverflow.ellipsis,
+                  ),
+              ],
+            ),
+          ),
+        ),
+
+        // Animated sub-items dropdown
+        if (!isSingle)
+          ClipRect(
+            child: AnimatedAlign(
+              alignment: Alignment.topCenter,
+              heightFactor: expanded ? 1.0 : 0.0,
+              duration: const Duration(milliseconds: 200),
+              curve: Curves.easeOut,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  for (final entry in group.entries)
+                    _FlyoutItem(
+                      entry: entry,
+                      badge: badges[entry.path] ?? 0,
+                      onTap: () => onNavigate(entry.path),
+                      indented: true,
                     ),
-                  ],
+                ],
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+}
+
+// ── Flyout item ───────────────────────────────────────────────────────────────
+
+class _FlyoutItem extends StatelessWidget {
+  final NavRouteEntry entry;
+  final int badge;
+  final VoidCallback onTap;
+
+  /// When true, adds extra left indent to show hierarchy inside a category.
+  final bool indented;
+
+  const _FlyoutItem({
+    required this.entry,
+    required this.onTap,
+    this.badge = 0,
+    this.indented = false,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final loc = GoRouterState.of(context).uri.toString();
+    final isActive = loc == entry.path ||
+        (entry.path != '/dashboard' && loc.startsWith(entry.path));
+
+    return InkWell(
+      onTap: onTap,
+      hoverColor: AppColors.sidebarBgHover,
+      splashColor: Colors.transparent,
+      child: SizedBox(
+        height: 36,
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            // 2px accent bar
+            AnimatedContainer(
+              duration: const Duration(milliseconds: 150),
+              width: 2,
+              height: isActive ? 16 : 0,
+              decoration: BoxDecoration(
+                color: AppColors.sidebarAccent,
+                borderRadius: BorderRadius.circular(1),
+              ),
+            ),
+            // Extra indent for nested items
+            SizedBox(width: indented ? 20 : 10),
+            // Icon in tinted square
+            AnimatedContainer(
+              duration: const Duration(milliseconds: 150),
+              width: 24,
+              height: 24,
+              decoration: BoxDecoration(
+                color: isActive
+                    ? AppColors.sidebarAccent.withValues(alpha: 0.18)
+                    : Colors.transparent,
+                borderRadius: BorderRadius.circular(5),
+              ),
+              child: Icon(
+                entry.icon,
+                size: 14,
+                color: isActive
+                    ? AppColors.sidebarTextActive
+                    : AppColors.sidebarText.withValues(alpha: 0.75),
+              ),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                entry.label,
+                style: (isActive
+                        ? AppTextStyles.sidebarItemActive
+                        : AppTextStyles.sidebarItem)
+                    .copyWith(fontSize: 12.5),
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+            if (badge > 0)
+              Container(
+                margin: const EdgeInsets.only(right: 12),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                decoration: BoxDecoration(
+                  color: AppColors.warning,
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Text(
+                  '$badge',
+                  style: const TextStyle(
+                    fontSize: 10,
+                    fontWeight: FontWeight.w700,
+                    color: Colors.white,
+                  ),
                 ),
               ),
-              const Icon(
-                Icons.logout,
-                size: 16,
-                color: AppColors.textSecondary,
-              ),
-            ],
           ],
         ),
       ),
@@ -402,68 +682,141 @@ class _UserItem extends StatelessWidget {
   }
 }
 
-class _TopBar extends StatelessWidget {
-  const _TopBar({this.isMobile = false});
+// ── User items ────────────────────────────────────────────────────────────────
 
-  final bool isMobile;
+class _UserFlyoutItem extends StatelessWidget {
+  final AppUser? user;
+  final VoidCallback onTap;
 
-  static const _routeTitles = [
-    ('/orders/create', 'Create Purchase Order'),
-    ('/orders/', 'Order Detail'),
-    ('/orders', 'Purchase Orders'),
-    ('/production-orders/', 'Production Order Detail'),
-    ('/production-orders', 'Production Orders'),
-    ('/dashboard', 'Dashboard'),
-    ('/products', 'Products'),
-    ('/suppliers', 'Suppliers'),
-    ('/warehouses', 'Warehouses'),
-    ('/demand-data', 'Demand Data'),
-    ('/forecasts', 'Forecasts'),
-    ('/replenishment', 'Replenishment'),
-    ('/integrations', 'Integrations'),
-    ('/settings', 'Settings'),
-    ('/financial-analytics', 'Financial Analytics'),
-    ('/raw-materials', 'Raw Materials'),
-    ('/bom', 'Bill of Materials'),
-    ('/manufacturers', 'Manufacturers'),
-    ('/recommendations', 'Recommendations'),
-    ('/cash-flow', 'Cash Flow'),
-  ];
+  const _UserFlyoutItem({required this.user, required this.onTap});
 
-  String _titleFor(String location) {
-    for (final entry in _routeTitles) {
-      if (location.startsWith(entry.$1)) return entry.$2;
-    }
-    return 'Ma5zony';
+  Color _roleColor(String role) => switch (role) {
+        AppUser.roleSmeOwner => AppColors.primary,
+        AppUser.roleInventoryManager => AppColors.info,
+        AppUser.roleManufacturer => AppColors.warning,
+        AppUser.roleRawMaterialFactory => AppColors.accent,
+        _ => AppColors.textSubdued,
+      };
+
+  @override
+  Widget build(BuildContext context) {
+    if (user == null) return const SizedBox.shrink();
+    final roleColor = _roleColor(user!.role);
+
+    return InkWell(
+      onTap: onTap,
+      hoverColor: AppColors.sidebarBgHover,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        child: Row(
+          children: [
+            // Avatar with role-coloured ring
+            Container(
+              width: 34,
+              height: 34,
+              decoration: BoxDecoration(
+                color: roleColor.withValues(alpha: 0.25),
+                shape: BoxShape.circle,
+                border: Border.all(color: roleColor.withValues(alpha: 0.5), width: 1.5),
+              ),
+              child: Center(
+                child: Text(
+                  user!.name.isNotEmpty ? user!.name[0].toUpperCase() : '?',
+                  style: TextStyle(color: roleColor, fontWeight: FontWeight.w700, fontSize: 14),
+                ),
+              ),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Text(
+                    user!.name,
+                    style: AppTextStyles.sidebarItem.copyWith(
+                      fontWeight: FontWeight.w600,
+                      color: Colors.white,
+                      fontSize: 12,
+                    ),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  const SizedBox(height: 2),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+                    decoration: BoxDecoration(
+                      color: roleColor.withValues(alpha: 0.2),
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(color: roleColor.withValues(alpha: 0.35)),
+                    ),
+                    child: Text(
+                      user!.role,
+                      style: TextStyle(
+                        fontSize: 9,
+                        fontWeight: FontWeight.w600,
+                        color: roleColor,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            Tooltip(
+              message: 'Sign out',
+              child: Icon(
+                Icons.logout,
+                size: 14,
+                color: AppColors.sidebarText.withValues(alpha: 0.5),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
   }
+}
+
+// ── Top Bar ───────────────────────────────────────────────────────────────────
+
+class _TopBar extends StatelessWidget {
+  final bool isMobile;
+  final VoidCallback onOpenPalette;
+
+  const _TopBar({required this.isMobile, required this.onOpenPalette});
 
   @override
   Widget build(BuildContext context) {
     final location = GoRouterState.of(context).uri.toString();
-    final title = _titleFor(location);
+    final title = _titleForRoute(location);
 
     return Container(
-      height: 64,
-      padding: const EdgeInsets.symmetric(horizontal: 24),
+      height: kTopBarHeight,
+      padding: const EdgeInsets.symmetric(horizontal: 20),
       decoration: const BoxDecoration(
-        color: Colors.white,
-        border: Border(bottom: BorderSide(color: AppColors.border)),
+        color: AppColors.canvas,
+        border: Border(bottom: BorderSide(color: AppColors.divider)),
       ),
       child: Row(
         children: [
-          // Hamburger menu on mobile
           if (isMobile)
             Builder(
               builder: (ctx) => IconButton(
-                icon: const Icon(Icons.menu),
+                icon: const Icon(Icons.menu, size: 20),
+                color: AppColors.textSecondary,
                 onPressed: () => Scaffold.of(ctx).openDrawer(),
                 tooltip: 'Open navigation',
+                padding: EdgeInsets.zero,
+                constraints:
+                    const BoxConstraints(minWidth: 36, minHeight: 36),
               ),
             ),
+          if (isMobile) const SizedBox(width: 8),
           Text(title, style: AppTextStyles.h2),
           const Spacer(),
-          _GlobalSearchBox(),
-          const SizedBox(width: 16),
+          _CommandPaletteTrigger(onTap: onOpenPalette),
+          const SizedBox(width: 8),
+          _QuickActionButton(),
+          const SizedBox(width: 8),
           _NotificationBell(),
         ],
       ),
@@ -471,7 +824,133 @@ class _TopBar extends StatelessWidget {
   }
 }
 
-/// Notification bell icon with badge + dropdown panel.
+// ── ⌘K pill trigger ──────────────────────────────────────────────────────────
+
+class _CommandPaletteTrigger extends StatelessWidget {
+  final VoidCallback onTap;
+
+  const _CommandPaletteTrigger({required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    final platform = Theme.of(context).platform;
+    final isApple =
+        platform == TargetPlatform.macOS || platform == TargetPlatform.iOS;
+    final hint = isApple ? '⌘K' : 'Ctrl K';
+
+    return InkWell(
+      onTap: onTap,
+      borderRadius: AppRadius.pill,
+      child: Container(
+        height: 32,
+        padding: const EdgeInsets.symmetric(horizontal: 10),
+        decoration: BoxDecoration(
+          color: AppColors.surfaceSubtle,
+          border: Border.all(color: AppColors.divider),
+          borderRadius: AppRadius.pill,
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.search, size: 14, color: AppColors.textSubdued),
+            const SizedBox(width: 6),
+            Text(
+              'Search...',
+              style: AppTextStyles.body.copyWith(
+                color: AppColors.textSubdued,
+                fontSize: 13,
+              ),
+            ),
+            const SizedBox(width: 8),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+              decoration: BoxDecoration(
+                border: Border.all(color: AppColors.divider),
+                borderRadius: AppRadius.sharp,
+                color: AppColors.surface,
+              ),
+              child: Text(hint, style: AppTextStyles.kbd),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ── Quick-Action "+ New" Button ───────────────────────────────────────────────
+
+class _QuickActionButton extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    final user = context.read<AppState>().currentUser;
+    final isManufacturer = user?.role == AppUser.roleManufacturer;
+    final isFactory = user?.role == AppUser.roleRawMaterialFactory;
+
+    final actions = <_QuickAction>[
+      if (!isManufacturer && !isFactory)
+        _QuickAction(Icons.receipt_long_outlined, 'New Purchase Order', '/orders/create'),
+      if (!isFactory)
+        _QuickAction(Icons.inventory_2_outlined, 'Add Product', '/products'),
+      if (!isManufacturer && !isFactory)
+        _QuickAction(Icons.query_stats, 'Run Forecast', '/forecasts'),
+      if (!isFactory)
+        _QuickAction(Icons.precision_manufacturing_outlined, 'New Production Order', '/production-orders'),
+    ];
+
+    return PopupMenuButton<String>(
+      offset: const Offset(0, 44),
+      tooltip: 'Quick actions',
+      itemBuilder: (_) => [
+        const PopupMenuItem<String>(
+          enabled: false,
+          height: 36,
+          child: Text('Quick Actions', style: TextStyle(
+            fontSize: 11, fontWeight: FontWeight.w600, color: AppColors.textSubdued,
+          )),
+        ),
+        ...actions.map((a) => PopupMenuItem<String>(
+          value: a.path,
+          height: 40,
+          child: Row(
+            children: [
+              Icon(a.icon, size: 16, color: AppColors.primary),
+              const SizedBox(width: 10),
+              Text(a.label, style: const TextStyle(fontSize: 13)),
+            ],
+          ),
+        )),
+      ],
+      onSelected: (path) => context.go(path),
+      child: Container(
+        height: 32,
+        padding: const EdgeInsets.symmetric(horizontal: 10),
+        decoration: BoxDecoration(
+          color: AppColors.primary,
+          borderRadius: BorderRadius.circular(6),
+        ),
+        child: const Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.add, size: 14, color: Colors.white),
+            SizedBox(width: 4),
+            Text('New', style: TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w600)),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _QuickAction {
+  final IconData icon;
+  final String label;
+  final String path;
+  const _QuickAction(this.icon, this.label, this.path);
+}
+
+// ── Notification Bell ─────────────────────────────────────────────────────────
+
 class _NotificationBell extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
@@ -479,7 +958,7 @@ class _NotificationBell extends StatelessWidget {
     final unread = state.unreadNotificationCount;
 
     return PopupMenuButton<String>(
-      offset: const Offset(0, 50),
+      offset: const Offset(0, 44),
       tooltip: 'Notifications',
       icon: Badge(
         isLabelVisible: unread > 0,
@@ -487,6 +966,7 @@ class _NotificationBell extends StatelessWidget {
         child: Icon(
           unread > 0 ? Icons.notifications : Icons.notifications_none,
           color: unread > 0 ? AppColors.primary : AppColors.textSecondary,
+          size: 20,
         ),
       ),
       constraints: const BoxConstraints(maxWidth: 380, maxHeight: 460),
@@ -504,7 +984,6 @@ class _NotificationBell extends StatelessWidget {
           ];
         }
         return [
-          // Header with "Mark all read"
           PopupMenuItem<String>(
             enabled: false,
             child: Row(
@@ -524,19 +1003,16 @@ class _NotificationBell extends StatelessWidget {
             ),
           ),
           const PopupMenuDivider(),
-          // Notifications list (max 10)
-          ...notifications.take(10).map((n) {
-            return PopupMenuItem<String>(
-              value: n.actionRoute,
-              child: _NotificationTile(notification: n, state: state),
-            );
-          }),
+          ...notifications.take(10).map(
+                (n) => PopupMenuItem<String>(
+                  value: n.actionRoute,
+                  child: _NotificationTile(notification: n, state: state),
+                ),
+              ),
         ];
       },
       onSelected: (route) {
-        if (route.isNotEmpty) {
-          context.go(route);
-        }
+        if (route.isNotEmpty) context.go(route);
       },
     );
   }
@@ -569,11 +1045,14 @@ class _NotificationTile extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(notification.title,
-                    style: AppTextStyles.body.copyWith(
-                      fontWeight:
-                          notification.isRead ? FontWeight.normal : FontWeight.w600,
-                    )),
+                Text(
+                  notification.title,
+                  style: AppTextStyles.body.copyWith(
+                    fontWeight: notification.isRead
+                        ? FontWeight.normal
+                        : FontWeight.w600,
+                  ),
+                ),
                 const SizedBox(height: 2),
                 Text(notification.message,
                     style: AppTextStyles.bodySmall,
@@ -599,39 +1078,23 @@ class _NotificationTile extends StatelessWidget {
     );
   }
 
-  static IconData _iconForType(NotificationType type) {
-    switch (type) {
-      case NotificationType.lowStock:
-        return Icons.warning_amber;
-      case NotificationType.stockout:
-        return Icons.error_outline;
-      case NotificationType.orderApproved:
-        return Icons.check_circle;
-      case NotificationType.shopifySync:
-        return Icons.sync;
-      case NotificationType.forecastReady:
-        return Icons.auto_graph;
-      case NotificationType.general:
-        return Icons.info_outline;
-    }
-  }
+  static IconData _iconForType(NotificationType type) => switch (type) {
+        NotificationType.lowStock => Icons.warning_amber,
+        NotificationType.stockout => Icons.error_outline,
+        NotificationType.orderApproved => Icons.check_circle,
+        NotificationType.shopifySync => Icons.sync,
+        NotificationType.forecastReady => Icons.auto_graph,
+        NotificationType.general => Icons.info_outline,
+      };
 
-  static Color _colorForType(NotificationType type) {
-    switch (type) {
-      case NotificationType.lowStock:
-        return AppColors.warning;
-      case NotificationType.stockout:
-        return AppColors.error;
-      case NotificationType.orderApproved:
-        return AppColors.success;
-      case NotificationType.shopifySync:
-        return AppColors.accent;
-      case NotificationType.forecastReady:
-        return AppColors.primary;
-      case NotificationType.general:
-        return AppColors.textSecondary;
-    }
-  }
+  static Color _colorForType(NotificationType type) => switch (type) {
+        NotificationType.lowStock => AppColors.warning,
+        NotificationType.stockout => AppColors.error,
+        NotificationType.orderApproved => AppColors.success,
+        NotificationType.shopifySync => AppColors.accent,
+        NotificationType.forecastReady => AppColors.primary,
+        NotificationType.general => AppColors.textSecondary,
+      };
 
   static String _timeAgo(DateTime dt) {
     final diff = DateTime.now().difference(dt);
@@ -640,194 +1103,5 @@ class _NotificationTile extends StatelessWidget {
     if (diff.inHours < 24) return '${diff.inHours}h ago';
     if (diff.inDays < 7) return '${diff.inDays}d ago';
     return '${dt.month}/${dt.day}/${dt.year}';
-  }
-}
-
-class _GlobalSearchBox extends StatefulWidget {
-  @override
-  State<_GlobalSearchBox> createState() => _GlobalSearchBoxState();
-}
-
-class _GlobalSearchBoxState extends State<_GlobalSearchBox> {
-  final _controller = TextEditingController();
-  final _focusNode = FocusNode();
-  OverlayEntry? _overlay;
-
-  @override
-  void dispose() {
-    _removeOverlay();
-    _controller.dispose();
-    _focusNode.dispose();
-    super.dispose();
-  }
-
-  void _removeOverlay() {
-    _overlay?.remove();
-    _overlay = null;
-  }
-
-  void _onChanged(String query) {
-    _removeOverlay();
-    if (query.trim().isEmpty) return;
-
-    final state = context.read<AppState>();
-    final q = query.toLowerCase();
-
-    final matchedProducts = state.products
-        .where((p) =>
-            p.name.toLowerCase().contains(q) ||
-            p.sku.toLowerCase().contains(q) ||
-            p.category.toLowerCase().contains(q))
-        .take(5)
-        .toList();
-
-    final matchedSuppliers = state.suppliers
-        .where((s) =>
-            s.name.toLowerCase().contains(q) ||
-            s.contactEmail.toLowerCase().contains(q))
-        .take(3)
-        .toList();
-
-    final matchedWarehouses = state.warehouses
-        .where((w) =>
-            w.name.toLowerCase().contains(q) ||
-            w.city.toLowerCase().contains(q))
-        .take(3)
-        .toList();
-
-    if (matchedProducts.isEmpty &&
-        matchedSuppliers.isEmpty &&
-        matchedWarehouses.isEmpty) {
-      return;
-    }
-
-    final renderBox = context.findRenderObject() as RenderBox;
-    final offset = renderBox.localToGlobal(Offset.zero);
-
-    _overlay = OverlayEntry(
-      builder: (_) => Positioned(
-        top: offset.dy + renderBox.size.height + 4,
-        left: offset.dx,
-        width: 300,
-        child: Material(
-          elevation: 8,
-          borderRadius: BorderRadius.circular(8),
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxHeight: 320),
-            child: ListView(
-              padding: const EdgeInsets.symmetric(vertical: 4),
-              shrinkWrap: true,
-              children: [
-                if (matchedProducts.isNotEmpty) ...[
-                  _sectionLabel('Products'),
-                  ...matchedProducts.map((p) => _resultTile(
-                        icon: Icons.inventory,
-                        title: p.name,
-                        subtitle: p.sku,
-                        onTap: () {
-                          _clear();
-                          context.go('/products');
-                        },
-                      )),
-                ],
-                if (matchedSuppliers.isNotEmpty) ...[
-                  _sectionLabel('Suppliers'),
-                  ...matchedSuppliers.map((s) => _resultTile(
-                        icon: Icons.local_shipping,
-                        title: s.name,
-                        subtitle: s.contactEmail,
-                        onTap: () {
-                          _clear();
-                          context.go('/suppliers');
-                        },
-                      )),
-                ],
-                if (matchedWarehouses.isNotEmpty) ...[
-                  _sectionLabel('Warehouses'),
-                  ...matchedWarehouses.map((w) => _resultTile(
-                        icon: Icons.warehouse,
-                        title: w.name,
-                        subtitle: w.city,
-                        onTap: () {
-                          _clear();
-                          context.go('/warehouses');
-                        },
-                      )),
-                ],
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-    Overlay.of(context).insert(_overlay!);
-  }
-
-  Widget _sectionLabel(String text) => Padding(
-        padding: const EdgeInsets.fromLTRB(12, 8, 12, 2),
-        child: Text(text,
-            style: AppTextStyles.label
-                .copyWith(fontWeight: FontWeight.w600, fontSize: 11)),
-      );
-
-  Widget _resultTile({
-    required IconData icon,
-    required String title,
-    required String subtitle,
-    required VoidCallback onTap,
-  }) =>
-      ListTile(
-        dense: true,
-        leading: Icon(icon, size: 18, color: AppColors.primary),
-        title: Text(title, style: AppTextStyles.body),
-        subtitle: Text(subtitle, style: AppTextStyles.label),
-        onTap: onTap,
-      );
-
-  void _clear() {
-    _controller.clear();
-    _removeOverlay();
-    _focusNode.unfocus();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      width: 300,
-      height: 40,
-      decoration: BoxDecoration(
-        color: AppColors.background,
-        borderRadius: BorderRadius.circular(8),
-      ),
-      padding: const EdgeInsets.symmetric(horizontal: 12),
-      child: Row(
-        children: [
-          const Icon(Icons.search, color: AppColors.textSecondary, size: 20),
-          const SizedBox(width: 8),
-          Expanded(
-            child: TextField(
-              controller: _controller,
-              focusNode: _focusNode,
-              onChanged: _onChanged,
-              style: AppTextStyles.body,
-              decoration: InputDecoration(
-                hintText: 'Search products, suppliers...',
-                hintStyle:
-                    AppTextStyles.body.copyWith(color: AppColors.textSecondary),
-                border: InputBorder.none,
-                isDense: true,
-                contentPadding: EdgeInsets.zero,
-              ),
-            ),
-          ),
-          if (_controller.text.isNotEmpty)
-            GestureDetector(
-              onTap: _clear,
-              child: const Icon(Icons.close,
-                  size: 16, color: AppColors.textSecondary),
-            ),
-        ],
-      ),
-    );
   }
 }

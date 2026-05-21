@@ -3,8 +3,9 @@ class RawMaterial {
   final String name;
   final String sku;
   final String unit;
+  final String unitOfMeasure;
   final double unitCost;
-  final String supplierId;
+  final String? supplierId;
   int currentStock;
   final int safetyStock;
   final int leadTimeDays;
@@ -14,21 +15,24 @@ class RawMaterial {
     required this.name,
     required this.sku,
     required this.unit,
+    String? unitOfMeasure,
     required this.unitCost,
-    required this.supplierId,
+    this.supplierId,
     this.currentStock = 0,
     this.safetyStock = 0,
     this.leadTimeDays = 0,
-  });
+  }) : unitOfMeasure = unitOfMeasure ?? unit;
 
   factory RawMaterial.fromFirestore(String id, Map<String, dynamic> data) {
+    final unit = data['unit'] as String? ?? 'pcs';
     return RawMaterial(
       id: id,
       name: data['name'] as String? ?? '',
       sku: data['sku'] as String? ?? '',
-      unit: data['unit'] as String? ?? 'pcs',
+      unit: unit,
+      unitOfMeasure: data['unitOfMeasure'] as String? ?? unit,
       unitCost: (data['unitCost'] as num?)?.toDouble() ?? 0,
-      supplierId: data['supplierId'] as String? ?? '',
+      supplierId: data['supplierId'] as String?,
       currentStock: (data['currentStock'] as num?)?.toInt() ?? 0,
       safetyStock: (data['safetyStock'] as num?)?.toInt() ?? 0,
       leadTimeDays: (data['leadTimeDays'] as num?)?.toInt() ?? 0,
@@ -40,8 +44,9 @@ class RawMaterial {
       'name': name,
       'sku': sku,
       'unit': unit,
+      'unitOfMeasure': unitOfMeasure,
       'unitCost': unitCost,
-      'supplierId': supplierId,
+      if (supplierId != null) 'supplierId': supplierId,
       'currentStock': currentStock,
       'safetyStock': safetyStock,
       'leadTimeDays': leadTimeDays,

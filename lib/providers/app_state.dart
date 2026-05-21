@@ -25,6 +25,7 @@ import 'package:ma5zony/models/supplier.dart';
 import 'package:ma5zony/models/supplier_order.dart';
 import 'package:ma5zony/models/warehouse.dart';
 import 'package:ma5zony/models/workflow_log.dart';
+import 'package:ma5zony/services/abc_xyz_service.dart';
 import 'package:ma5zony/services/cash_flow_service.dart';
 import 'package:ma5zony/services/firebase_auth_service.dart';
 import 'package:ma5zony/services/firestore_inventory_repository.dart';
@@ -38,12 +39,44 @@ import 'package:ma5zony/services/settings_service.dart';
 import 'package:ma5zony/services/firebase_shopify_service.dart';
 import 'package:ma5zony/services/notification_service.dart';
 import 'package:ma5zony/services/workflow_service.dart';
+import 'package:ma5zony/models/raw_material_purchase_order.dart';
 import 'package:ma5zony/services/backend_api_service.dart';
+import 'package:ma5zony/services/minimum_stock_service.dart';
+import 'package:ma5zony/services/raw_material_order_service.dart';
 import 'package:ma5zony/utils/cloud_function_config.dart';
+
+/// Dedicated notifier for auth state changes only.
+/// Used as GoRouter's refreshListenable so the router only re-evaluates
+/// when the user actually logs in or out, not on every CRUD notifyListeners().
+class AuthNotifier extends ChangeNotifier {
+  void notifyAuthChanged() => notifyListeners();
+}
+
+/// Thrown when a Cloud Function returns a non-2xx HTTP status.
+class CloudFunctionException implements Exception {
+  final int statusCode;
+  final String message;
+  CloudFunctionException(this.statusCode, this.message);
+  @override
+  String toString() => message;
+}
+
+/// Thrown when no Bill of Materials exists for a product during manufacturing
+/// approval — lets the UI show a specific, actionable error message.
+class BomMissingException implements Exception {
+  final String productId;
+  BomMissingException(this.productId);
+  @override
+  String toString() =>
+      'No Bill of Materials found for this product. '
+      'Please add a BOM before approving a manufacturing recommendation.';
+}
 
 /// Central application state ChangeNotifier.
 /// Composes all domain services and exposes reactive state to the UI.
 class AppState extends ChangeNotifier {
+  /// Notifier dedicated to auth state changes for GoRouter refresh.
+  final AuthNotifier authNotifier = AuthNotifier();
   // ── Services ───────────────────────────────────────────────────────────────
   InventoryRepository? _repo;
   SettingsService? _settingsService;
@@ -53,8 +86,11 @@ class AppState extends ChangeNotifier {
   late final ForecastingService _forecastingService;
   late final InventoryPolicyService _policyService;
   late final ReplenishmentService _replenishmentService;
+  late final AbcXyzService _abcXyzService;
   late final FirebaseAuthService _authService;
   late final RecommendationEngineService _recEngine;
+  late final MinimumStockService _minimumStockService;
+  late final RawMaterialOrderService _rmOrderService;
   ManufacturingService? _manufacturingService;
   WorkflowService? _workflowService;
   CashFlowService? _cashFlowService;
@@ -67,8 +103,11 @@ class AppState extends ChangeNotifier {
       forecastingService: _forecastingService,
       policyService: _policyService,
     );
+    _abcXyzService = AbcXyzService();
     _authService = FirebaseAuthService();
     _recEngine = RecommendationEngineService();
+    _minimumStockService = MinimumStockService();
+    _rmOrderService = RawMaterialOrderService();
 
     // Listen to Firebase auth state changes and sync our AppUser.
     _authService.authStateChanges.listen(_onAuthStateChanged);
@@ -122,6 +161,7 @@ class AppState extends ChangeNotifier {
         _settingsService = null;
         _shopifyService = null;
         _clearDomainState();
+        authNotifier.notifyAuthChanged();
       } else {
         // Cold start / page reload with existing session.
         if (_currentUser != null && _repo != null) return;
@@ -138,6 +178,7 @@ class AppState extends ChangeNotifier {
         }
         _initRepo(firebaseUser.uid);
         notifyListeners();
+        authNotifier.notifyAuthChanged();
         await loadAll();
         return;
       }
@@ -156,6 +197,9 @@ class AppState extends ChangeNotifier {
     _demandByProduct = {};
     _recommendations = [];
     _currentForecast = null;
+    _forecastMapes = {};
+    _forecastComparison = {};
+    _abcXyzMatrix = {};
     _shopifyConnection = null;
     _settings = const UserSettings();
     _approvedRecommendations = {};
@@ -171,6 +215,10 @@ class AppState extends ChangeNotifier {
     _mfgRecommendations = [];
     _cashFlowSnapshots = [];
     _workflowLogs = [];
+    _minimumStockResults = [];
+    _rmPurchaseOrders = [];
+    _onboardingComplete = false;
+    _onboardingStateLoaded = false;
   }
 
   Future<bool> login(String email, String password) async {
@@ -202,6 +250,7 @@ class AppState extends ChangeNotifier {
         }
         _initRepo(user.uid);
         notifyListeners();
+        authNotifier.notifyAuthChanged();
         await loadAll();
         return true;
       }
@@ -223,6 +272,7 @@ class AppState extends ChangeNotifier {
     _shopifyService = null;
     _clearDomainState();
     notifyListeners();
+    authNotifier.notifyAuthChanged();
   }
 
   Future<bool> register(
@@ -249,6 +299,7 @@ class AppState extends ChangeNotifier {
         );
         _initRepo(user.uid);
         notifyListeners();
+        authNotifier.notifyAuthChanged();
         await loadAll();
         return true;
       }
@@ -290,6 +341,18 @@ class AppState extends ChangeNotifier {
   Map<String, List<DomainDemandRecord>> _demandByProduct = {};
   List<ReplenishmentRecommendation> _recommendations = [];
   ForecastResult? _currentForecast;
+
+  /// Persisted MAPE values keyed by productId, loaded at startup and updated
+  /// whenever a forecast is run. Used to compute the global forecast accuracy KPI.
+  Map<String, double> _forecastMapes = {};
+
+  /// Side-by-side forecast comparison (SMA / SES / Holt / HoltWinters / WMA)
+  /// produced by [compareForecastAlgorithms]. Map key = algorithm name.
+  Map<String, ForecastResult> _forecastComparison = {};
+
+  /// ABC-XYZ classification matrix (productId → ProductClassification).
+  /// Populated by [classifyProducts] or [runFullPipeline].
+  Map<String, ProductClassification> _abcXyzMatrix = {};
   ShopifyStoreConnection? _shopifyConnection;
   UserSettings _settings = const UserSettings();
   ThemeMode _themeMode = ThemeMode.light;
@@ -297,6 +360,9 @@ class AppState extends ChangeNotifier {
   List<AppUser> _teamMembers = [];
   List<PurchaseOrder> _purchaseOrders = [];
   List<SupplierOrder> _supplierOrders = [];
+  // Tracks how many emails were sent during the last approval operation.
+  // Read by the UI to construct the success snackbar.
+  int _lastApprovalEmailsSent = 0;
 
   // Supply-chain state (Phase 1–3)
   List<RawMaterial> _rawMaterials = [];
@@ -307,13 +373,24 @@ class AppState extends ChangeNotifier {
   List<ManufacturingRecommendation> _mfgRecommendations = [];
   List<CashFlowSnapshot> _cashFlowSnapshots = [];
   List<WorkflowLog> _workflowLogs = [];
-
+  List<MinimumStockResult> _minimumStockResults = [];
+  List<RawMaterialPurchaseOrder> _rmPurchaseOrders = [];
+  bool _onboardingComplete = false;
+  bool _onboardingStateLoaded = false;
   List<Product> get products => _products;
   List<Warehouse> get warehouses => _warehouses;
   List<Supplier> get suppliers => _suppliers;
   Map<String, List<DomainDemandRecord>> get demandByProduct => _demandByProduct;
   List<ReplenishmentRecommendation> get recommendations => _recommendations;
   ForecastResult? get currentForecast => _currentForecast;
+  Map<String, ForecastResult> get forecastComparison => _forecastComparison;
+
+  void clearCurrentForecast() {
+    _currentForecast = null;
+    notifyListeners();
+  }
+
+  Map<String, ProductClassification> get abcXyzMatrix => _abcXyzMatrix;
   ShopifyStoreConnection? get shopifyConnection => _shopifyConnection;
   UserSettings get settings => _settings;
   ThemeMode get themeMode => _themeMode;
@@ -322,6 +399,7 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
   Set<String> get approvedRecommendations => _approvedRecommendations;
+  int get lastApprovalEmailsSent => _lastApprovalEmailsSent;
   List<AppUser> get teamMembers => _teamMembers;
   List<PurchaseOrder> get purchaseOrders => _purchaseOrders;
   List<SupplierOrder> get supplierOrders => _supplierOrders;
@@ -337,6 +415,13 @@ class AppState extends ChangeNotifier {
   CashFlowSnapshot? get latestCashFlow =>
       _cashFlowSnapshots.isNotEmpty ? _cashFlowSnapshots.first : null;
   List<WorkflowLog> get workflowLogs => _workflowLogs;
+  List<MinimumStockResult> get minimumStockResults => _minimumStockResults;
+  List<MinimumStockResult> get criticalStockProducts =>
+      _minimumStockResults.where((r) => r.isUrgent).toList();
+  bool get hasUrgentStockAlerts => _minimumStockResults.any((r) => r.isUrgent);
+  List<RawMaterialPurchaseOrder> get rmPurchaseOrders => _rmPurchaseOrders;
+  bool get onboardingComplete => _onboardingComplete;
+  bool get onboardingStateLoaded => _onboardingStateLoaded;
 
   // ── Notifications ──────────────────────────────────────────────────────────
   List<AppNotification> _notifications = [];
@@ -373,6 +458,43 @@ class AppState extends ChangeNotifier {
     }
   }
 
+  /// Bulk-assign a set of products to a warehouse (or pass null to unassign).
+  /// Used by the Warehouse → "Manage Products" workflow.
+  Future<void> assignProductsToWarehouse(
+    String? warehouseId,
+    List<String> productIds,
+  ) async {
+    if (productIds.isEmpty) return;
+    try {
+      for (final pid in productIds) {
+        final idx = _products.indexWhere((p) => p.id == pid);
+        if (idx == -1) continue;
+        final p = _products[idx];
+        if (p.warehouseId == warehouseId) continue;
+        final updated = Product(
+          id: p.id,
+          sku: p.sku,
+          name: p.name,
+          category: p.category,
+          unitCost: p.unitCost,
+          currentStock: p.currentStock,
+          supplierId: p.supplierId,
+          manufacturerId: p.manufacturerId,
+          warehouseId: warehouseId,
+          isActive: p.isActive,
+          leadTimeDays: p.leadTimeDays,
+        );
+        await _repo!.updateProduct(updated);
+        _products[idx] = updated;
+      }
+      notifyListeners();
+    } catch (e) {
+      _errorMessage = 'Failed to assign products: $e';
+      notifyListeners();
+      rethrow;
+    }
+  }
+
   Future<void> deleteProduct(String productId) async {
     try {
       // Cascade: delete associated demand records
@@ -380,6 +502,12 @@ class AppState extends ChangeNotifier {
       for (final r in records) {
         await _repo!.deleteDemandRecord(r.id);
       }
+      // Cascade: delete associated BOM entries
+      final productBoms = _boms.where((b) => b.finalProductId == productId).toList();
+      for (final bom in productBoms) {
+        await _repo!.deleteBOM(bom.id);
+      }
+      _boms.removeWhere((b) => b.finalProductId == productId);
       await _repo!.deleteProduct(productId);
       _products.removeWhere((p) => p.id == productId);
       _demandByProduct.remove(productId);
@@ -433,9 +561,32 @@ class AppState extends ChangeNotifier {
             currentStock: _products[i].currentStock,
             supplierId: null,
             manufacturerId: _products[i].manufacturerId,
+            warehouseId: _products[i].warehouseId,
+            isActive: _products[i].isActive,
+            leadTimeDays: _products[i].leadTimeDays,
           );
           await _repo!.updateProduct(updated);
           _products[i] = updated;
+        }
+      }
+      // Cascade: null out supplierId on linked raw materials
+      for (var i = 0; i < _rawMaterials.length; i++) {
+        if (_rawMaterials[i].supplierId == supplierId) {
+          final rm = _rawMaterials[i];
+          final updated = RawMaterial(
+            id: rm.id,
+            name: rm.name,
+            sku: rm.sku,
+            unit: rm.unit,
+            unitOfMeasure: rm.unitOfMeasure,
+            unitCost: rm.unitCost,
+            supplierId: null,
+            currentStock: rm.currentStock,
+            safetyStock: rm.safetyStock,
+            leadTimeDays: rm.leadTimeDays,
+          );
+          await _repo!.updateRawMaterial(updated);
+          _rawMaterials[i] = updated;
         }
       }
       await _repo!.deleteSupplier(supplierId);
@@ -462,6 +613,19 @@ class AppState extends ChangeNotifier {
     }
   }
 
+  Future<Warehouse?> addWarehouseAndReturn(Warehouse warehouse) async {
+    try {
+      final saved = await _repo!.addWarehouse(warehouse);
+      _warehouses.add(saved);
+      notifyListeners();
+      return saved;
+    } catch (e) {
+      _errorMessage = 'Failed to add warehouse: $e';
+      notifyListeners();
+      return null;
+    }
+  }
+
   Future<void> updateWarehouse(Warehouse warehouse) async {
     try {
       await _repo!.updateWarehouse(warehouse);
@@ -477,6 +641,26 @@ class AppState extends ChangeNotifier {
 
   Future<void> deleteWarehouse(String warehouseId) async {
     try {
+      // Unassign all products from this warehouse before deleting.
+      for (var i = 0; i < _products.length; i++) {
+        if (_products[i].warehouseId == warehouseId) {
+          final updated = Product(
+            id: _products[i].id,
+            sku: _products[i].sku,
+            name: _products[i].name,
+            category: _products[i].category,
+            unitCost: _products[i].unitCost,
+            currentStock: _products[i].currentStock,
+            supplierId: _products[i].supplierId,
+            manufacturerId: _products[i].manufacturerId,
+            warehouseId: null,
+            isActive: _products[i].isActive,
+            leadTimeDays: _products[i].leadTimeDays,
+          );
+          await _repo!.updateProduct(updated);
+          _products[i] = updated;
+        }
+      }
       await _repo!.deleteWarehouse(warehouseId);
       _warehouses.removeWhere((w) => w.id == warehouseId);
       notifyListeners();
@@ -534,23 +718,190 @@ class AppState extends ChangeNotifier {
 
   // ── Replenishment Approval ─────────────────────────────────────────────────
 
+  /// Approves a replenishment recommendation by automatically creating a
+  /// confirmed [PurchaseOrder], creating the corresponding [SupplierOrder],
+  /// and sending the supplier email via Cloud Function.
+  ///
+  /// Throws [CloudFunctionException] if the email call fails, so the UI can
+  /// show a differentiated warning while still accepting the approval.
   Future<void> approveRecommendation(ReplenishmentRecommendation rec) async {
     if (_repo == null || _currentUser == null) return;
-    // Store approval under users/{uid}/approvals/{productId}
-    await FirebaseFirestore.instance
+
+    _lastApprovalEmailsSent = 0;
+
+    // Build a one-item PurchaseOrder for this recommendation.
+    final product = _products.where((p) => p.id == rec.productId).firstOrNull;
+    final supplierId = product?.supplierId;
+    final supplier = supplierId != null
+        ? _suppliers.where((s) => s.id == supplierId).firstOrNull
+        : null;
+
+    final item = PurchaseOrderItem(
+      productId: rec.productId,
+      productName: rec.productName,
+      sku: rec.sku,
+      quantity: rec.suggestedOrderQty,
+      unitCost: product?.unitCost ?? 0,
+      supplierId: supplierId,
+      supplierName: supplier?.name,
+      supplierEmail: supplier?.contactEmail,
+    );
+
+    final draft = PurchaseOrder(
+      id: '',
+      status: OrderStatus.draft,
+      createdAt: DateTime.now(),
+      createdByUid: _currentUser!.uid,
+      createdByName: _currentUser!.name,
+      items: [item],
+    );
+
+    // Create PO + SupplierOrders.
+    final po = await confirmPurchaseOrder(draft);
+
+    if (po != null && (supplier?.contactEmail.isNotEmpty ?? false)) {
+      // Mark as sent and send supplier emails.
+      await _invokeCloudFunction(
+        CloudFunctionConfig.sendSupplierEmails,
+        {'uid': _currentUser!.uid, 'purchaseOrderId': po.id},
+      );
+      _lastApprovalEmailsSent = 1;
+    }
+
+    // Atomically update PO status + record approval in a single batch.
+    final batch = FirebaseFirestore.instance.batch();
+
+    if (po != null) {
+      final poRef = FirebaseFirestore.instance
+          .collection('users')
+          .doc(_currentUser!.uid)
+          .collection('purchaseOrders')
+          .doc(po.id);
+      final newStatus = (supplier?.contactEmail.isNotEmpty ?? false)
+          ? 'sent'
+          : 'confirmed';
+      batch.update(poRef, {'status': newStatus});
+      po.status = newStatus == 'sent' ? OrderStatus.sent : OrderStatus.confirmed;
+    }
+
+    final approvalRef = FirebaseFirestore.instance
         .collection('users')
         .doc(_currentUser!.uid)
         .collection('approvals')
-        .doc(rec.productId)
-        .set({
+        .doc(rec.productId);
+    batch.set(approvalRef, {
       'productId': rec.productId,
       'productName': rec.productName,
       'sku': rec.sku,
       'suggestedOrderQty': rec.suggestedOrderQty,
+      'purchaseOrderId': po?.id,
       'approvedAt': FieldValue.serverTimestamp(),
     });
+
+    await batch.commit();
+
     _approvedRecommendations.add(rec.productId);
     notifyListeners();
+  }
+
+  /// Approve a replenishment recommendation for a *manufactured* product.
+  /// Reads the product's BOM, calculates raw material needs, creates a
+  /// ProductionOrder + RawMaterialOrders, and notifies factory/manufacturer.
+  Future<ProductionOrder?> approveReplenishmentManufacture(
+    ReplenishmentRecommendation rec,
+  ) async {
+    if (_currentUser == null || _manufacturingService == null || _workflowService == null) {
+      return null;
+    }
+
+    _lastApprovalEmailsSent = 0;
+
+    final product = _products.where((p) => p.id == rec.productId).firstOrNull;
+    final manufacturerId = product?.manufacturerId ?? '';
+    if (manufacturerId.isEmpty) {
+      throw Exception(
+        'Product "${rec.productName}" has no manufacturer assigned. '
+        'Assign one in Products → Edit.',
+      );
+    }
+
+    final bom = _boms.where((b) => b.finalProductId == rec.productId).firstOrNull;
+    if (bom == null) throw BomMissingException(rec.productId);
+
+    final estimatedCost = bom.materials.fold<double>(0.0, (acc, mat) {
+      final rm = _rawMaterials.where((r) => r.id == mat.rawMaterialId).firstOrNull;
+      return acc + (rm?.unitCost ?? 0) * mat.quantityPerUnit * rec.suggestedOrderQty;
+    });
+
+    // Create ProductionOrder.
+    final order = await _manufacturingService!.createProductionOrder(
+      finalProductId: rec.productId,
+      quantity: rec.suggestedOrderQty,
+      manufacturerId: manufacturerId,
+      estimatedCost: estimatedCost,
+    );
+    _productionOrders.insert(0, order);
+
+    // Generate RawMaterialOrders from BOM.
+    final rmOrders = await _manufacturingService!.generateRawMaterialOrders(
+      productionOrder: order,
+      bom: bom,
+      rawMaterials: _rawMaterials,
+    );
+    _rawMaterialOrders.addAll(rmOrders);
+
+    // Create per-supplier factory orders + send factory emails.
+    final supplierCount = await _createPerSupplierFactoryOrders(order, rmOrders);
+
+    int emailsSent = 0;
+    if (supplierCount > 0) {
+      try {
+        final result = await _invokeCloudFunction(
+          CloudFunctionConfig.sendFactoryEmails,
+          {'uid': _currentUser!.uid, 'productionOrderId': order.id},
+        );
+        final results = (result['results'] as List<dynamic>?) ?? [];
+        emailsSent += results.where((r) => (r as Map)['status'] == 'sent').length;
+      } catch (_) {}
+    }
+
+    // Transition to materialsOrdered.
+    await _workflowService!.transitionProductionOrder(
+      order,
+      ProductionOrderStatus.materialsOrdered,
+      _currentUser!.uid,
+    );
+
+    // Create manufacturer portal doc + send manufacturer email.
+    await _createManufacturerPortalOrderAtApproval(order, rmOrders);
+    try {
+      final mfrResult = await _invokeCloudFunction(
+        CloudFunctionConfig.sendManufacturerEmails,
+        {'uid': _currentUser!.uid, 'productionOrderId': order.id},
+      );
+      final mfrResults = (mfrResult['results'] as List<dynamic>?) ?? [];
+      emailsSent += mfrResults.where((r) => (r as Map)['status'] == 'sent').length;
+    } catch (_) {}
+
+    // Record approval.
+    final approvalRef = FirebaseFirestore.instance
+        .collection('users')
+        .doc(_currentUser!.uid)
+        .collection('approvals')
+        .doc(rec.productId);
+    await approvalRef.set({
+      'productId': rec.productId,
+      'productName': rec.productName,
+      'sku': rec.sku,
+      'suggestedOrderQty': rec.suggestedOrderQty,
+      'productionOrderId': order.id,
+      'approvedAt': FieldValue.serverTimestamp(),
+    });
+
+    _approvedRecommendations.add(rec.productId);
+    _lastApprovalEmailsSent = emailsSent;
+    notifyListeners();
+    return order;
   }
 
   // ── Notifications ──────────────────────────────────────────────────────────
@@ -627,15 +978,28 @@ class AppState extends ChangeNotifier {
   double get totalStockValue =>
       _products.fold(0, (acc, p) => acc + (p.currentStock * p.unitCost));
 
-  /// Number of products at or below their computed reorder point.
-  int get lowStockItems => _recommendations.length;
+  /// Number of products below minimum stock level (critically low).
+  int get lowStockItems => _minimumStockResults.isEmpty
+      ? _recommendations.length
+      : _minimumStockResults.where((r) => r.isUrgent).length;
 
-  /// Open replenishment recommendations count.
-  int get openRecommendations => _recommendations.length;
+  /// Open replenishment recommendations count (excludes already-approved ones).
+  int get openRecommendations => _recommendations
+      .where((r) => !_approvedRecommendations.contains(r.productId))
+      .length;
 
-  /// Forecast accuracy = 1 – MAPE (0.0 when no forecast has been run yet).
-  double get forecastAccuracy =>
-      _currentForecast?.mape != null ? 1 - _currentForecast!.mape! : 0.0;
+  /// Forecast accuracy = 1 – average MAPE across all products that have been
+  /// forecast (loaded from Firestore at startup). Falls back to the current
+  /// in-session forecast when no persisted results exist yet.
+  double get forecastAccuracy {
+    if (_forecastMapes.isNotEmpty) {
+      final avgMape =
+          _forecastMapes.values.reduce((a, b) => a + b) / _forecastMapes.length;
+      return (1 - avgMape).clamp(0.0, 1.0);
+    }
+    if (_currentForecast?.mape != null) return 1 - _currentForecast!.mape!;
+    return 0.0;
+  }
 
   // ── Load All Data ──────────────────────────────────────────────────────────
 
@@ -688,8 +1052,14 @@ class AppState extends ChangeNotifier {
       // Load supply-chain data in parallel
       await loadManufacturingData();
 
+      // Load onboarding state
+      await loadOnboardingState();
+
       // Check for stock alerts (fire-and-forget)
       _checkStockAlerts();
+
+      // Load persisted MAPE values so forecastAccuracy KPI is meaningful on startup.
+      unawaited(_loadForecastMapes());
     } finally {
       _isLoading = false;
       notifyListeners();
@@ -702,17 +1072,22 @@ class AppState extends ChangeNotifier {
     String productId,
     String algorithm,
     int smaWindow,
-    double alpha,
-  ) async {
+    double alpha, {
+    double beta = 0.1,
+    double gamma = 0.2,
+    List<double> wmaWeights = const [1, 2, 3],
+    int seasonLength = 12,
+  }) async {
     // Try backend first
     try {
       final result = await _backendApi.runForecast(
         productId: productId,
         method: algorithm,
         windowSize: algorithm == 'SMA' ? smaWindow : null,
-        alpha: algorithm == 'SES' ? alpha : null,
+        alpha: (algorithm == 'SES' || algorithm == 'Holt' || algorithm == 'HoltWinters') ? alpha : null,
       );
       _currentForecast = ForecastResult.fromJson(result);
+      await _persistForecastResult(_currentForecast!);
       notifyListeners();
       return;
     } catch (_) {
@@ -720,7 +1095,10 @@ class AppState extends ChangeNotifier {
     }
 
     final records = _demandByProduct[productId] ?? [];
-    if (records.isEmpty) return;
+    if (records.isEmpty) {
+      throw Exception(
+          'No demand data found for this product. Add demand records first via the Demand Data screen.');
+    }
 
     // Resolve lead time: product-level > supplier > 0
     final product = _products.where((p) => p.id == productId).firstOrNull;
@@ -743,10 +1121,202 @@ class AppState extends ChangeNotifier {
       algorithm: algorithm,
       smaWindow: smaWindow,
       alpha: alpha,
+      beta: beta,
+      gamma: gamma,
+      wmaWeights: wmaWeights,
+      seasonLength: seasonLength,
       leadTimeDays: effectiveLeadTimeDays,
     );
 
+    if (_currentForecast != null) {
+      await _persistForecastResult(_currentForecast!);
+    }
     notifyListeners();
+  }
+
+  /// Writes the latest forecast result to
+  /// `users/{uid}/forecastResults/{productId}` so it can be rehydrated when the
+  /// user returns to the Forecasts screen (e.g. from a dashboard deep-link).
+  /// Failures are swallowed — persistence is best-effort and never blocks UI.
+  Future<void> _persistForecastResult(ForecastResult result) async {
+    if (_currentUser == null) return;
+    try {
+      final ref = FirebaseFirestore.instance
+          .collection('users')
+          .doc(_currentUser!.uid)
+          .collection('forecastResults')
+          .doc(result.productId);
+      await ref.set({
+        ...result.toJson(),
+        'computedAt': FieldValue.serverTimestamp(),
+      });
+      // Keep in-memory MAPE cache in sync so forecastAccuracy updates immediately.
+      if (result.mape != null) {
+        _forecastMapes[result.productId] = result.mape!;
+        notifyListeners();
+      }
+    } catch (_) {
+      // Best-effort persistence; non-fatal.
+    }
+  }
+
+  /// Loads MAPE values for all persisted forecast results at startup so that
+  /// the forecastAccuracy KPI is meaningful without requiring a fresh run.
+  Future<void> _loadForecastMapes() async {
+    if (_currentUser == null) return;
+    try {
+      final snaps = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(_currentUser!.uid)
+          .collection('forecastResults')
+          .get();
+      for (final doc in snaps.docs) {
+        final mape = (doc.data()['mape'] as num?)?.toDouble();
+        if (mape != null) _forecastMapes[doc.id] = mape;
+      }
+    } catch (_) {
+      // Non-fatal — KPI will show N/A if Firestore is unavailable.
+    }
+  }
+
+  /// Loads the most recently persisted forecast for [productId] (if any) and
+  /// sets it as the current forecast. Returns true when a result was loaded.
+  Future<bool> loadLatestForecast(String productId) async {
+    if (_currentUser == null) return false;
+    try {
+      final ref = FirebaseFirestore.instance
+          .collection('users')
+          .doc(_currentUser!.uid)
+          .collection('forecastResults')
+          .doc(productId);
+      final snap = await ref.get();
+      if (!snap.exists) return false;
+      final data = snap.data();
+      if (data == null) return false;
+      // Strip the serverTimestamp so fromJson doesn't try to parse it.
+      final json = Map<String, dynamic>.from(data)..remove('computedAt');
+      _currentForecast = ForecastResult.fromJson(json);
+      notifyListeners();
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// Runs every supported forecasting algorithm against the given product's
+  /// demand history and stores the results in [forecastComparison] so the UI
+  /// can render a side-by-side comparison (with MAPE/RMSE per method).
+  Future<void> compareForecastAlgorithms(String productId) async {
+    final records = _demandByProduct[productId] ?? [];
+    if (records.isEmpty) {
+      _forecastComparison = {};
+      notifyListeners();
+      return;
+    }
+
+    final sorted = [...records]
+      ..sort((a, b) => a.periodStart.compareTo(b.periodStart));
+    final periods = sorted.map((r) => r.periodStart).toList();
+    final demand = sorted.map((r) => r.quantity.toDouble()).toList();
+
+    final results = <String, ForecastResult>{};
+
+    // SMA(3)
+    if (demand.length >= 3) {
+      results['SMA'] = _forecastingService.generateForecast(
+        productId: productId,
+        periods: periods,
+        demand: demand,
+        algorithm: 'SMA',
+        smaWindow: 3,
+      );
+    }
+    // WMA(1,2,3)
+    if (demand.length >= 3) {
+      results['WMA'] = _forecastingService.generateForecast(
+        productId: productId,
+        periods: periods,
+        demand: demand,
+        algorithm: 'WMA',
+        wmaWeights: const [1, 2, 3],
+      );
+    }
+    // SES(α=0.3)
+    if (demand.isNotEmpty) {
+      results['SES'] = _forecastingService.generateForecast(
+        productId: productId,
+        periods: periods,
+        demand: demand,
+        algorithm: 'SES',
+        alpha: 0.3,
+      );
+    }
+    // Holt
+    if (demand.length >= 2) {
+      results['Holt'] = _forecastingService.generateForecast(
+        productId: productId,
+        periods: periods,
+        demand: demand,
+        algorithm: 'Holt',
+        alpha: 0.3,
+        beta: 0.1,
+      );
+    }
+    // Holt-Winters (needs 2+ seasonal cycles; default 12-month season)
+    if (demand.length >= 24) {
+      results['HoltWinters'] = _forecastingService.generateForecast(
+        productId: productId,
+        periods: periods,
+        demand: demand,
+        algorithm: 'HoltWinters',
+        alpha: 0.3,
+        beta: 0.1,
+        gamma: 0.1,
+        seasonLength: 12,
+      );
+    }
+
+    _forecastComparison = results;
+    notifyListeners();
+  }
+
+  // ── ABC-XYZ Classification ─────────────────────────────────────────────────
+
+  /// Rebuilds the ABC-XYZ classification matrix from the current products
+  /// and demand history. Exposed via [abcXyzMatrix].
+  void classifyProducts() {
+    _abcXyzMatrix = _abcXyzService.buildMatrix(
+      products: _products,
+      demandByProduct: _demandByProduct,
+    );
+    notifyListeners();
+  }
+
+  /// Summary counts per cell of the 9-cell matrix (e.g. {"AX": 5, "BY": 12}).
+  Map<String, int> get abcXyzSummary =>
+      _abcXyzService.matrixSummary(_abcXyzMatrix);
+
+  // ── Full Pipeline ──────────────────────────────────────────────────────────
+
+  /// Orchestrates the end-to-end decision-support pipeline:
+  /// 1. Refresh demand history from the repository
+  /// 2. Run ABC-XYZ classification
+  /// 3. Rebuild replenishment recommendations (uses best forecast per product)
+  ///
+  /// This is the single entry point called after a Shopify import or a manual
+  /// demand-data update. It is safe to call repeatedly.
+  Future<void> runFullPipeline() async {
+    if (_repo == null) return;
+    _isLoading = true;
+    notifyListeners();
+    try {
+      _demandByProduct = await _repo!.getDemandHistory();
+      classifyProducts();
+      _rebuildRecommendations();
+    } finally {
+      _isLoading = false;
+      notifyListeners();
+    }
   }
 
   // ── Replenishment ──────────────────────────────────────────────────────────
@@ -757,6 +1327,25 @@ class AppState extends ChangeNotifier {
       products: _products,
       demandByProduct: _demandByProduct,
       suppliers: supplierMap,
+      settings: _settings,
+    );
+    // Keep ABC-XYZ classification in sync with the latest demand + product set
+    // so the matrix is always available without needing a manual refresh.
+    _abcXyzMatrix = _abcXyzService.buildMatrix(
+      products: _products,
+      demandByProduct: _demandByProduct,
+    );
+    computeMinimumStockLevels();
+  }
+
+  void computeMinimumStockLevels() {
+    _minimumStockResults = _minimumStockService.computeAll(
+      products: _products,
+      demandByProduct: _demandByProduct,
+      boms: _boms,
+      rawMaterials: _rawMaterials,
+      suppliers: _suppliers,
+      manufacturers: _manufacturers,
       settings: _settings,
     );
   }
@@ -1113,6 +1702,20 @@ class AppState extends ChangeNotifier {
       }
     }
 
+    // 5. Clear approvals for received products so that if stock is still below
+    //    ROP after a partial delivery, the recommendation surfaces again.
+    final receivedProductIds = so.items.map((i) => i.productId).toSet();
+    _approvedRecommendations.removeAll(receivedProductIds);
+    final batch2 = FirebaseFirestore.instance.batch();
+    for (final pid in receivedProductIds) {
+      batch2.delete(FirebaseFirestore.instance
+          .collection('users')
+          .doc(_currentUser!.uid)
+          .collection('approvals')
+          .doc(pid));
+    }
+    await batch2.commit();
+
     _rebuildRecommendations();
     notifyListeners();
   }
@@ -1145,6 +1748,7 @@ class AppState extends ChangeNotifier {
       _rawMaterialOrders = results[4] as List<RawMaterialOrder>;
       _mfgRecommendations = results[5] as List<ManufacturingRecommendation>;
       _cashFlowSnapshots = results[6] as List<CashFlowSnapshot>;
+      computeMinimumStockLevels();
       notifyListeners();
     } catch (e) {
       _errorMessage = 'Failed to load manufacturing data: $e';
@@ -1168,6 +1772,20 @@ class AppState extends ChangeNotifier {
   }
 
   Future<void> deleteRawMaterial(String materialId) async {
+    // Remove this RM from all BOM line items before deleting.
+    for (var i = 0; i < _boms.length; i++) {
+      final bom = _boms[i];
+      if (bom.materials.any((m) => m.rawMaterialId == materialId)) {
+        final updated = BillOfMaterials(
+          id: bom.id,
+          finalProductId: bom.finalProductId,
+          materials: bom.materials.where((m) => m.rawMaterialId != materialId).toList(),
+          isActive: bom.isActive,
+        );
+        await _repo!.updateBOM(updated);
+        _boms[i] = updated;
+      }
+    }
     await _repo!.deleteRawMaterial(materialId);
     _rawMaterials.removeWhere((m) => m.id == materialId);
     notifyListeners();
@@ -1250,44 +1868,17 @@ class AppState extends ChangeNotifier {
     ManufacturingRecommendation rec,
     String manufacturerId,
   ) async {
-    if (_currentUser == null) return null;
+    if (_currentUser == null || _manufacturingService == null || _workflowService == null) {
+      return null;
+    }
 
+    _lastApprovalEmailsSent = 0;
+
+    // Step A: Mark recommendation approved.
     rec.status = RecommendationStatus.approved;
     await _repo!.updateManufacturingRecommendation(rec);
 
-    // Try backend-driven atomic workflow first
-    try {
-      final poJson = await _backendApi.createProductionOrder(
-        finalProductId: rec.productId,
-        quantity: rec.suggestedQty,
-        manufacturerId: manufacturerId,
-        estimatedCost: rec.estimatedCost,
-      );
-      final orderId = poJson['id'] as String;
-
-      // Approve + auto-create raw material orders atomically on the backend
-      final approvedJson = await _backendApi.approveProductionOrder(orderId);
-      final order = ProductionOrder.fromFirestore(
-        approvedJson['id'] as String,
-        approvedJson,
-      );
-      _productionOrders.insert(0, order);
-
-      // Reload raw material orders created by backend
-      _rawMaterialOrders = await _repo!.getRawMaterialOrders();
-
-      // Create portal orders and trigger emails (frontend-side)
-      await _createFactoryPortalOrders(order);
-
-      notifyListeners();
-      return order;
-    } catch (_) {
-      // Backend unavailable — fall back to local workflow
-    }
-
-    // Fallback: local workflow
-    if (_manufacturingService == null) return null;
-
+    // Step B: Create ProductionOrder.
     final order = await _manufacturingService!.createProductionOrder(
       finalProductId: rec.productId,
       quantity: rec.suggestedQty,
@@ -1296,69 +1887,232 @@ class AppState extends ChangeNotifier {
     );
     _productionOrders.insert(0, order);
 
-    // Auto-generate raw-material orders if BOM exists
-    final bom = _boms.where((b) => b.finalProductId == rec.productId).firstOrNull;
-    if (bom != null) {
-      final rmOrders = await _manufacturingService!.generateRawMaterialOrders(
-        productionOrder: order,
-        bom: bom,
-        rawMaterials: _rawMaterials,
-      );
-      _rawMaterialOrders.addAll(rmOrders);
-      await _createFactoryPortalOrders(order);
+    await _repo!.addWorkflowLog(WorkflowLog(
+      id: 'wl_${order.id}_approved_${DateTime.now().millisecondsSinceEpoch}',
+      entityType: 'ProductionOrder',
+      entityId: order.id,
+      action: 'approved',
+      performedBy: _currentUser!.uid,
+      timestamp: DateTime.now(),
+      details: 'Production order created and approved for recommendation ${rec.id}',
+    ));
 
-      // Transition to materials_ordered
-      await _workflowService!.transitionProductionOrder(
-        order,
-        ProductionOrderStatus.materialsOrdered,
-        _currentUser!.uid,
+    // Step C: Load BOM — throw BomMissingException so UI can show a
+    // specific, actionable error message.
+    final bom = _boms.where((b) => b.finalProductId == rec.productId).firstOrNull;
+    if (bom == null) throw BomMissingException(rec.productId);
+
+    // Step D: Persist RawMaterialOrders.
+    final rmOrders = await _manufacturingService!.generateRawMaterialOrders(
+      productionOrder: order,
+      bom: bom,
+      rawMaterials: _rawMaterials,
+    );
+    _rawMaterialOrders.addAll(rmOrders);
+
+    await _repo!.addWorkflowLog(WorkflowLog(
+      id: 'wl_${order.id}_rmo_${DateTime.now().millisecondsSinceEpoch}',
+      entityType: 'ProductionOrder',
+      entityId: order.id,
+      action: 'raw_material_orders_created',
+      performedBy: _currentUser!.uid,
+      timestamp: DateTime.now(),
+      details: '${rmOrders.length} raw material order(s) generated from BOM',
+    ));
+
+    // Step E: Create one factoryOrder doc per supplier (grouped).
+    final supplierCount = await _createPerSupplierFactoryOrders(order, rmOrders);
+
+    // Step F: Send supplier emails — only if factory orders were created,
+    // otherwise the CF would return 404 and surface an unhelpful error.
+    int emailsSent = 0;
+    if (supplierCount == 0) {
+      // No suppliers linked to any raw material — skip factory emails.
+      await _repo!.addWorkflowLog(WorkflowLog(
+        id: 'wl_${order.id}_no_suppliers_${DateTime.now().millisecondsSinceEpoch}',
+        entityType: 'ProductionOrder',
+        entityId: order.id,
+        action: 'supplier_emails_skipped',
+        performedBy: _currentUser!.uid,
+        timestamp: DateTime.now(),
+        details: 'No suppliers linked to raw materials — factory emails skipped',
+      ));
+    } else {
+    try {
+      final result = await _invokeCloudFunction(
+        CloudFunctionConfig.sendFactoryEmails,
+        {'uid': _currentUser!.uid, 'productionOrderId': order.id},
       );
+      final results = (result['results'] as List<dynamic>?) ?? [];
+      emailsSent += results.where((r) => (r as Map)['status'] == 'sent').length;
+      await _repo!.addWorkflowLog(WorkflowLog(
+        id: 'wl_${order.id}_supplier_emails_${DateTime.now().millisecondsSinceEpoch}',
+        entityType: 'ProductionOrder',
+        entityId: order.id,
+        action: 'supplier_emails_sent',
+        performedBy: _currentUser!.uid,
+        timestamp: DateTime.now(),
+        details: '$emailsSent of $supplierCount supplier email(s) sent',
+      ));
+    } catch (e) {
+      await _repo!.addWorkflowLog(WorkflowLog(
+        id: 'wl_${order.id}_supplier_emails_failed_${DateTime.now().millisecondsSinceEpoch}',
+        entityType: 'ProductionOrder',
+        entityId: order.id,
+        action: 'supplier_emails_failed',
+        performedBy: _currentUser!.uid,
+        timestamp: DateTime.now(),
+        details: 'Supplier email dispatch failed: $e',
+      ));
+      rethrow;
+    }
+    } // end if (supplierCount > 0)
+
+    // Step G: Transition PO → materialsOrdered.
+    await _workflowService!.transitionProductionOrder(
+      order,
+      ProductionOrderStatus.materialsOrdered,
+      _currentUser!.uid,
+    );
+
+    // Step H: Create manufacturer portal doc and send email (non-critical).
+    await _createManufacturerPortalOrderAtApproval(order, rmOrders);
+    try {
+      final mfrResult = await _invokeCloudFunction(
+        CloudFunctionConfig.sendManufacturerEmails,
+        {'uid': _currentUser!.uid, 'productionOrderId': order.id},
+      );
+      final mfrResults = (mfrResult['results'] as List<dynamic>?) ?? [];
+      emailsSent +=
+          mfrResults.where((r) => (r as Map)['status'] == 'sent').length;
+      await _repo!.addWorkflowLog(WorkflowLog(
+        id: 'wl_${order.id}_mfr_email_${DateTime.now().millisecondsSinceEpoch}',
+        entityType: 'ProductionOrder',
+        entityId: order.id,
+        action: 'manufacturer_email_sent',
+        performedBy: _currentUser!.uid,
+        timestamp: DateTime.now(),
+        details: 'Manufacturer notification email sent',
+      ));
+    } catch (e) {
+      // Non-critical: manufacturer email failure does not roll back the approval.
+      await _repo!.addWorkflowLog(WorkflowLog(
+        id: 'wl_${order.id}_mfr_email_failed_${DateTime.now().millisecondsSinceEpoch}',
+        entityType: 'ProductionOrder',
+        entityId: order.id,
+        action: 'manufacturer_email_failed',
+        performedBy: _currentUser!.uid,
+        timestamp: DateTime.now(),
+        details: 'Manufacturer email failed (non-critical): $e',
+      ));
     }
 
+    _lastApprovalEmailsSent = emailsSent;
     notifyListeners();
     return order;
   }
 
-  /// Creates top-level factoryOrders for portal access and triggers emails.
-  Future<void> _createFactoryPortalOrders(ProductionOrder order) async {
+  /// Creates one [factoryOrder] Firestore doc per supplier, each containing
+  /// an array of all raw materials they need to supply. Returns supplier count.
+  Future<int> _createPerSupplierFactoryOrders(
+    ProductionOrder order,
+    List<RawMaterialOrder> rmOrders,
+  ) async {
     final firestoreRepo = _firestoreRepo;
-    if (firestoreRepo == null || _currentUser == null) return;
+    if (firestoreRepo == null || _currentUser == null) return 0;
 
-    final orderRmOrders = _rawMaterialOrders
-        .where((o) => o.productionOrderId == order.id)
-        .toList();
+    // Group raw material orders by supplierId.
+    final Map<String, List<RawMaterialOrder>> bySupplier = {};
+    for (final rmo in rmOrders) {
+      if (rmo.supplierId.isEmpty) continue;
+      bySupplier.putIfAbsent(rmo.supplierId, () => []).add(rmo);
+    }
 
-    for (final rmo in orderRmOrders) {
-      final rm = _rawMaterials
-          .where((r) => r.id == rmo.rawMaterialId)
-          .firstOrNull;
-      final supplier = _suppliers
-          .where((s) => s.id == rmo.supplierId)
-          .firstOrNull;
+    for (final entry in bySupplier.entries) {
+      final supplierId = entry.key;
+      final supplierRmos = entry.value;
+      final supplier =
+          _suppliers.where((s) => s.id == supplierId).firstOrNull;
+
+      final materials = supplierRmos.map((rmo) {
+        final rm =
+            _rawMaterials.where((r) => r.id == rmo.rawMaterialId).firstOrNull;
+        return {
+          'rawMaterialOrderId': rmo.id,
+          'rawMaterialId': rmo.rawMaterialId,
+          'materialName': rm?.name ?? '',
+          'quantity': rmo.quantity,
+          'unit': rm?.unit ?? 'pcs',
+          'requestedDate': Timestamp.fromDate(rmo.requestedDate),
+        };
+      }).toList();
 
       await firestoreRepo.addFactoryOrder({
         'productionOrderId': order.id,
-        'rawMaterialOrderId': rmo.id,
-        'rawMaterialId': rmo.rawMaterialId,
-        'materialName': rm?.name ?? '',
-        'quantity': rmo.quantity,
-        'unit': rm?.unit ?? 'pcs',
-        'supplierId': rmo.supplierId,
+        'supplierId': supplierId,
         'supplierName': supplier?.name ?? '',
         'supplierEmail': supplier?.contactEmail ?? '',
         'status': 'pending',
-        'requestedDate': Timestamp.fromDate(rmo.requestedDate),
-        'accessToken': rmo.accessToken,
+        'accessToken': _generateAccessToken(),
         'expiresAt': Timestamp.fromDate(
             DateTime.now().add(const Duration(days: 30))),
+        'materials': materials,
       });
     }
 
-    // Fire-and-forget: send factory emails
-    _callCloudFunction(
-      CloudFunctionConfig.sendFactoryEmails,
-      {'uid': _currentUser!.uid, 'productionOrderId': order.id},
-    );
+    return bySupplier.length;
+  }
+
+  /// Creates the manufacturer portal order doc at approval time (not when
+  /// materials arrive), including which suppliers are providing each material.
+  Future<void> _createManufacturerPortalOrderAtApproval(
+    ProductionOrder po,
+    List<RawMaterialOrder> rmOrders,
+  ) async {
+    final firestoreRepo = _firestoreRepo;
+    if (firestoreRepo == null || _currentUser == null) return;
+
+    final product =
+        _products.where((p) => p.id == po.finalProductId).firstOrNull;
+    final mfr =
+        _manufacturers.where((m) => m.id == po.manufacturerId).firstOrNull;
+
+    final rmOrdersData = rmOrders.map((rmo) {
+      final rm =
+          _rawMaterials.where((r) => r.id == rmo.rawMaterialId).firstOrNull;
+      final supplier =
+          _suppliers.where((s) => s.id == rmo.supplierId).firstOrNull;
+      return {
+        'materialName': rm?.name ?? '',
+        'quantity': rmo.quantity,
+        'unit': rm?.unit ?? 'pcs',
+        'status': rmo.status,
+        'supplierName': supplier?.name ?? '',
+      };
+    }).toList();
+
+    final incomingSuppliers = rmOrders
+        .map((rmo) =>
+            _suppliers.where((s) => s.id == rmo.supplierId).firstOrNull?.name)
+        .whereType<String>()
+        .toSet()
+        .toList();
+
+    await firestoreRepo.addManufacturerOrder({
+      'productionOrderId': po.id,
+      'productName': product?.name ?? '',
+      'quantity': po.quantity,
+      'estimatedCost': po.estimatedCost,
+      'manufacturerId': po.manufacturerId,
+      'manufacturerName': mfr?.name ?? '',
+      'manufacturerEmail': mfr?.contactEmail ?? '',
+      'status': 'pending',
+      'accessToken': _generateAccessToken(),
+      'rawMaterialOrders': rmOrdersData,
+      'incomingSuppliers': incomingSuppliers,
+      'expiresAt': Timestamp.fromDate(
+          DateTime.now().add(const Duration(days: 30))),
+    });
   }
 
   Future<void> rejectMfgRecommendation(ManufacturingRecommendation rec) async {
@@ -1429,6 +2183,16 @@ class AppState extends ChangeNotifier {
           product.currentStock += order.quantity;
           await _repo?.updateProduct(product);
         }
+        // Clear approval so that if stock falls below ROP again the
+        // recommendation will surface in openRecommendations.
+        _approvedRecommendations.remove(order.finalProductId);
+        await FirebaseFirestore.instance
+            .collection('users')
+            .doc(_currentUser!.uid)
+            .collection('approvals')
+            .doc(order.finalProductId)
+            .delete();
+        _rebuildRecommendations();
       }
       notifyListeners();
       return;
@@ -1456,6 +2220,16 @@ class AppState extends ChangeNotifier {
         product.currentStock += order.quantity;
         await _repo!.updateProduct(product);
       }
+      // Clear approval so that if stock falls below ROP again the
+      // recommendation will surface in openRecommendations.
+      _approvedRecommendations.remove(order.finalProductId);
+      await FirebaseFirestore.instance
+          .collection('users')
+          .doc(_currentUser!.uid)
+          .collection('approvals')
+          .doc(order.finalProductId)
+          .delete();
+      _rebuildRecommendations();
     }
 
     notifyListeners();
@@ -1670,21 +2444,165 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
+  // ── Raw Material Purchase Orders ───────────────────────────────────────────
+
+  /// BOM-explodes a forecast qty into draft RawMaterialPurchaseOrders (one per supplier).
+  Future<List<RawMaterialPurchaseOrder>> createRawMaterialOrders(
+    String productId,
+    double forecastQty,
+  ) async {
+    final orders = _rmOrderService.createFromForecast(
+      productId: productId,
+      forecastQty: forecastQty,
+      boms: _boms,
+      rawMaterials: _rawMaterials,
+      suppliers: _suppliers,
+      forecastProductId: productId,
+    );
+    return orders;
+  }
+
+  Future<void> saveRawMaterialPurchaseOrders(
+    List<RawMaterialPurchaseOrder> orders,
+  ) async {
+    if (_repo == null || _currentUser == null) return;
+    for (final order in orders) {
+      final ref = FirebaseFirestore.instance
+          .collection('users')
+          .doc(_currentUser!.uid)
+          .collection('rawMaterialPurchaseOrders')
+          .doc(order.id);
+      await ref.set(order.toFirestore());
+      _rmPurchaseOrders.add(order);
+    }
+    notifyListeners();
+  }
+
+  Future<void> confirmRawMaterialPurchaseOrder(String orderId) async {
+    if (_currentUser == null) return;
+    final idx = _rmPurchaseOrders.indexWhere((o) => o.id == orderId);
+    if (idx == -1) return;
+    _rmPurchaseOrders[idx].status = 'sent';
+    final ref = FirebaseFirestore.instance
+        .collection('users')
+        .doc(_currentUser!.uid)
+        .collection('rawMaterialPurchaseOrders')
+        .doc(orderId);
+    await ref.update({'status': 'sent'});
+    notifyListeners();
+  }
+
+  /// Invokes the `sendRawMaterialSupplierEmail` Cloud Function for a single
+  /// RM purchase order. Returns true on success, false on any failure (caller
+  /// can use the return value to report per-supplier delivery in the UI).
+  /// Non-blocking — order status is the source of truth; email is notification.
+  Future<bool> sendRawMaterialOrderEmail(String orderId) async {
+    if (_currentUser == null) return false;
+    try {
+      await _invokeCloudFunction(
+        CloudFunctionConfig.sendRawMaterialSupplierEmail,
+        {
+          'uid': _currentUser!.uid,
+          'rawMaterialPurchaseOrderId': orderId,
+        },
+      );
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  // ── BOM Active State ───────────────────────────────────────────────────────
+
+  /// Sets the given BOM as active for its product; deactivates all others
+  /// for the same product.
+  Future<void> setActiveBOM(String bomId, String productId) async {
+    if (_repo == null) return;
+    for (var i = 0; i < _boms.length; i++) {
+      if (_boms[i].finalProductId != productId) continue;
+      final shouldBeActive = _boms[i].id == bomId;
+      if (_boms[i].isActive == shouldBeActive) continue;
+      final updated = BillOfMaterials(
+        id: _boms[i].id,
+        finalProductId: _boms[i].finalProductId,
+        materials: _boms[i].materials,
+        isActive: shouldBeActive,
+      );
+      await _repo!.updateBOM(updated);
+      _boms[i] = updated;
+    }
+    computeMinimumStockLevels();
+    notifyListeners();
+  }
+
+  // ── Onboarding ─────────────────────────────────────────────────────────────
+
+  Future<void> completeOnboardingStep(String step) async {
+    if (_currentUser == null) return;
+    final ref = FirebaseFirestore.instance
+        .collection('users')
+        .doc(_currentUser!.uid)
+        .collection('settings')
+        .doc('onboarding');
+    await ref.set({'completedSteps': FieldValue.arrayUnion([step])}, SetOptions(merge: true));
+    if (step == 'done') {
+      _onboardingComplete = true;
+      notifyListeners();
+      // Trigger router redirect re-evaluation so the wizard guard releases.
+      authNotifier.notifyAuthChanged();
+    }
+  }
+
+  Future<void> loadOnboardingState() async {
+    if (_currentUser == null) return;
+    final ref = FirebaseFirestore.instance
+        .collection('users')
+        .doc(_currentUser!.uid)
+        .collection('settings')
+        .doc('onboarding');
+    final snap = await ref.get();
+    if (snap.exists) {
+      final steps = List<String>.from(snap.data()?['completedSteps'] ?? []);
+      _onboardingComplete = steps.contains('done');
+    }
+    _onboardingStateLoaded = true;
+    notifyListeners();
+    // Notify router so the onboarding redirect runs against the loaded state.
+    authNotifier.notifyAuthChanged();
+  }
+
   // ── Cloud Function Helpers ─────────────────────────────────────────────────
 
-  /// Fire-and-forget call to a Cloud Function endpoint.
+  /// Fire-and-forget call to a Cloud Function endpoint. Errors are silently
+  /// ignored — use [_invokeCloudFunction] when you need to surface errors.
   void _callCloudFunction(String url, Map<String, dynamic> body) {
-    Future(() async {
-      final user = _authService.currentUser;
-      final token = await user?.getIdToken();
-      await http.post(
-        Uri.parse(url),
-        headers: {
-          'Content-Type': 'application/json',
-          if (token != null) 'Authorization': 'Bearer $token',
-        },
-        body: jsonEncode(body),
+    _invokeCloudFunction(url, body).catchError((_) => <String, dynamic>{});
+  }
+
+  /// Awaitable Cloud Function call that throws [CloudFunctionException] on
+  /// non-2xx responses. Returns the decoded JSON body on success.
+  Future<Map<String, dynamic>> _invokeCloudFunction(
+    String url,
+    Map<String, dynamic> body,
+  ) async {
+    final user = _authService.currentUser;
+    final token = await user?.getIdToken();
+    final response = await http.post(
+      Uri.parse(url),
+      headers: {
+        'Content-Type': 'application/json',
+        if (token != null) 'Authorization': 'Bearer $token',
+      },
+      body: jsonEncode(body),
+    );
+    final decoded = jsonDecode(response.body) as Map<String, dynamic>;
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw CloudFunctionException(
+        response.statusCode,
+        (decoded['error'] as String?) ??
+            'Cloud Function returned ${response.statusCode}',
       );
-    }).catchError((_) {});
+    }
+    return decoded;
   }
 }

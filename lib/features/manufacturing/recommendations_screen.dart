@@ -14,6 +14,7 @@ class RecommendationsScreen extends StatefulWidget {
 
 class _RecommendationsScreenState extends State<RecommendationsScreen> {
   bool _generating = false;
+  final Map<String, bool> _approving = {};
 
   @override
   Widget build(BuildContext context) {
@@ -85,7 +86,7 @@ class _RecommendationsScreenState extends State<RecommendationsScreen> {
                   child: KPICard(
                     title: 'Available Budget',
                     value:
-                        '\$${state.latestCashFlow!.remainingBudget.toStringAsFixed(0)}',
+                        'EGP ${state.latestCashFlow!.remainingBudget.toStringAsFixed(0)}',
                     icon: Icons.account_balance_wallet,
                   ),
                 ),
@@ -104,6 +105,7 @@ class _RecommendationsScreenState extends State<RecommendationsScreen> {
                   onApprove: (manufacturerId) =>
                       _approve(state, rec, manufacturerId),
                   onReject: () => _reject(state, rec),
+                  isApproving: _approving[rec.id] == true,
                 )),
             const SizedBox(height: 24),
           ],
@@ -174,21 +176,35 @@ class _RecommendationsScreenState extends State<RecommendationsScreen> {
 
   Future<void> _approve(AppState state, ManufacturingRecommendation rec,
       String manufacturerId) async {
+    setState(() => _approving[rec.id] = true);
+    // Capture before any await so context is never stale.
+    final messenger = ScaffoldMessenger.of(context);
     try {
       await state.approveMfgRecommendation(rec, manufacturerId);
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-              content:
-                  Text('Approved — production order & material orders created')),
-        );
-      }
+      final count = state.lastApprovalEmailsSent;
+      messenger.showSnackBar(SnackBar(
+        content: Text(
+            'Approved — $count email${count == 1 ? "" : "s"} sent to suppliers & manufacturer'),
+        backgroundColor: AppColors.success,
+      ));
+    } on BomMissingException catch (e) {
+      messenger.showSnackBar(SnackBar(
+        content: Text(e.toString()),
+        backgroundColor: AppColors.error,
+        duration: const Duration(seconds: 6),
+      ));
+    } on CloudFunctionException catch (e) {
+      messenger.showSnackBar(SnackBar(
+        content: Text(
+            'Production order created but email delivery failed: ${e.message}'),
+        backgroundColor: AppColors.warning,
+        duration: const Duration(seconds: 6),
+      ));
     } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error: $e')),
-        );
-      }
+      messenger.showSnackBar(SnackBar(
+          content: Text('Error: $e'), backgroundColor: AppColors.error));
+    } finally {
+      if (mounted) setState(() => _approving.remove(rec.id));
     }
   }
 
@@ -211,6 +227,7 @@ class _RecommendationCard extends StatelessWidget {
   final List<dynamic> manufacturers;
   final void Function(String manufacturerId)? onApprove;
   final VoidCallback? onReject;
+  final bool isApproving;
 
   const _RecommendationCard({
     required this.rec,
@@ -218,6 +235,7 @@ class _RecommendationCard extends StatelessWidget {
     required this.manufacturers,
     this.onApprove,
     this.onReject,
+    this.isApproving = false,
   });
 
   @override
@@ -267,7 +285,7 @@ class _RecommendationCard extends StatelessWidget {
                     label: 'Quantity', value: '${rec.suggestedQty} units'),
                 _InfoChip(
                     label: 'Cost',
-                    value: '\$${rec.estimatedCost.toStringAsFixed(0)}'),
+                    value: 'EGP ${rec.estimatedCost.toStringAsFixed(0)}'),
                 _InfoChip(
                     label: 'Timeline',
                     value: '${rec.estimatedTimeline} days'),
@@ -290,13 +308,22 @@ class _RecommendationCard extends StatelessWidget {
                 mainAxisAlignment: MainAxisAlignment.end,
                 children: [
                   TextButton(
-                    onPressed: onReject,
+                    onPressed: isApproving ? null : onReject,
                     child: const Text('Reject'),
                   ),
                   const SizedBox(width: 8),
-                  ElevatedButton(
-                    onPressed: () => _showManufacturerPicker(context),
-                    child: const Text('Approve & Assign'),
+                  ElevatedButton.icon(
+                    onPressed:
+                        isApproving ? null : () => _showManufacturerPicker(context),
+                    icon: isApproving
+                        ? const SizedBox(
+                            width: 16,
+                            height: 16,
+                            child: CircularProgressIndicator(
+                                strokeWidth: 2, color: Colors.white),
+                          )
+                        : const Icon(Icons.check, size: 18),
+                    label: Text(isApproving ? 'Approving…' : 'Approve & Assign'),
                   ),
                 ],
               ),
@@ -310,6 +337,7 @@ class _RecommendationCard extends StatelessWidget {
   void _showManufacturerPicker(BuildContext context) {
     showDialog(
       context: context,
+      useRootNavigator: false,
       builder: (ctx) {
         String? selected;
         return StatefulBuilder(

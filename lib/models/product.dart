@@ -10,6 +10,9 @@ class Product {
   final String? warehouseId;
   final bool isActive;
   final int leadTimeDays;
+  final double? averageDailySales;
+  final int? minimumStock;
+  final String? shopifyVariantId;
 
   Product({
     required this.id,
@@ -23,6 +26,9 @@ class Product {
     this.warehouseId,
     this.isActive = true,
     this.leadTimeDays = 0,
+    this.averageDailySales,
+    this.minimumStock,
+    this.shopifyVariantId,
   });
 
   /// Resolves a value from multiple possible field name aliases.
@@ -66,6 +72,10 @@ class Product {
       warehouseId: data['warehouseId'] as String?,
       isActive: data['isActive'] as bool? ?? true,
       leadTimeDays: (data['leadTimeDays'] as num?)?.toInt() ?? 0,
+      averageDailySales:
+          (data['averageDailySales'] as num?)?.toDouble(),
+      minimumStock: (data['minimumStock'] as num?)?.toInt(),
+      shopifyVariantId: data['shopifyVariantId'] as String?,
     );
   }
 
@@ -89,6 +99,9 @@ class Product {
       'warehouseId': warehouseId,
       'isActive': isActive,
       'leadTimeDays': leadTimeDays,
+      if (averageDailySales != null) 'averageDailySales': averageDailySales,
+      if (minimumStock != null) 'minimumStock': minimumStock,
+      if (shopifyVariantId != null) 'shopifyVariantId': shopifyVariantId,
     };
   }
 }

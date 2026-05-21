@@ -68,8 +68,67 @@ class DemandDataScreen extends StatelessWidget {
     );
   }
 
+  Future<void> _importShopifyOrders(BuildContext context) async {
+    final state = context.read<AppState>();
+    if (state.shopifyConnection?.isConnected != true) {
+      showDialog(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('Shopify Not Connected'),
+          content: const Text(
+            'Connect your Shopify store to automatically pull order history as demand records. '
+            'This lets the system build accurate forecasts from real sales data.',
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(backgroundColor: AppColors.primary, foregroundColor: Colors.white),
+              onPressed: () {
+                Navigator.pop(ctx);
+                context.go('/integrations');
+              },
+              child: const Text('Connect Shopify'),
+            ),
+          ],
+        ),
+      );
+      return;
+    }
+    final messenger = ScaffoldMessenger.of(context);
+    messenger.showSnackBar(const SnackBar(
+      content: Text('Importing Shopify order history…'),
+      duration: Duration(seconds: 60),
+    ));
+    try {
+      final result = await state.importShopifyOrders();
+      messenger.clearSnackBars();
+      if (context.mounted) {
+        final imported = result?['newRecordsImported'] as int? ?? 0;
+        messenger.showSnackBar(SnackBar(
+          content: Text(imported > 0
+              ? '$imported demand records imported from Shopify orders.'
+              : 'No new orders found to import.'),
+          backgroundColor: imported > 0 ? AppColors.success : null,
+          duration: const Duration(seconds: 5),
+        ));
+      }
+    } catch (e) {
+      messenger.clearSnackBars();
+      if (context.mounted) {
+        messenger.showSnackBar(SnackBar(
+          content: Text('Import failed: $e'),
+          backgroundColor: Colors.red,
+          duration: const Duration(seconds: 5),
+        ));
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
+    final state = context.watch<AppState>();
+    final isShopifyConnected = state.shopifyConnection?.isConnected == true;
+
     return DefaultTabController(
       length: 2,
       child: Column(
@@ -84,6 +143,18 @@ class DemandDataScreen extends StatelessWidget {
                   title: 'Demand and Inventory Data Logs',
                   actions: [
                     OutlinedButton.icon(
+                      onPressed: () => _importShopifyOrders(context),
+                      icon: Icon(Icons.sync, size: 16, color: isShopifyConnected ? Colors.green[700] : AppColors.textSecondary),
+                      label: Text(
+                        'Import Shopify Orders',
+                        style: TextStyle(color: isShopifyConnected ? Colors.green[700] : AppColors.textSecondary),
+                      ),
+                      style: OutlinedButton.styleFrom(
+                        side: BorderSide(color: isShopifyConnected ? Colors.green[400]! : AppColors.border),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    OutlinedButton.icon(
                       onPressed: () => _importCsv(context),
                       icon: const Icon(Icons.file_upload),
                       label: const Text('Import CSV'),
@@ -92,7 +163,7 @@ class DemandDataScreen extends StatelessWidget {
                     ElevatedButton.icon(
                       onPressed: () => _showAddRecordDialog(context),
                       icon: const Icon(Icons.add),
-                      label: const Text('Add Record'),
+                      label: const Text('Add Demand Record'),
                       style: ElevatedButton.styleFrom(
                         backgroundColor: AppColors.primary,
                         foregroundColor: Colors.white,
@@ -313,7 +384,7 @@ class _InventoryRecordsTab extends StatelessWidget {
                   DataCell(Text(p.name)),
                   DataCell(Text(p.category)),
                   DataCell(Text('${p.currentStock}')),
-                  DataCell(Text('\$${p.unitCost.toStringAsFixed(2)}')),
+                  DataCell(Text('EGP ${p.unitCost.toStringAsFixed(2)}')),
                   DataCell(Text(warehouseName)),
                 ],
               );
@@ -405,22 +476,48 @@ class _AddDemandRecordDialogState extends State<_AddDemandRecordDialog> {
 
     return AlertDialog(
       title: const Text('Add Demand Record'),
-      content: SizedBox(
-        width: 400,
+      content: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 400),
         child: Form(
           key: _formKey,
           child: Column(
             mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
+              Container(
+                padding: const EdgeInsets.all(10),
+                margin: const EdgeInsets.only(bottom: 16),
+                decoration: BoxDecoration(
+                  color: Colors.blue[50],
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Colors.blue[200]!),
+                ),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Icon(Icons.info_outline, size: 14, color: Colors.blue[700]),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        'Demand records represent how many units of a product were sold or consumed in a given month. They feed the forecasting algorithms to predict future demand.',
+                        style: TextStyle(fontSize: 12, color: Colors.blue[700]),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
               DropdownButtonFormField<String>(
+                isExpanded: true,
                 decoration: const InputDecoration(
                   labelText: 'Product',
                   border: OutlineInputBorder(),
                 ),
-                // ignore: deprecated_member_use
-                value: _selectedProductId,
+                initialValue: _selectedProductId,
                 items: products
-                    .map((p) => DropdownMenuItem(value: p.id, child: Text(p.name)))
+                    .map((p) => DropdownMenuItem(
+                          value: p.id,
+                          child: Text(p.name, overflow: TextOverflow.ellipsis),
+                        ))
                     .toList(),
                 onChanged: (v) => setState(() => _selectedProductId = v),
                 validator: (v) => v == null ? 'Select a product' : null,

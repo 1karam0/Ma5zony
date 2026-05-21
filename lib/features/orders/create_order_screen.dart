@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import 'package:ma5zony/models/purchase_order.dart';
 import 'package:ma5zony/providers/app_state.dart';
 import 'package:ma5zony/utils/constants.dart';
+import 'package:ma5zony/widgets/shared_widgets.dart';
 
 class CreateOrderScreen extends StatefulWidget {
   const CreateOrderScreen({super.key});
@@ -169,7 +170,7 @@ class _CreateOrderScreenState extends State<CreateOrderScreen> {
               Text('Review Purchase Order', style: AppTextStyles.h3),
               const Spacer(),
               Text(
-                'Total: \$${_draftOrder.totalEstimatedCost.toStringAsFixed(2)}',
+                'Total: EGP ${_draftOrder.totalEstimatedCost.toStringAsFixed(2)}',
                 style: AppTextStyles.h3.copyWith(color: AppColors.primary),
               ),
             ],
@@ -182,24 +183,10 @@ class _CreateOrderScreenState extends State<CreateOrderScreen> {
 
           if (noSupplierItems.isNotEmpty) ...[
             const SizedBox(height: 16),
-            Card(
-              color: Colors.orange.shade50,
-              child: Padding(
-                padding: const EdgeInsets.all(12),
-                child: Row(
-                  children: [
-                    const Icon(Icons.warning_amber, color: Colors.orange),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Text(
-                        '${noSupplierItems.length} item(s) have no supplier assigned. '
-                        'Please assign suppliers in the Products page before sending emails.',
-                        style: AppTextStyles.body,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
+            AlertBanner(
+              severity: AlertSeverity.warning,
+              title: '${noSupplierItems.length} item(s) have no supplier assigned',
+              message: 'Assign suppliers in the Products page before sending emails.',
             ),
           ],
 
@@ -252,7 +239,7 @@ class _CreateOrderScreenState extends State<CreateOrderScreen> {
                           ),
                         ),
                         Text(
-                          '\$${supplierTotal.toStringAsFixed(2)}',
+                          'EGP ${supplierTotal.toStringAsFixed(2)}',
                           style: AppTextStyles.body.copyWith(
                             fontWeight: FontWeight.bold,
                             color: AppColors.primary,
@@ -286,7 +273,7 @@ class _CreateOrderScreenState extends State<CreateOrderScreen> {
                             // Unit cost
                             Expanded(
                               child: Text(
-                                '\$${item.unitCost.toStringAsFixed(2)}/unit',
+                                'EGP ${item.unitCost.toStringAsFixed(2)}/unit',
                                 style: AppTextStyles.label,
                               ),
                             ),
@@ -312,7 +299,7 @@ class _CreateOrderScreenState extends State<CreateOrderScreen> {
                             SizedBox(
                               width: 80,
                               child: Text(
-                                '\$${((int.tryParse(_qtyControllers[item.productId]?.text ?? '') ?? item.quantity) * item.unitCost).toStringAsFixed(2)}',
+                                'EGP ${((int.tryParse(_qtyControllers[item.productId]?.text ?? '') ?? item.quantity) * item.unitCost).toStringAsFixed(2)}',
                                 style: AppTextStyles.body.copyWith(
                                   fontWeight: FontWeight.w600,
                                 ),

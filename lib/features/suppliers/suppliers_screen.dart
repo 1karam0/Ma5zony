@@ -95,20 +95,54 @@ class SuppliersScreen extends StatelessWidget {
                   DataColumn(label: Text('Lead Time')),
                   DataColumn(label: Text('Rating')),
                   DataColumn(label: Text('Linked Products')),
+                  DataColumn(label: Text('Raw Materials')),
                   DataColumn(label: Text('Actions')),
                 ],
                 rows: suppliers.map((s) {
-                  final linkedCount = state.products
+                  final linkedProductCount = state.products
                       .where((p) => p.supplierId == s.id)
                       .length;
+                  final linkedRMs = state.rawMaterials
+                      .where((r) => r.supplierId == s.id)
+                      .toList();
                   return DataRow(
                     cells: [
                       DataCell(
-                        Text(
-                          s.name,
-                          style: AppTextStyles.body.copyWith(
-                            fontWeight: FontWeight.w600,
-                          ),
+                        Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              s.name,
+                              style: AppTextStyles.body.copyWith(
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                            if ((s.address ?? '').trim().isNotEmpty)
+                              Padding(
+                                padding: const EdgeInsets.only(top: 2),
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    const Icon(Icons.location_on_outlined,
+                                        size: 12,
+                                        color: AppColors.textSecondary),
+                                    const SizedBox(width: 2),
+                                    ConstrainedBox(
+                                      constraints: const BoxConstraints(maxWidth: 220),
+                                      child: Text(
+                                        s.address!.split('\n').first,
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: AppTextStyles.label.copyWith(
+                                          color: AppColors.textSecondary,
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                          ],
                         ),
                       ),
                       DataCell(Text(s.contactEmail)),
@@ -124,7 +158,52 @@ class SuppliersScreen extends StatelessWidget {
                         ),
                       ),
                       DataCell(_PerformanceRating(rating: s.performanceRating)),
-                      DataCell(Text('$linkedCount products')),
+                      DataCell(Text('$linkedProductCount products')),
+                      DataCell(
+                        InkWell(
+                          onTap: linkedRMs.isEmpty
+                              ? null
+                              : () => showDialog(
+                                    context: context,
+                                    builder: (_) => _LinkedRmDialog(
+                                      supplierName: s.name,
+                                      rawMaterials: linkedRMs,
+                                    ),
+                                  ),
+                          borderRadius: BorderRadius.circular(12),
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 8, vertical: 4),
+                            decoration: BoxDecoration(
+                              color: linkedRMs.isEmpty
+                                  ? AppColors.border
+                                  : AppColors.primary.withValues(alpha: 0.1),
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(Icons.inventory_2_outlined,
+                                    size: 12,
+                                    color: linkedRMs.isEmpty
+                                        ? AppColors.textSecondary
+                                        : AppColors.primary),
+                                const SizedBox(width: 4),
+                                Text(
+                                  '${linkedRMs.length}',
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w600,
+                                    color: linkedRMs.isEmpty
+                                        ? AppColors.textSecondary
+                                        : AppColors.primary,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
                       DataCell(
                         Row(
                           mainAxisSize: MainAxisSize.min,
@@ -198,6 +277,7 @@ class SuppliersScreen extends StatelessWidget {
   void _showAddSupplierDialog(BuildContext context) {
     showDialog(
       context: context,
+      useRootNavigator: false,
       builder: (ctx) => const _SupplierFormDialog(supplier: null),
     );
   }
@@ -205,10 +285,75 @@ class SuppliersScreen extends StatelessWidget {
   void _showEditSupplierDialog(BuildContext context, Supplier supplier) {
     showDialog(
       context: context,
+      useRootNavigator: false,
       builder: (ctx) => _SupplierFormDialog(supplier: supplier),
     );
   }
 }
+
+// ─── Linked RM Dialog ─────────────────────────────────────────────────────────
+
+class _LinkedRmDialog extends StatelessWidget {
+  final String supplierName;
+  final List<dynamic> rawMaterials;
+
+  const _LinkedRmDialog({
+    required this.supplierName,
+    required this.rawMaterials,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: Text('Raw Materials — $supplierName'),
+      content: SizedBox(
+        width: 400,
+        child: rawMaterials.isEmpty
+            ? const Text('No raw materials linked to this supplier.')
+            : ListView.separated(
+                shrinkWrap: true,
+                itemCount: rawMaterials.length,
+                separatorBuilder: (_, _) => const Divider(height: 1),
+                itemBuilder: (_, i) {
+                  final rm = rawMaterials[i];
+                  return ListTile(
+                    dense: true,
+                    leading: const Icon(Icons.circle, size: 8,
+                        color: AppColors.primary),
+                    title: Text(rm.name,
+                        style: const TextStyle(fontWeight: FontWeight.w600)),
+                    subtitle: Text(
+                        '${rm.sku}  ·  ${rm.unitOfMeasure}  ·  EGP ${rm.unitCost.toStringAsFixed(2)}/unit'),
+                    trailing: rm.currentStock <= rm.safetyStock
+                        ? Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 6, vertical: 2),
+                            decoration: BoxDecoration(
+                              color: AppColors.error.withValues(alpha: 0.1),
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: const Text('Low Stock',
+                                style: TextStyle(
+                                    fontSize: 11,
+                                    color: AppColors.error,
+                                    fontWeight: FontWeight.w600)),
+                          )
+                        : null,
+                  );
+                },
+              ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Close'),
+        ),
+      ],
+    );
+  }
+}
+
+// ─── Widgets ──────────────────────────────────────────────────────────────────
 
 class _PerformanceRating extends StatelessWidget {
   final double? rating;
@@ -275,6 +420,8 @@ class _LeadTimeChip extends StatelessWidget {
   }
 }
 
+// ─── Supplier Form Dialog ─────────────────────────────────────────────────────
+
 class _SupplierFormDialog extends StatefulWidget {
   final Supplier? supplier;
   const _SupplierFormDialog({required this.supplier});
@@ -290,6 +437,7 @@ class _SupplierFormDialogState extends State<_SupplierFormDialog> {
   late final TextEditingController _phoneCtrl;
   late final TextEditingController _leadTimeCtrl;
   late final TextEditingController _ratingCtrl;
+  late final TextEditingController _addressCtrl;
 
   @override
   void initState() {
@@ -306,6 +454,7 @@ class _SupplierFormDialogState extends State<_SupplierFormDialog> {
           ? s!.performanceRating!.toStringAsFixed(1)
           : '',
     );
+    _addressCtrl = TextEditingController(text: s?.address ?? '');
   }
 
   @override
@@ -315,7 +464,47 @@ class _SupplierFormDialogState extends State<_SupplierFormDialog> {
     _phoneCtrl.dispose();
     _leadTimeCtrl.dispose();
     _ratingCtrl.dispose();
+    _addressCtrl.dispose();
     super.dispose();
+  }
+
+  Future<void> _save() async {
+    if (!_formKey.currentState!.validate()) return;
+    final ratingText = _ratingCtrl.text.trim();
+    final isEdit = widget.supplier != null;
+    final supplier = Supplier(
+      id: widget.supplier?.id ?? '',
+      name: _nameCtrl.text.trim(),
+      contactEmail: _emailCtrl.text.trim(),
+      phone: _phoneCtrl.text.trim().isEmpty ? null : _phoneCtrl.text.trim(),
+      typicalLeadTimeDays: int.tryParse(_leadTimeCtrl.text) ?? 0,
+      performanceRating:
+          ratingText.isEmpty ? null : double.tryParse(ratingText),
+      address: _addressCtrl.text.trim().isEmpty
+          ? null
+          : _addressCtrl.text.trim(),
+    );
+    final navigator = Navigator.of(context);
+    final messenger = ScaffoldMessenger.of(context);
+    final appState = context.read<AppState>();
+    try {
+      if (isEdit) {
+        await appState.updateSupplier(supplier);
+      } else {
+        await appState.addSupplier(supplier);
+      }
+      navigator.pop();
+      messenger.showSnackBar(
+        SnackBar(content: Text(isEdit ? 'Supplier updated' : 'Supplier added')),
+      );
+    } catch (e) {
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text('Failed to save supplier: $e'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    }
   }
 
   @override
@@ -324,7 +513,7 @@ class _SupplierFormDialogState extends State<_SupplierFormDialog> {
     return AlertDialog(
       title: Text(isEdit ? 'Edit Supplier' : 'Add New Supplier'),
       content: SizedBox(
-        width: 400,
+        width: 420,
         child: Form(
           key: _formKey,
           child: SingleChildScrollView(
@@ -384,13 +573,23 @@ class _SupplierFormDialogState extends State<_SupplierFormDialog> {
                   ),
                   keyboardType: const TextInputType.numberWithOptions(decimal: true),
                   validator: (v) {
-                    if (v == null || v.trim().isEmpty) return null; // optional
+                    if (v == null || v.trim().isEmpty) return null;
                     final val = double.tryParse(v.trim());
                     if (val == null || val < 0 || val > 5) {
                       return 'Enter a value between 0 and 5';
                     }
                     return null;
                   },
+                ),
+                const SizedBox(height: 16),
+                TextFormField(
+                  controller: _addressCtrl,
+                  decoration: const InputDecoration(
+                    labelText: 'Address (optional)',
+                    hintText: 'e.g. 15 Industrial Zone, Cairo',
+                    prefixIcon: Icon(Icons.location_on_outlined),
+                  ),
+                  maxLines: 2,
                 ),
               ],
             ),
@@ -407,38 +606,7 @@ class _SupplierFormDialogState extends State<_SupplierFormDialog> {
             backgroundColor: AppColors.primary,
             foregroundColor: Colors.white,
           ),
-          onPressed: () async {
-            if (!_formKey.currentState!.validate()) return;
-            final ratingText = _ratingCtrl.text.trim();
-            final supplier = Supplier(
-              id: widget.supplier?.id ?? '',
-              name: _nameCtrl.text.trim(),
-              contactEmail: _emailCtrl.text.trim(),
-              phone: _phoneCtrl.text.trim().isEmpty
-                  ? null
-                  : _phoneCtrl.text.trim(),
-              typicalLeadTimeDays:
-                  int.tryParse(_leadTimeCtrl.text) ?? 0,
-              performanceRating: ratingText.isEmpty
-                  ? null
-                  : double.tryParse(ratingText),
-            );
-            final appState = context.read<AppState>();
-            final messenger = ScaffoldMessenger.of(context);
-            final nav = Navigator.of(context);
-            try {
-              if (isEdit) {
-                await appState.updateSupplier(supplier);
-              } else {
-                await appState.addSupplier(supplier);
-              }
-              nav.pop();
-            } catch (e) {
-              messenger.showSnackBar(
-                SnackBar(content: Text('Failed to save supplier: $e'), backgroundColor: Colors.red),
-              );
-            }
-          },
+          onPressed: _save,
           child: Text(isEdit ? 'Save Changes' : 'Add Supplier'),
         ),
       ],

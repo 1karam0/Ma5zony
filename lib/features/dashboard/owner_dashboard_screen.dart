@@ -1,6 +1,7 @@
 import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
+import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 import 'package:ma5zony/models/production_order.dart';
 import 'package:ma5zony/providers/app_state.dart';
@@ -44,7 +45,7 @@ class _OwnerDashboardScreenState extends State<OwnerDashboardScreen> {
 
   /// Estimated monthly holding cost = inventory value × annual holding rate / 12.
   double _monthlyHoldingCost(AppState state) {
-    const annualHoldingRate = 0.20; // 20 % per year
+    final annualHoldingRate = state.settings.holdingRate;
     return state.totalStockValue * annualHoldingRate / 12;
   }
 
@@ -153,6 +154,10 @@ class _OwnerDashboardScreenState extends State<OwnerDashboardScreen> {
     final cashFlow = _cashFlowProjection(state);
     final totalSpend = topProducts.fold<double>(0, (s, p) => s + p.monthlySpend);
 
+    final user = state.currentUser;
+    final hour = DateTime.now().hour;
+    final greeting = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening';
+
     return SingleChildScrollView(
       padding: const EdgeInsets.all(24),
       child: Column(
@@ -162,123 +167,143 @@ class _OwnerDashboardScreenState extends State<OwnerDashboardScreen> {
           if (_showBanner && state.shopifyConnection?.isConnected != true)
             _buildShopifyBanner(),
 
+          // ── Greeting ─────────────────────────────────────────────────
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('$greeting, ${user?.name.split(' ').first ?? 'Owner'}',
+                      style: AppTextStyles.h1),
+                  Text(DateFormat('EEEE, d MMMM yyyy').format(DateTime.now()),
+                      style: AppTextStyles.body.copyWith(color: AppColors.textSecondary)),
+                ],
+              ),
+            ],
+          ),
+          const SizedBox(height: 20),
+
+          // ── Critical stock urgency banner + table ────────────────────
+          if (state.hasUrgentStockAlerts) _buildCriticalStockSection(state),
+
+          // ── Secondary: open recommendations ──────────────────────────
+          if (state.openRecommendations > 0) _buildOpenRecsCard(state),
+
           // ── Getting Started checklist ────────────────────────────────
           if (_showChecklist) _buildOnboardingChecklist(state),
 
-          // ── Financial KPIs ───────────────────────────────────────────
-          Text('Financial Overview', style: AppTextStyles.h2),
-          const SizedBox(height: 16),
-          _buildKPIGrid([
-            KPICard(
-              title: 'Total Inventory Value',
-              value: '\$${state.totalStockValue.toStringAsFixed(0)}',
-              icon: Icons.account_balance_wallet,
-              color: AppColors.primary,
-            ),
-            KPICard(
-              title: 'Monthly COGS',
-              value: '\$${cogs.toStringAsFixed(0)}',
-              icon: Icons.receipt_long,
-              color: AppColors.accent,
-            ),
-            KPICard(
-              title: 'Monthly Holding Cost',
-              value: '\$${holdingCost.toStringAsFixed(0)}',
-              icon: Icons.warehouse,
-              color: AppColors.warning,
-            ),
-            KPICard(
-              title: 'Open Order Cost',
-              value: '\$${openOrderCost.toStringAsFixed(0)}',
-              icon: Icons.shopping_cart_checkout,
-              isAlert: openOrderCost > 0,
-              color: AppColors.error,
-            ),
-          ]),
+          // ── Hero metric card ─────────────────────────────────────────
+          _buildHeroCard(state, cogs, holdingCost, openOrderCost),
 
           const SizedBox(height: 24),
 
-          // ── Operational KPIs ─────────────────────────────────────────
-          Text('Operational Overview', style: AppTextStyles.h2),
-          const SizedBox(height: 16),
-          _buildKPIGrid([
-            KPICard(
-              title: 'Total Units in Stock',
-              value: '${_totalUnits(state)}',
-              icon: Icons.inventory_2,
-            ),
-            KPICard(
-              title: 'Items Below ROP',
-              value: '${state.lowStockItems}',
-              icon: Icons.warning_amber,
-              isAlert: state.lowStockItems > 0,
-              color: AppColors.warning,
-            ),
-            KPICard(
-              title: 'Open Recommendations',
-              value: '${state.openRecommendations}',
-              icon: Icons.assignment_late,
-              color: AppColors.primary,
-            ),
-            KPICard(
-              title: 'Forecast Accuracy',
-              value: state.forecastAccuracy > 0
-                  ? '${(state.forecastAccuracy * 100).toStringAsFixed(1)}%'
-                  : 'N/A',
-              icon: Icons.auto_graph,
-              color: AppColors.success,
-            ),
-          ]),
+          // ── Operational + Manufacturing side by side ─────────────────
+          LayoutBuilder(
+            builder: (context, constraints) {
+              final isWide = constraints.maxWidth > 700;
+              final pendingMaterialOrders = state.rawMaterialOrders
+                  .where((o) => o.status != 'completed')
+                  .length;
+              final activeProductionOrders = state.productionOrders
+                  .where((o) =>
+                      o.status != ProductionOrderStatus.completed &&
+                      o.status != ProductionOrderStatus.draft)
+                  .length;
+              final budgetRemaining =
+                  state.latestCashFlow?.totalAvailable ?? 0;
+              final allocatedBudget =
+                  state.latestCashFlow?.allocatedToProduction ?? 0;
 
-          const SizedBox(height: 24),
+              final opPanel = Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('OPERATIONAL', style: AppTextStyles.eyebrow),
+                  const SizedBox(height: 12),
+                  _buildKPIGrid([
+                    KPICard(
+                      title: 'Total Units in Stock',
+                      value: '${_totalUnits(state)}',
+                      icon: Icons.inventory_2,
+                    ),
+                    KPICard(
+                      title: 'Items Below ROP',
+                      value: '${state.lowStockItems}',
+                      icon: Icons.warning_amber,
+                      isAlert: state.lowStockItems > 0,
+                      color: AppColors.warning,
+                    ),
+                    KPICard(
+                      title: 'Open Recommendations',
+                      value: '${state.openRecommendations}',
+                      icon: Icons.assignment_late,
+                      color: AppColors.primary,
+                    ),
+                    KPICard(
+                      title: 'Forecast Accuracy',
+                      value: state.forecastAccuracy > 0
+                          ? '${(state.forecastAccuracy * 100).toStringAsFixed(1)}%'
+                          : 'N/A',
+                      icon: Icons.auto_graph,
+                      color: AppColors.success,
+                    ),
+                  ]),
+                ],
+              );
 
-          // ── Manufacturing Readiness KPIs ─────────────────────────────
-          Text('Manufacturing Readiness', style: AppTextStyles.h2),
-          const SizedBox(height: 16),
-          Builder(builder: (context) {
-            final pendingMaterialOrders = state.rawMaterialOrders
-                .where((o) => o.status != 'completed')
-                .length;
-            final activeProductionOrders = state.productionOrders
-                .where((o) =>
-                    o.status != ProductionOrderStatus.completed &&
-                    o.status != ProductionOrderStatus.draft)
-                .length;
-            final budgetRemaining =
-                state.latestCashFlow?.totalAvailable ?? 0;
-            final allocatedBudget =
-                state.latestCashFlow?.allocatedToProduction ?? 0;
+              final mfgPanel = Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('MANUFACTURING', style: AppTextStyles.eyebrow),
+                  const SizedBox(height: 12),
+                  _buildKPIGrid([
+                    KPICard(
+                      title: 'Pending Material Orders',
+                      value: '$pendingMaterialOrders',
+                      icon: Icons.local_shipping,
+                      isAlert: pendingMaterialOrders > 0,
+                      color: AppColors.warning,
+                    ),
+                    KPICard(
+                      title: 'Active Production Orders',
+                      value: '$activeProductionOrders',
+                      icon: Icons.precision_manufacturing,
+                      color: AppColors.accent,
+                    ),
+                    KPICard(
+                      title: 'Budget Remaining',
+                      value:
+                          'EGP ${(budgetRemaining - allocatedBudget).toStringAsFixed(0)}',
+                      icon: Icons.account_balance,
+                      isAlert: (budgetRemaining - allocatedBudget) < 0,
+                      color: AppColors.success,
+                    ),
+                    KPICard(
+                      title: 'Allocated to Production',
+                      value: 'EGP ${allocatedBudget.toStringAsFixed(0)}',
+                      icon: Icons.payments,
+                      color: AppColors.primary,
+                    ),
+                  ]),
+                ],
+              );
 
-            return _buildKPIGrid([
-              KPICard(
-                title: 'Pending Material Orders',
-                value: '$pendingMaterialOrders',
-                icon: Icons.local_shipping,
-                isAlert: pendingMaterialOrders > 0,
-                color: AppColors.warning,
-              ),
-              KPICard(
-                title: 'Active Production Orders',
-                value: '$activeProductionOrders',
-                icon: Icons.precision_manufacturing,
-                color: AppColors.accent,
-              ),
-              KPICard(
-                title: 'Budget Remaining',
-                value:
-                    '\$${(budgetRemaining - allocatedBudget).toStringAsFixed(0)}',
-                icon: Icons.account_balance,
-                isAlert: (budgetRemaining - allocatedBudget) < 0,
-                color: AppColors.success,
-              ),
-              KPICard(
-                title: 'Allocated to Production',
-                value: '\$${allocatedBudget.toStringAsFixed(0)}',
-                icon: Icons.payments,
-                color: AppColors.primary,
-              ),
-            ]);
-          }),
+              if (isWide) {
+                return Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Expanded(child: opPanel),
+                    const SizedBox(width: 24),
+                    Expanded(child: mfgPanel),
+                  ],
+                );
+              }
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [opPanel, const SizedBox(height: 24), mfgPanel],
+              );
+            },
+          ),
 
           const SizedBox(height: 24),
 
@@ -368,9 +393,9 @@ class _OwnerDashboardScreenState extends State<OwnerDashboardScreen> {
                             ],
                           )),
                           DataCell(Text('${p.monthlyForecast}')),
-                          DataCell(Text('\$${p.unitCost.toStringAsFixed(2)}')),
+                          DataCell(Text('EGP ${p.unitCost.toStringAsFixed(2)}')),
                           DataCell(Text(
-                              '\$${p.monthlySpend.toStringAsFixed(0)}')),
+                              'EGP ${p.monthlySpend.toStringAsFixed(0)}')),
                           DataCell(Text('${pct.toStringAsFixed(1)}%')),
                         ]);
                       }).toList(),
@@ -395,8 +420,7 @@ class _OwnerDashboardScreenState extends State<OwnerDashboardScreen> {
                 children: [
                   Text('Supplier Cost Breakdown', style: AppTextStyles.h3),
                   const SizedBox(height: 16),
-                  SizedBox(
-                    width: double.infinity,
+                  HorizontallyScrollableTable(
                     child: DataTable(
                       columns: const [
                         DataColumn(label: Text('Supplier')),
@@ -413,7 +437,7 @@ class _OwnerDashboardScreenState extends State<OwnerDashboardScreen> {
                           DataCell(Text(
                               '${s.avgLeadTime.toStringAsFixed(0)} days')),
                           DataCell(Text(
-                              '\$${s.totalMonthlySpend.toStringAsFixed(0)}')),
+                              'EGP ${s.totalMonthlySpend.toStringAsFixed(0)}')),
                         ]);
                       }).toList(),
                     ),
@@ -428,6 +452,183 @@ class _OwnerDashboardScreenState extends State<OwnerDashboardScreen> {
   }
 
   // ── Sub-widgets ──────────────────────────────────────────────────────────
+
+  /// Critical stock urgency banner with a per-product action table.
+  /// Shown only when there is at least one product with current stock below
+  /// its computed minimum (cycle + safety stock).
+  Widget _buildCriticalStockSection(AppState state) {
+    final critical = state.criticalStockProducts;
+    if (critical.isEmpty) return const SizedBox.shrink();
+
+    final mostUrgent = critical.first;
+    final minDays = critical
+        .map((r) => r.daysOfStockLeft.isFinite ? r.daysOfStockLeft : 9999.0)
+        .reduce((a, b) => a < b ? a : b);
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 20),
+      decoration: BoxDecoration(
+        color: AppColors.errorBg,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: AppColors.error.withValues(alpha: 0.3)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 12, 8, 8),
+            child: Row(
+              children: [
+                const Icon(Icons.warning_amber_rounded,
+                    color: AppColors.error, size: 18),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    '${critical.length} product${critical.length > 1 ? 's' : ''} '
+                    'critically low — stockout in ~${minDays.toStringAsFixed(0)} day'
+                    '${minDays.round() == 1 ? '' : 's'}',
+                    style: const TextStyle(
+                        fontWeight: FontWeight.w700,
+                        color: AppColors.error,
+                        fontSize: 13),
+                  ),
+                ),
+                TextButton.icon(
+                  icon: const Icon(Icons.show_chart, size: 16),
+                  label: const Text('Run Forecast Now →'),
+                  onPressed: () => context
+                      .go('/forecasts?productId=${mostUrgent.productId}'),
+                  style: TextButton.styleFrom(
+                    foregroundColor: AppColors.error,
+                    textStyle: const TextStyle(
+                        fontSize: 12, fontWeight: FontWeight.w700),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          // Critical products table (top 5)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+            child: Table(
+              columnWidths: const {
+                0: FlexColumnWidth(1.5),
+                1: FlexColumnWidth(2.4),
+                2: FlexColumnWidth(1),
+                3: FlexColumnWidth(1.1),
+                4: FlexColumnWidth(1.1),
+                5: FlexColumnWidth(1.4),
+              },
+              children: [
+                TableRow(
+                  children: ['SKU', 'Product', 'Current', 'Min', 'Days Left', '']
+                      .map((h) => Padding(
+                            padding: const EdgeInsets.only(bottom: 4),
+                            child: Text(h,
+                                style: const TextStyle(
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.w700,
+                                    color: AppColors.error)),
+                          ))
+                      .toList(),
+                ),
+                ...critical.take(5).map((r) {
+                  final days = r.daysOfStockLeft.isFinite
+                      ? r.daysOfStockLeft
+                      : 0.0;
+                  return TableRow(
+                    children: [
+                      Text(r.sku,
+                          style: const TextStyle(
+                              fontSize: 12, color: AppColors.textPrimary)),
+                      Text(r.productName,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                              fontSize: 12, color: AppColors.textPrimary)),
+                      Text('${r.currentStock}',
+                          style: const TextStyle(fontSize: 12)),
+                      Text('${r.minimumStock}',
+                          style: const TextStyle(fontSize: 12)),
+                      Text('${days.toStringAsFixed(0)} d',
+                          style: TextStyle(
+                              fontSize: 12,
+                              color: days < 3
+                                  ? AppColors.error
+                                  : AppColors.warning,
+                              fontWeight: FontWeight.w700)),
+                      InkWell(
+                        onTap: () => context
+                            .go('/forecasts?productId=${r.productId}'),
+                        child: const Text('Forecast →',
+                            style: TextStyle(
+                                fontSize: 12,
+                                color: AppColors.primary,
+                                fontWeight: FontWeight.w600)),
+                      ),
+                    ]
+                        .map((w) => Padding(
+                              padding: const EdgeInsets.symmetric(vertical: 3),
+                              child: w,
+                            ))
+                        .toList(),
+                  );
+                }),
+              ],
+            ),
+          ),
+          if (critical.length > 5)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+              child: Text(
+                '+ ${critical.length - 5} more — see Forecasts page',
+                style: AppTextStyles.label
+                    .copyWith(color: AppColors.error.withValues(alpha: 0.85)),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  /// Secondary lower-severity card surfacing pending replenishment
+  /// recommendations (not a true stockout-risk alert).
+  Widget _buildOpenRecsCard(AppState state) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 20),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+      decoration: BoxDecoration(
+        color: AppColors.warningBg.withValues(alpha: 0.5),
+        border: Border.all(color: AppColors.warning.withValues(alpha: 0.35)),
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.assignment_late_outlined,
+              size: 16, color: AppColors.warning),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              '${state.openRecommendations} replenishment recommendation'
+              '${state.openRecommendations > 1 ? 's' : ''} pending review',
+              style: AppTextStyles.bodySmall,
+            ),
+          ),
+          TextButton(
+            onPressed: () => context.go('/replenishment'),
+            style: TextButton.styleFrom(
+              foregroundColor: AppColors.warning,
+              textStyle:
+                  const TextStyle(fontSize: 11, fontWeight: FontWeight.w600),
+              padding: const EdgeInsets.symmetric(horizontal: 8),
+              minimumSize: Size.zero,
+              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            ),
+            child: const Text('Review →'),
+          ),
+        ],
+      ),
+    );
+  }
 
   Widget _buildShopifyBanner() {
     return Container(
@@ -496,6 +697,11 @@ class _OwnerDashboardScreenState extends State<OwnerDashboardScreen> {
         label: 'Run your first forecast',
         route: '/forecasts',
         isDone: state.currentForecast != null,
+      ),
+      _ChecklistStep(
+        label: 'Configure EOQ & holding cost in Settings',
+        route: '/settings',
+        isDone: state.settings.orderingCost != 250.0 || state.settings.holdingRate != 0.20,
       ),
     ];
     final doneCount = steps.where((s) => s.isDone).length;
@@ -619,19 +825,124 @@ class _OwnerDashboardScreenState extends State<OwnerDashboardScreen> {
     );
   }
 
+  // ── Hero card ────────────────────────────────────────────────────────────
+
+  Widget _buildHeroCard(
+      AppState state, double cogs, double holdingCost, double openOrderCost) {
+    final accuracy = state.forecastAccuracy > 0
+        ? '${(state.forecastAccuracy * 100).toStringAsFixed(1)}%'
+        : '—';
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(28, 24, 28, 24),
+      decoration: BoxDecoration(
+        color: AppColors.sidebarBg,
+        borderRadius: AppRadius.md,
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'INVENTORY VALUE',
+            style: AppTextStyles.eyebrow
+                .copyWith(color: Colors.white.withValues(alpha: 0.45)),
+          ),
+          const SizedBox(height: 8),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              Text(
+                'EGP ${state.totalStockValue.toStringAsFixed(0)}',
+                style: AppTextStyles.display.copyWith(color: Colors.white),
+              ),
+              const SizedBox(width: 14),
+              Padding(
+                padding: const EdgeInsets.only(bottom: 6),
+                child: Text(
+                  '${state.products.length} products · ${_totalUnits(state)} units',
+                  style: AppTextStyles.body.copyWith(
+                    color: Colors.white.withValues(alpha: 0.4),
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 20),
+          Divider(
+              color: Colors.white.withValues(alpha: 0.1), height: 1),
+          const SizedBox(height: 20),
+          IntrinsicHeight(
+            child: SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: Row(
+                children: [
+                  _heroSubMetric('MONTHLY COGS',
+                      'EGP ${cogs.toStringAsFixed(0)}'),
+                  VerticalDivider(
+                      color: Colors.white.withValues(alpha: 0.12),
+                      width: 40),
+                  _heroSubMetric('HOLDING COST',
+                      'EGP ${holdingCost.toStringAsFixed(0)}'),
+                  VerticalDivider(
+                      color: Colors.white.withValues(alpha: 0.12),
+                      width: 40),
+                  _heroSubMetric(
+                    'OPEN ORDERS',
+                    'EGP ${openOrderCost.toStringAsFixed(0)}',
+                    isAlert: openOrderCost > 0,
+                  ),
+                  VerticalDivider(
+                      color: Colors.white.withValues(alpha: 0.12),
+                      width: 40),
+                  _heroSubMetric('FORECAST ACC.', accuracy),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _heroSubMetric(String label, String value,
+      {bool isAlert = false}) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          label,
+          style: AppTextStyles.eyebrow
+              .copyWith(color: Colors.white.withValues(alpha: 0.4)),
+        ),
+        const SizedBox(height: 6),
+        Text(
+          value,
+          style: AppTextStyles.mono.copyWith(
+            fontSize: 20,
+            fontWeight: FontWeight.w600,
+            color: isAlert && value != 'EGP 0'
+                ? AppColors.warning
+                : Colors.white,
+          ),
+        ),
+      ],
+    );
+  }
+
   Widget _buildKPIGrid(List<Widget> cards) {
     return LayoutBuilder(
       builder: (context, constraints) {
-        final int crossAxisCount =
-            constraints.maxWidth > 1200 ? 4 : (constraints.maxWidth > 800 ? 2 : 1);
-        return GridView.count(
-          crossAxisCount: crossAxisCount,
-          shrinkWrap: true,
-          crossAxisSpacing: 16,
-          mainAxisSpacing: 16,
-          childAspectRatio: 2.0,
-          physics: const NeverScrollableScrollPhysics(),
-          children: cards,
+        final w = constraints.maxWidth;
+        final cols = w > 900 ? 4 : w > 500 ? 2 : 1;
+        const spacing = 16.0;
+        final cardW = (w - spacing * (cols - 1)) / cols;
+        return Wrap(
+          spacing: spacing,
+          runSpacing: spacing,
+          children: cards
+              .map((c) => SizedBox(width: cardW, child: c))
+              .toList(),
         );
       },
     );
@@ -696,11 +1007,11 @@ class _OwnerDashboardScreenState extends State<OwnerDashboardScreen> {
             ),
             const SizedBox(height: 12),
             _legendItem(AppColors.primary, 'COGS',
-                '\$${cogs.toStringAsFixed(0)}'),
+                'EGP ${cogs.toStringAsFixed(0)}'),
             _legendItem(AppColors.warning, 'Holding',
-                '\$${holdingCost.toStringAsFixed(0)}'),
+                'EGP ${holdingCost.toStringAsFixed(0)}'),
             _legendItem(AppColors.error, 'Open Orders',
-                '\$${openOrderCost.toStringAsFixed(0)}'),
+                'EGP ${openOrderCost.toStringAsFixed(0)}'),
           ],
         ),
       ),
@@ -791,7 +1102,7 @@ class _OwnerDashboardScreenState extends State<OwnerDashboardScreen> {
             ),
             const SizedBox(height: 8),
             Text(
-              'Projected monthly inventory spend: \$${cashFlow.isNotEmpty ? cashFlow.first.toStringAsFixed(0) : 0}',
+              'Projected monthly inventory spend: EGP ${cashFlow.isNotEmpty ? cashFlow.first.toStringAsFixed(0) : 0}',
               style: AppTextStyles.label,
             ),
           ],

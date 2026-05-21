@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -239,19 +240,32 @@ class _IntegrationsScreenState extends State<IntegrationsScreen> {
                                         final messenger = ScaffoldMessenger.of(
                                           context,
                                         );
+                                        final appState =
+                                            context.read<AppState>();
+                                        final router = GoRouter.of(context);
                                         setState(() => _importing = true);
                                         try {
-                                          final result = await context
-                                              .read<AppState>()
-                                              .importShopifyProducts();
+                                          final result =
+                                              await appState.importShopifyProducts();
                                           if (mounted) {
                                             final newC = result['newCount'] ?? 0;
                                             final merged = result['mergedCount'] ?? 0;
                                             _log('Products', '$newC new, $merged updated');
+                                            final hasWarehouses =
+                                                appState.warehouses.isNotEmpty;
                                             messenger.showSnackBar(
                                               SnackBar(
+                                                duration: const Duration(
+                                                    seconds: 5),
                                                 content: Text(
-                                                  '$newC new product(s) added, $merged existing updated',
+                                                  '$newC new product(s) added, $merged existing updated. ${hasWarehouses ? "Next: assign them to a warehouse." : "Next: create a warehouse to organize them."}',
+                                                ),
+                                                action: SnackBarAction(
+                                                  label: hasWarehouses
+                                                      ? 'Assign to Warehouse'
+                                                      : 'Create Warehouse',
+                                                  onPressed: () =>
+                                                      router.go('/warehouses'),
                                                 ),
                                               ),
                                             );
@@ -360,10 +374,16 @@ class _IntegrationsScreenState extends State<IntegrationsScreen> {
                                           }
                                         } catch (e) {
                                           if (mounted) {
+                                            final msg = e.toString();
+                                            final isScope = msg.contains('Access denied') || msg.contains('scope') || msg.contains('read_orders');
                                             messenger.showSnackBar(
                                               SnackBar(
+                                                backgroundColor: Colors.red,
+                                                duration: const Duration(seconds: 8),
                                                 content: Text(
-                                                  'Order import failed: $e',
+                                                  isScope
+                                                      ? 'Permission error: disconnect and reconnect Shopify to grant order access.'
+                                                      : 'Order import failed: $msg',
                                                 ),
                                               ),
                                             );

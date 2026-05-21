@@ -97,7 +97,21 @@ class _ManufacturersScreenState extends State<ManufacturersScreen> {
                 ],
                 rows: manufacturers.map((m) {
                   return DataRow(cells: [
-                    DataCell(Text(m.name)),
+                    DataCell(Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Text(m.name,
+                            style: const TextStyle(fontWeight: FontWeight.w600)),
+                        if (m.address != null && m.address!.isNotEmpty)
+                          Text(m.address!,
+                              style: const TextStyle(
+                                  fontSize: 11,
+                                  color: AppColors.textSecondary),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis),
+                      ],
+                    )),
                     DataCell(Text(m.contactEmail)),
                     DataCell(Text(m.phone ?? '—')),
                     DataCell(Text('${m.productionCapacity} units')),
@@ -209,6 +223,7 @@ class _ManufacturerFormDialogState extends State<_ManufacturerFormDialog> {
   late final TextEditingController _phoneCtrl;
   late final TextEditingController _capacityCtrl;
   late final TextEditingController _leadTimeCtrl;
+  late final TextEditingController _addressCtrl;
   bool _saving = false;
 
   bool get _isEdit => widget.existing != null;
@@ -224,6 +239,7 @@ class _ManufacturerFormDialogState extends State<_ManufacturerFormDialog> {
         text: e != null ? '${e.productionCapacity}' : '');
     _leadTimeCtrl = TextEditingController(
         text: e != null ? '${e.typicalProductionDays}' : '');
+    _addressCtrl = TextEditingController(text: e?.address ?? '');
   }
 
   @override
@@ -233,6 +249,7 @@ class _ManufacturerFormDialogState extends State<_ManufacturerFormDialog> {
     _phoneCtrl.dispose();
     _capacityCtrl.dispose();
     _leadTimeCtrl.dispose();
+    _addressCtrl.dispose();
     super.dispose();
   }
 
@@ -293,6 +310,16 @@ class _ManufacturerFormDialogState extends State<_ManufacturerFormDialog> {
                     return null;
                   },
                 ),
+                const SizedBox(height: 12),
+                TextFormField(
+                  controller: _addressCtrl,
+                  decoration: const InputDecoration(
+                    labelText: 'Address (optional)',
+                    hintText: 'e.g. 10 Factory St, Industrial Zone',
+                    prefixIcon: Icon(Icons.location_on_outlined),
+                  ),
+                  maxLines: 2,
+                ),
               ],
             ),
           ),
@@ -328,6 +355,9 @@ class _ManufacturerFormDialogState extends State<_ManufacturerFormDialog> {
         phone: _phoneCtrl.text.trim().isEmpty ? null : _phoneCtrl.text.trim(),
         productionCapacity: int.parse(_capacityCtrl.text.trim()),
         typicalProductionDays: int.parse(_leadTimeCtrl.text.trim()),
+        address: _addressCtrl.text.trim().isEmpty
+            ? null
+            : _addressCtrl.text.trim(),
       );
       if (_isEdit) {
         await widget.state.updateManufacturer(manufacturer);

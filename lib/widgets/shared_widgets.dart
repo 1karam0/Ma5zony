@@ -66,19 +66,38 @@ class Breadcrumbs extends StatelessWidget {
 
 class SectionHeader extends StatelessWidget {
   final String title;
+  final String? subtitle;
   final List<Widget>? actions;
 
-  const SectionHeader({super.key, required this.title, this.actions});
+  const SectionHeader({
+    super.key,
+    required this.title,
+    this.subtitle,
+    this.actions,
+  });
 
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.only(bottom: 16.0),
+      padding: const EdgeInsets.only(bottom: 20.0),
       child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        crossAxisAlignment: CrossAxisAlignment.center,
         children: [
-          Text(title, style: AppTextStyles.h3),
-          if (actions != null) Row(children: actions!),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(title, style: AppTextStyles.h2),
+              if (subtitle != null) ...
+                [
+                  const SizedBox(height: 2),
+                  Text(subtitle!, style: AppTextStyles.bodySmall),
+                ],
+            ],
+          ),
+          const Spacer(),
+          if (actions != null)
+            Row(mainAxisSize: MainAxisSize.min, children: actions!),
         ],
       ),
     );
@@ -491,3 +510,496 @@ class AppToast {
   }
 }
 
+/// Wraps any wide child (typically a [DataTable]) in a horizontal
+/// [SingleChildScrollView] with a visible [Scrollbar].
+///
+/// Use this instead of [SizedBox(width: double.infinity)] for tables so they
+/// scroll horizontally at narrow viewports instead of showing overflow stripes.
+///
+/// ```dart
+/// HorizontallyScrollableTable(
+///   child: DataTable(columns: [...], rows: [...]),
+/// )
+/// ```
+class HorizontallyScrollableTable extends StatefulWidget {
+  final Widget child;
+
+  const HorizontallyScrollableTable({super.key, required this.child});
+
+  @override
+  State<HorizontallyScrollableTable> createState() =>
+      _HorizontallyScrollableTableState();
+}
+
+class _HorizontallyScrollableTableState
+    extends State<HorizontallyScrollableTable> {
+  final ScrollController _controller = ScrollController();
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scrollbar(
+      controller: _controller,
+      thumbVisibility: true,
+      child: SingleChildScrollView(
+        controller: _controller,
+        scrollDirection: Axis.horizontal,
+        child: widget.child,
+      ),
+    );
+  }
+}
+
+// ─── AlertBanner ──────────────────────────────────────────────────────────────
+
+/// 4C — Semantic alert banner with a 4 px left accent bar.
+///
+/// ```dart
+/// AlertBanner(
+///   severity: AlertSeverity.warning,
+///   title: '3 items below reorder point',
+///   message: 'Review your replenishment recommendations.',
+///   action: TextButton(onPressed: ..., child: Text('View')),
+/// )
+/// ```
+enum AlertSeverity { info, success, warning, error }
+
+class AlertBanner extends StatelessWidget {
+  final AlertSeverity severity;
+  final String title;
+  final String? message;
+  final Widget? action;
+  final VoidCallback? onDismiss;
+
+  const AlertBanner({
+    super.key,
+    required this.severity,
+    required this.title,
+    this.message,
+    this.action,
+    this.onDismiss,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final (bg, border, icon, iconColor) = switch (severity) {
+      AlertSeverity.info    => (AppColors.infoBg,    AppColors.infoBorder,    Icons.info_outline,         AppColors.info),
+      AlertSeverity.success => (AppColors.successBg, AppColors.successBorder, Icons.check_circle_outline,  AppColors.success),
+      AlertSeverity.warning => (AppColors.warningBg, AppColors.warningBorder, Icons.warning_amber_outlined, AppColors.warning),
+      AlertSeverity.error   => (AppColors.errorBg,   AppColors.errorBorder,   Icons.error_outline,         AppColors.error),
+    };
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 16),
+      decoration: BoxDecoration(
+        color: bg,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: border.withValues(alpha: 0.4)),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: IntrinsicHeight(
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            // 4 px accent bar
+            Container(width: 4, color: border),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+              child: Icon(icon, color: iconColor, size: 20),
+            ),
+            Expanded(
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: 12),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(title, style: AppTextStyles.body.copyWith(fontWeight: FontWeight.w600)),
+                    if (message != null) ...[
+                      const SizedBox(height: 2),
+                      Text(message!, style: AppTextStyles.bodySmall),
+                    ],
+                  ],
+                ),
+              ),
+            ),
+            if (action != null)
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                child: action!,
+              ),
+            if (onDismiss != null)
+              IconButton(
+                icon: const Icon(Icons.close, size: 16),
+                color: AppColors.textSecondary,
+                onPressed: onDismiss,
+                tooltip: 'Dismiss',
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ─── SkeletonLoader ───────────────────────────────────────────────────────────
+
+/// 4I — Pulsing placeholder block used while data is loading.
+///
+/// ```dart
+/// SkeletonLoader(width: double.infinity, height: 20)
+/// ```
+class SkeletonLoader extends StatefulWidget {
+  final double width;
+  final double height;
+  final double borderRadius;
+
+  const SkeletonLoader({
+    super.key,
+    required this.width,
+    required this.height,
+    this.borderRadius = 6,
+  });
+
+  @override
+  State<SkeletonLoader> createState() => _SkeletonLoaderState();
+}
+
+class _SkeletonLoaderState extends State<SkeletonLoader>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _ctrl;
+  late final Animation<double> _anim;
+
+  @override
+  void initState() {
+    super.initState();
+    _ctrl = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1200),
+    )..repeat(reverse: true);
+    _anim = CurvedAnimation(parent: _ctrl, curve: Curves.easeInOut);
+  }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: _anim,
+      builder: (context, child) => Container(
+        width: widget.width,
+        height: widget.height,
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(widget.borderRadius),
+          color: Color.lerp(
+            const Color(0xFFE8EAED),
+            const Color(0xFFF8F9FA),
+            _anim.value,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// ── AppFormDialog ─────────────────────────────────────────────────────────────
+
+/// Reusable dialog shell: header with title + close, scrollable form body,
+/// sticky footer with action buttons. Replaces raw [AlertDialog] for forms.
+class AppFormDialog extends StatelessWidget {
+  final String title;
+  final Widget child;
+  final List<Widget> actions;
+  final double maxWidth;
+
+  const AppFormDialog({
+    super.key,
+    required this.title,
+    required this.child,
+    required this.actions,
+    this.maxWidth = 600,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Dialog(
+      insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 40),
+      child: ConstrainedBox(
+        constraints: BoxConstraints(
+          maxWidth: maxWidth,
+          maxHeight: MediaQuery.sizeOf(context).height * 0.88,
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // Header
+            Container(
+              padding: const EdgeInsets.fromLTRB(24, 18, 16, 18),
+              decoration: const BoxDecoration(
+                border: Border(bottom: BorderSide(color: AppColors.divider)),
+              ),
+              child: Row(
+                children: [
+                  Text(title, style: AppTextStyles.h2),
+                  const Spacer(),
+                  IconButton(
+                    icon: const Icon(Icons.close, size: 18),
+                    color: AppColors.textSecondary,
+                    padding: EdgeInsets.zero,
+                    constraints:
+                        const BoxConstraints(minWidth: 32, minHeight: 32),
+                    onPressed: () => Navigator.of(context).pop(),
+                  ),
+                ],
+              ),
+            ),
+            // Scrollable body
+            Flexible(
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.fromLTRB(24, 20, 24, 4),
+                child: child,
+              ),
+            ),
+            // Footer actions
+            Container(
+              padding: const EdgeInsets.fromLTRB(24, 12, 24, 16),
+              decoration: const BoxDecoration(
+                border: Border(top: BorderSide(color: AppColors.divider)),
+              ),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.end,
+                children: [
+                  for (int i = 0; i < actions.length; i++) ...[
+                    if (i > 0) const SizedBox(width: 8),
+                    actions[i],
+                  ],
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Shows a styled confirmation dialog. Returns [true] if confirmed.
+Future<bool?> showAppConfirmDialog({
+  required BuildContext context,
+  required String title,
+  required String message,
+  String confirmLabel = 'Confirm',
+  String cancelLabel = 'Cancel',
+  bool isDanger = false,
+}) {
+  return showDialog<bool>(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      title: Text(title),
+      content: Text(message),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(ctx).pop(false),
+          child: Text(cancelLabel),
+        ),
+        ElevatedButton(
+          onPressed: () => Navigator.of(ctx).pop(true),
+          style: isDanger
+              ? ElevatedButton.styleFrom(
+                  backgroundColor: AppColors.error,
+                  foregroundColor: Colors.white,
+                )
+              : null,
+          child: Text(confirmLabel),
+        ),
+      ],
+    ),
+  );
+}
+
+// ── EmptyState ────────────────────────────────────────────────────────────────
+
+/// Consistent empty-state placeholder for lists, search results, etc.
+///
+/// Usage:
+/// ```dart
+/// if (items.isEmpty)
+///   EmptyState(
+///     icon: Icons.inventory_2_outlined,
+///     heading: 'No products yet',
+///     body: 'Add your first product to start tracking inventory.',
+///     action: ElevatedButton.icon(
+///       onPressed: _openAdd,
+///       icon: const Icon(Icons.add),
+///       label: const Text('Add Product'),
+///     ),
+///   )
+/// ```
+class EmptyState extends StatelessWidget {
+  final IconData icon;
+  final String heading;
+  final String? body;
+  final Widget? action;
+
+  const EmptyState({
+    super.key,
+    required this.icon,
+    required this.heading,
+    this.body,
+    this.action,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 48),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 64,
+              height: 64,
+              decoration: BoxDecoration(
+                color: AppColors.surfaceSubtle,
+                borderRadius: AppRadius.soft,
+                border: Border.all(color: AppColors.divider),
+              ),
+              child: Icon(icon, size: 28, color: AppColors.textSecondary),
+            ),
+            const SizedBox(height: 16),
+            Text(
+              heading,
+              style: AppTextStyles.h2,
+              textAlign: TextAlign.center,
+            ),
+            if (body != null) ...[
+              const SizedBox(height: 8),
+              ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 360),
+                child: Text(
+                  body!,
+                  style:
+                      AppTextStyles.body.copyWith(color: AppColors.textSubdued),
+                  textAlign: TextAlign.center,
+                ),
+              ),
+            ],
+            if (action != null) ...[
+              const SizedBox(height: 24),
+              action!,
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ── Skeleton placeholder for a KPI card grid (4 cards).
+class KPICardSkeleton extends StatelessWidget {
+  const KPICardSkeleton({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(builder: (context, constraints) {
+      final w = constraints.maxWidth;
+      final cols = w > 900 ? 4 : w > 500 ? 2 : 1;
+      const spacing = 16.0;
+      final cardW = (w - spacing * (cols - 1)) / cols;
+      return Wrap(
+        spacing: spacing,
+        runSpacing: spacing,
+        children: List.generate(
+          4,
+          (_) => Container(
+            width: cardW,
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: AppColors.border),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: const [
+                SkeletonLoader(width: 80, height: 12),
+                SizedBox(height: 12),
+                SkeletonLoader(width: 48, height: 24),
+                SizedBox(height: 8),
+                SkeletonLoader(width: 120, height: 10),
+              ],
+            ),
+          ),
+        ),
+      );
+    });
+  }
+}
+
+/// Skeleton placeholder for a DataTable (3 rows × n columns).
+class TableSkeleton extends StatelessWidget {
+  final int columns;
+  final int rows;
+
+  const TableSkeleton({super.key, this.columns = 5, this.rows = 5});
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      elevation: 0,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(12),
+        side: const BorderSide(color: AppColors.border),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          children: [
+            // Header row
+            Row(
+              children: List.generate(
+                columns,
+                (_) => Expanded(
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 4),
+                    child: const SkeletonLoader(width: double.infinity, height: 12),
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(height: 12),
+            const Divider(height: 1),
+            ...List.generate(rows, (row) => Padding(
+              padding: const EdgeInsets.symmetric(vertical: 10),
+              child: Row(
+                children: List.generate(
+                  columns,
+                  (_) => Expanded(
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 4),
+                      child: SkeletonLoader(
+                        width: double.infinity,
+                        height: 14,
+                        borderRadius: 4,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            )),
+          ],
+        ),
+      ),
+    );
+  }
+}

@@ -1,6 +1,7 @@
 import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
+import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 import 'package:ma5zony/models/demand_record.dart';
 import 'package:ma5zony/providers/app_state.dart';
@@ -16,451 +17,191 @@ class DashboardScreen extends StatefulWidget {
 
 class _DashboardScreenState extends State<DashboardScreen> {
   bool _showBanner = true;
+  bool _showChecklist = true;
   bool _syncing = false;
   int _rangeMonths = 6;
+
+  String _greeting() {
+    final hour = DateTime.now().hour;
+    if (hour < 12) return 'Good morning';
+    if (hour < 17) return 'Good afternoon';
+    return 'Good evening';
+  }
 
   @override
   Widget build(BuildContext context) {
     final state = context.watch<AppState>();
+
+    if (state.isLoading) return const Center(child: CircularProgressIndicator());
+
     final products = state.products;
     final recommendations = state.recommendations;
     final warehouses = state.warehouses;
+    final user = state.currentUser;
 
-    if (state.isLoading) {
-      return const Center(child: CircularProgressIndicator());
-    }
+    // Derived stats
+    final totalUnits = products.fold<int>(0, (s, p) => s + p.currentStock);
+    final criticalCount = products.where((p) => p.currentStock == 0).length;
+    final lowCount = products.where((p) {
+      final rec = recommendations.where((r) => r.productId == p.id).firstOrNull;
+      final rop = rec?.reorderPoint ?? 0;
+      return p.currentStock > 0 && rop > 0 && p.currentStock <= rop;
+    }).length;
+    final okCount = products.length - criticalCount - lowCount;
+    final hasData = products.isNotEmpty;
 
     return SingleChildScrollView(
       padding: const EdgeInsets.all(24),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Shopify banner
-          if (_showBanner && state.shopifyConnection?.isConnected != true)
-            Container(
-              margin: const EdgeInsets.only(bottom: 24),
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: AppColors.secondary,
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: AppColors.primary.withValues(alpha: 0.3)),
-              ),
-              child: Row(
-                children: [
-                  const Icon(Icons.store, color: AppColors.primary),
-                  const SizedBox(width: 16),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          'Connect your Shopify store',
-                          style: AppTextStyles.h3,
-                        ),
-                        Text(
-                          'Sync products and inventory in real-time.',
-                          style: AppTextStyles.body,
-                        ),
-                      ],
+          // ── Onboarding checklist (new users) ──────────────────────────
+          if (_showChecklist && _needsOnboarding(state))
+            _OnboardingChecklist(
+              state: state,
+              onDismiss: () => setState(() => _showChecklist = false),
+            ),
+
+          // ── Greeting header ────────────────────────────────────────────
+          if (hasData) ...[
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      '${_greeting()}, ${user?.name.split(' ').first ?? 'there'}',
+                      style: AppTextStyles.h1,
                     ),
-                  ),
-                  ElevatedButton(
+                    Text(
+                      DateFormat('EEEE, d MMMM yyyy').format(DateTime.now()),
+                      style: AppTextStyles.body.copyWith(color: AppColors.textSecondary),
+                    ),
+                  ],
+                ),
+                const Spacer(),
+                // Shopify sync button (compact)
+                if (state.shopifyConnection?.isConnected == true)
+                  _ShopifySyncChip(
+                    syncing: _syncing,
+                    domain: state.shopifyConnection!.shopDomain,
+                    lastSync: state.shopifyConnection!.lastSyncAt,
+                    onSync: () => _syncShopify(context, state),
+                  )
+                else if (_showBanner)
+                  TextButton.icon(
                     onPressed: () => context.go('/integrations'),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: AppColors.primary,
-                      foregroundColor: Colors.white,
-                    ),
-                    child: const Text('Connect Store'),
+                    icon: const Icon(Icons.store, size: 14),
+                    label: const Text('Connect Shopify'),
+                    style: TextButton.styleFrom(foregroundColor: AppColors.primary),
                   ),
-                  const SizedBox(width: 16),
-                  IconButton(
-                    icon: const Icon(Icons.close),
-                    onPressed: () => setState(() => _showBanner = false),
-                  ),
-                ],
-              ),
+              ],
+            ),
+            const SizedBox(height: 20),
+          ],
+
+          // ── Shopify connect banner (empty state) ───────────────────────
+          if (_showBanner && !hasData && state.shopifyConnection?.isConnected != true)
+            _ShopifyBanner(
+              onConnect: () => context.go('/integrations'),
+              onDismiss: () => setState(() => _showBanner = false),
             ),
 
-          // KPI Cards
-          LayoutBuilder(
-            builder: (context, constraints) {
-              final double width = constraints.maxWidth;
-              final int crossAxisCount = width > 1200
-                  ? 4
-                  : (width > 800 ? 2 : 1);
-
-              return GridView.count(
-                crossAxisCount: crossAxisCount,
-                shrinkWrap: true,
-                crossAxisSpacing: 16,
-                mainAxisSpacing: 16,
-                childAspectRatio: 2.0,
-                physics: const NeverScrollableScrollPhysics(),
-                children: [
-                  KPICard(
-                    title: 'Total Units in Stock',
-                    value: '${products.fold<int>(0, (sum, p) => sum + p.currentStock)}',
-                    icon: Icons.inventory_2,
-                  ),
-                  KPICard(
-                    title: 'Items Below ROP',
-                    value: '${state.lowStockItems}',
-                    icon: Icons.warning_amber,
-                    isAlert: state.lowStockItems > 0,
-                    color: AppColors.warning,
-                  ),
-                  KPICard(
-                    title: 'Open Recommendations',
-                    value: '${state.openRecommendations}',
-                    icon: Icons.assignment_late,
-                    color: AppColors.primary,
-                  ),
-                  KPICard(
-                    title: 'Forecast Accuracy',
-                    value: state.forecastAccuracy > 0
-                        ? '${(state.forecastAccuracy * 100).toStringAsFixed(1)}%'
-                        : 'N/A',
-                    icon: Icons.auto_graph,
-                    color: AppColors.success,
-                  ),
-                ],
-              );
-            },
-          ),
-
-          // ── Suggestion Action Buttons ──────────────────────────────
-          if (state.lowStockItems > 0 || state.openRecommendations > 0)
+          // ── Needs Attention ────────────────────────────────────────────
+          if (hasData && (criticalCount > 0 || lowCount > 0 || state.openRecommendations > 0))
             Padding(
-              padding: const EdgeInsets.only(top: 16),
-              child: Card(
-                color: Colors.orange.shade50,
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12),
-                  side: BorderSide(color: Colors.orange.shade200),
-                ),
-                child: Padding(
-                  padding: const EdgeInsets.all(16),
-                  child: Row(
-                    children: [
-                      const Icon(Icons.lightbulb_outline,
-                          color: Colors.orange, size: 28),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              '${state.lowStockItems} item(s) need attention',
-                              style: const TextStyle(
-                                fontWeight: FontWeight.bold,
-                                color: Colors.deepOrange,
-                              ),
-                            ),
-                            const SizedBox(height: 4),
-                            const Text(
-                              'Review replenishment or manufacturing suggestions to keep stock healthy.',
-                            ),
-                          ],
-                        ),
-                      ),
-                      const SizedBox(width: 12),
-                      ElevatedButton.icon(
-                        onPressed: () => context.go('/replenishment'),
-                        icon: const Icon(Icons.shopping_cart, size: 18),
-                        label: const Text('Purchase Suggestions'),
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: Colors.orange,
-                          foregroundColor: Colors.white,
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      OutlinedButton.icon(
-                        onPressed: () => context.go('/recommendations'),
-                        icon: const Icon(Icons.precision_manufacturing,
-                            size: 18),
-                        label: const Text('Manufacturing Suggestions'),
-                      ),
-                    ],
-                  ),
-                ),
+              padding: const EdgeInsets.only(bottom: 20),
+              child: _NeedsAttentionPanel(
+                criticalCount: criticalCount,
+                lowCount: lowCount,
+                openRecommendations: state.openRecommendations,
+                pendingOrders: state.purchaseOrders
+                    .where((o) => o.status.name == 'pending' || o.status.name == 'confirmed')
+                    .length,
               ),
             ),
 
-          // ── Shopify Sync Controls ─────────────────────────────────
-          if (state.shopifyConnection?.isConnected == true)
-            Padding(
-              padding: const EdgeInsets.only(top: 16),
-              child: Card(
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: 16, vertical: 12),
-                  child: Row(
-                    children: [
-                      const Icon(Icons.store,
-                          color: AppColors.success, size: 24),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              'Shopify Connected: ${state.shopifyConnection!.shopDomain}',
-                              style: AppTextStyles.body
-                                  .copyWith(fontWeight: FontWeight.w600),
-                            ),
-                            Text(
-                              state.shopifyConnection!.lastSyncAt != null
-                                  ? 'Last synced: ${_formatTimestamp(state.shopifyConnection!.lastSyncAt!)}'
-                                  : 'Not synced yet',
-                              style: AppTextStyles.label,
-                            ),
-                          ],
-                        ),
-                      ),
-                      ElevatedButton.icon(
-                        onPressed: _syncing
-                            ? null
-                            : () => _syncShopify(context, state),
-                        icon: _syncing
-                            ? const SizedBox(
-                                width: 16,
-                                height: 16,
-                                child: CircularProgressIndicator(
-                                    strokeWidth: 2, color: Colors.white),
-                              )
-                            : const Icon(Icons.sync, size: 18),
-                        label: Text(_syncing ? 'Syncing...' : 'Sync Now'),
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: AppColors.primary,
-                          foregroundColor: Colors.white,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
+          // ── KPI row ────────────────────────────────────────────────────
+          if (hasData) ...[
+            _KpiRow(
+              totalUnits: totalUnits,
+              lowStockItems: state.lowStockItems,
+              openRecommendations: state.openRecommendations,
+              forecastAccuracy: state.forecastAccuracy,
             ),
+            const SizedBox(height: 16),
 
-          const SizedBox(height: 24),
+            // Critical stock alert banner
+            if (state.hasUrgentStockAlerts)
+              _CriticalStockBanner(state: state),
+            if (state.hasUrgentStockAlerts)
+              const SizedBox(height: 16),
 
-          // Charts Section
-          LayoutBuilder(
-            builder: (context, constraints) {
+            // Stock health bar
+            _StockHealthBar(
+              okCount: okCount,
+              lowCount: lowCount,
+              criticalCount: criticalCount,
+              total: products.length,
+            ),
+            const SizedBox(height: 24),
+          ],
+
+          // ── Charts ─────────────────────────────────────────────────────
+          if (hasData)
+            LayoutBuilder(builder: (context, constraints) {
               final isWide = constraints.maxWidth > 1000;
-              return Flex(
-                direction: isWide ? Axis.horizontal : Axis.vertical,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  // Demand vs Forecast chart (uses currentForecast if available)
-                  Expanded(
-                    flex: isWide ? 3 : 0,
-                    child: Card(
-                      elevation: 2,
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      child: Padding(
-                        padding: const EdgeInsets.all(20.0),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Row(
-                              children: [
-                                Expanded(
-                                  child: Text(
-                                    'Demand vs Forecast (Last ${_rangeMonths}M)',
-                                    style: AppTextStyles.h3,
-                                  ),
-                                ),
-                                _RangePicker(
-                                  selected: _rangeMonths,
-                                  onChanged: (v) =>
-                                      setState(() => _rangeMonths = v),
-                                ),
-                              ],
-                            ),
-                            const SizedBox(height: 20),
-                            SizedBox(
-                              height: 250,
-                              child: _buildDemandForecastChart(
-                                  state, _rangeMonths),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ),
-                  SizedBox(width: isWide ? 24 : 0, height: isWide ? 0 : 24),
-                  // Stock by warehouse bar chart
-                  Expanded(
-                    flex: isWide ? 2 : 0,
-                    child: Card(
-                      elevation: 2,
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      child: Padding(
-                        padding: const EdgeInsets.all(20.0),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text('Stock by Warehouse', style: AppTextStyles.h3),
-                            const SizedBox(height: 20),
-                            SizedBox(
-                              height: 250,
-                              child: BarChart(
-                                BarChartData(
-                                  gridData: const FlGridData(show: false),
-                                  titlesData: FlTitlesData(
-                                    rightTitles: const AxisTitles(
-                                      sideTitles: SideTitles(showTitles: false),
-                                    ),
-                                    topTitles: const AxisTitles(
-                                      sideTitles: SideTitles(showTitles: false),
-                                    ),
-                                    leftTitles: const AxisTitles(
-                                      sideTitles: SideTitles(showTitles: false),
-                                    ),
-                                    bottomTitles: AxisTitles(
-                                      sideTitles: SideTitles(
-                                        showTitles: false,
-                                        getTitlesWidget: (v, _) =>
-                                            const SizedBox.shrink(),
-                                      ),
-                                    ),
-                                  ),
-                                  borderData: FlBorderData(show: false),
-                                  barGroups: warehouses
-                                      .asMap()
-                                      .entries
-                                      .map(
-                                        (e) => BarChartGroupData(
-                                          x: e.key,
-                                          barRods: [
-                                            BarChartRodData(
-                                              toY: e.value.totalStock
-                                                  .toDouble(),
-                                              color: e.key == 0
-                                                  ? AppColors.primary
-                                                  : AppColors.accent,
-                                              width: 30,
-                                            ),
-                                          ],
-                                        ),
-                                      )
-                                      .toList(),
-                                ),
-                              ),
-                            ),
-                            const SizedBox(height: 8),
-                            ...warehouses.asMap().entries.map(
-                              (e) => Row(
-                                children: [
-                                  Container(
-                                    width: 10,
-                                    height: 10,
-                                    color: e.key == 0
-                                        ? AppColors.primary
-                                        : AppColors.accent,
-                                  ),
-                                  const SizedBox(width: 6),
-                                  Text(
-                                    '${e.value.name}: ${e.value.totalStock} units',
-                                    style: AppTextStyles.label,
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ),
-                ],
+              final demandCard = _DemandForecastCard(
+                state: state,
+                rangeMonths: _rangeMonths,
+                onRangeChanged: (v) => setState(() => _rangeMonths = v),
               );
-            },
-          ),
+              final stockCard = _StockByWarehouseCard(warehouses: warehouses);
 
-          const SizedBox(height: 24),
+              if (isWide) {
+                return Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Expanded(flex: 3, child: demandCard),
+                    const SizedBox(width: 20),
+                    Expanded(flex: 2, child: stockCard),
+                  ],
+                );
+              }
+              return Column(children: [
+                demandCard,
+                const SizedBox(height: 20),
+                stockCard,
+              ]);
+            }),
 
-          // Quick Inventory Overview with replenishment data
-          Card(
-            elevation: 2,
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(12),
+          if (hasData) const SizedBox(height: 24),
+
+          // ── Inventory overview table ───────────────────────────────────
+          if (hasData)
+            _InventoryOverviewTable(
+              products: products,
+              recommendations: recommendations,
             ),
-            child: Padding(
-              padding: const EdgeInsets.all(20),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text('Quick Inventory Overview', style: AppTextStyles.h3),
-                  const SizedBox(height: 16),
-                  SizedBox(
-                    width: double.infinity,
-                    child: DataTable(
-                      columns: const [
-                        DataColumn(label: Text('Product')),
-                        DataColumn(
-                          label: Text(
-                            'Current Stock',
-                            textAlign: TextAlign.right,
-                          ),
-                        ),
-                        DataColumn(
-                          label: Text('ROP', textAlign: TextAlign.right),
-                        ),
-                        DataColumn(
-                          label: Text('Suggested', textAlign: TextAlign.right),
-                        ),
-                        DataColumn(label: Text('Status')),
-                      ],
-                      rows: products.take(5).map((p) {
-                        final rec = recommendations
-                            .where((r) => r.productId == p.id)
-                            .firstOrNull;
-                        final rop = rec?.reorderPoint ?? 0;
-                        final suggested = rec?.suggestedOrderQty ?? 0;
-                        final status = p.currentStock == 0
-                            ? 'Critical'
-                            : (p.currentStock <= rop && rop > 0 ? 'Low' : 'OK');
 
-                        return DataRow(
-                          cells: [
-                            DataCell(
-                              Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                mainAxisAlignment: MainAxisAlignment.center,
-                                children: [
-                                  Text(
-                                    p.name,
-                                    style: AppTextStyles.body.copyWith(
-                                      fontWeight: FontWeight.w600,
-                                    ),
-                                  ),
-                                  Text(p.sku, style: AppTextStyles.label),
-                                ],
-                              ),
-                            ),
-                            DataCell(Text('${p.currentStock}')),
-                            DataCell(Text('$rop')),
-                            DataCell(Text(rec != null ? '$suggested' : '-')),
-                            DataCell(StatusChip(status)),
-                          ],
-                        );
-                      }).toList(),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
+          // ── Empty state ────────────────────────────────────────────────
+          if (!hasData && !_needsOnboarding(state))
+            _EmptyDashboard(),
         ],
       ),
     );
+  }
+
+  bool _needsOnboarding(AppState state) {
+    if (state.products.isEmpty) return true;
+    if (state.suppliers.isEmpty) return true;
+    if (state.rawMaterials.isEmpty) return true;
+    final bomProductIds = state.boms.map((b) => b.finalProductId).toSet();
+    if (state.products.any((p) => !bomProductIds.contains(p.id))) return true;
+    if (state.manufacturers.isEmpty) return true;
+    if (state.products.any((p) => p.warehouseId == null || p.warehouseId!.isEmpty)) return true;
+    return false;
   }
 
   Future<void> _syncShopify(BuildContext context, AppState state) async {
@@ -470,39 +211,860 @@ class _DashboardScreenState extends State<DashboardScreen> {
       final orderResult = await state.importShopifyOrders();
       if (context.mounted) {
         final imported = orderResult?['newRecordsImported'] ?? 0;
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              'Shopify synced! Inventory updated, $imported new demand records imported.',
-            ),
-          ),
-        );
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('Shopify synced! $imported new demand records imported.'),
+          backgroundColor: AppColors.success,
+        ));
       }
     } catch (e) {
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Sync failed: $e'), backgroundColor: Colors.red),
+          SnackBar(content: Text('Sync failed: $e'), backgroundColor: AppColors.error),
         );
       }
     } finally {
       if (mounted) setState(() => _syncing = false);
     }
   }
+}
 
-  String _formatTimestamp(DateTime dt) {
-    final now = DateTime.now();
-    final diff = now.difference(dt);
-    if (diff.inMinutes < 1) return 'just now';
-    if (diff.inMinutes < 60) return '${diff.inMinutes}m ago';
-    if (diff.inHours < 24) return '${diff.inHours}h ago';
-    return '${dt.day}/${dt.month}/${dt.year}';
+// ── Critical Stock Alert Banner ────────────────────────────────────────────────
+
+class _CriticalStockBanner extends StatefulWidget {
+  final AppState state;
+  const _CriticalStockBanner({required this.state});
+
+  @override
+  State<_CriticalStockBanner> createState() => _CriticalStockBannerState();
+}
+
+class _CriticalStockBannerState extends State<_CriticalStockBanner> {
+  bool _dismissed = false;
+
+  @override
+  Widget build(BuildContext context) {
+    if (_dismissed) return const SizedBox.shrink();
+
+    final critical = widget.state.criticalStockProducts;
+    final mostUrgent = critical.isNotEmpty ? critical.first : null;
+
+    return Container(
+      decoration: BoxDecoration(
+        color: AppColors.errorBg,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: AppColors.error.withValues(alpha: 0.3)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 12, 8, 8),
+            child: Row(
+              children: [
+                const Icon(Icons.warning_amber_rounded,
+                    color: AppColors.error, size: 18),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    '${critical.length} product${critical.length > 1 ? 's are' : ' is'} critically low'
+                    ' — estimated stockout in < 5 days',
+                    style: const TextStyle(
+                        fontWeight: FontWeight.w700,
+                        color: AppColors.error,
+                        fontSize: 13),
+                  ),
+                ),
+                if (mostUrgent != null)
+                  TextButton(
+                    onPressed: () => context.go(
+                        '/forecasts?productId=${mostUrgent.productId}'),
+                    child: const Text('Run Forecast Now →',
+                        style: TextStyle(color: AppColors.error)),
+                  ),
+                IconButton(
+                  icon: const Icon(Icons.close, size: 16,
+                      color: AppColors.error),
+                  onPressed: () => setState(() => _dismissed = true),
+                ),
+              ],
+            ),
+          ),
+          // Critical products table
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+            child: Table(
+              columnWidths: const {
+                0: FlexColumnWidth(1.5),
+                1: FlexColumnWidth(2),
+                2: FlexColumnWidth(1.2),
+                3: FlexColumnWidth(1.2),
+                4: FlexColumnWidth(1),
+                5: FlexColumnWidth(1.5),
+              },
+              children: [
+                TableRow(
+                  children: [
+                    'SKU', 'Product', 'Current', 'Min Stock', 'Days Left', ''
+                  ]
+                      .map((h) => Padding(
+                            padding: const EdgeInsets.only(bottom: 4),
+                            child: Text(h,
+                                style: TextStyle(
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.w600,
+                                    color: AppColors.error)),
+                          ))
+                      .toList(),
+                ),
+                ...critical.take(5).map((r) => TableRow(
+                      children: [
+                        Text(r.sku,
+                            style: const TextStyle(
+                                fontSize: 12, color: AppColors.textPrimary)),
+                        Text(r.productName,
+                            style: const TextStyle(
+                                fontSize: 12, color: AppColors.textPrimary)),
+                        Text('${r.currentStock} u',
+                            style: const TextStyle(fontSize: 12)),
+                        Text('${r.minimumStock} u',
+                            style: const TextStyle(fontSize: 12)),
+                        Text(
+                            '${r.daysOfStockLeft.toStringAsFixed(0)} d',
+                            style: TextStyle(
+                                fontSize: 12,
+                                color: r.daysOfStockLeft < 3
+                                    ? AppColors.error
+                                    : AppColors.warning,
+                                fontWeight: FontWeight.w700)),
+                        GestureDetector(
+                          onTap: () => context
+                              .go('/forecasts?productId=${r.productId}'),
+                          child: const Text('Forecast →',
+                              style: TextStyle(
+                                  fontSize: 12,
+                                  color: AppColors.primary,
+                                  fontWeight: FontWeight.w600)),
+                        ),
+                      ].map((w) => Padding(
+                            padding: const EdgeInsets.symmetric(vertical: 3),
+                            child: w,
+                          )).toList(),
+                    )),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ── Onboarding checklist ────────────────────────────────────────────────────
+
+class _OnboardingChecklist extends StatelessWidget {
+  final AppState state;
+  final VoidCallback onDismiss;
+
+  const _OnboardingChecklist({required this.state, required this.onDismiss});
+
+  @override
+  Widget build(BuildContext context) {
+    // Check BOM coverage: how many products have an active BOM
+    final bomProductIds = state.boms.map((b) => b.finalProductId).toSet();
+    final allProductsHaveBom = state.products.isNotEmpty &&
+        state.products.every((p) => bomProductIds.contains(p.id));
+    // Check if all raw materials have a supplier
+    final allRmHaveSupplier = state.rawMaterials.isNotEmpty &&
+        state.rawMaterials.every((r) => r.supplierId != null && r.supplierId!.isNotEmpty);
+    // Check if all products are assigned to a warehouse
+    final allProductsInWarehouse = state.products.isNotEmpty &&
+        state.products.every((p) => p.warehouseId != null && p.warehouseId!.isNotEmpty);
+
+    final steps = [
+      (
+        'Add your products',
+        'Start by adding the products you sell (SKU, stock, price). These are the center of your supply chain.',
+        '/products',
+        state.products.isNotEmpty,
+        Icons.inventory_2_outlined,
+      ),
+      (
+        'Add your suppliers',
+        'Add the companies you buy raw materials from. Each supplier has a lead time that affects how early you need to order.',
+        '/suppliers',
+        state.suppliers.isNotEmpty,
+        Icons.local_shipping_outlined,
+      ),
+      (
+        'Add raw materials',
+        'Raw materials are the ingredients your products are made from. Link each one to a supplier.',
+        '/raw-materials',
+        state.rawMaterials.isNotEmpty && allRmHaveSupplier,
+        Icons.category_outlined,
+      ),
+      (
+        'Set up Bills of Materials',
+        'A Bill of Materials (BOM) defines which raw materials — and how much of each — go into making one unit of a product.',
+        '/bom',
+        allProductsHaveBom,
+        Icons.account_tree_outlined,
+      ),
+      (
+        'Add a manufacturer',
+        'The manufacturer takes your raw materials and produces the finished product. Add production capacity and lead time.',
+        '/manufacturers',
+        state.manufacturers.isNotEmpty,
+        Icons.factory_outlined,
+      ),
+      (
+        'Assign products to a warehouse',
+        'Warehouses track where your finished goods are stored. Assign products so stock levels are location-aware.',
+        '/warehouses',
+        state.warehouses.isNotEmpty && allProductsInWarehouse,
+        Icons.warehouse_outlined,
+      ),
+    ];
+
+    final doneCount = steps.where((s) => s.$4).length;
+    if (doneCount == steps.length) return const SizedBox.shrink();
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 24),
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          colors: [
+            AppColors.primary.withValues(alpha: 0.06),
+            AppColors.secondary.withValues(alpha: 0.5),
+          ],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+        border: Border.all(color: AppColors.primary.withValues(alpha: 0.2)),
+        borderRadius: BorderRadius.circular(14),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.rocket_launch_outlined, size: 18, color: AppColors.primary),
+              const SizedBox(width: 8),
+              Text(
+                'Get started — $doneCount of ${steps.length} complete',
+                style: AppTextStyles.h3.copyWith(color: AppColors.primary),
+              ),
+              const Spacer(),
+              SizedBox(
+                width: 100,
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(4),
+                  child: LinearProgressIndicator(
+                    value: doneCount / steps.length,
+                    minHeight: 6,
+                    backgroundColor: AppColors.primary.withValues(alpha: 0.15),
+                    valueColor: const AlwaysStoppedAnimation<Color>(AppColors.primary),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Text('${(doneCount / steps.length * 100).toInt()}%',
+                  style: AppTextStyles.bodySmall.copyWith(
+                      color: AppColors.primary, fontWeight: FontWeight.w600)),
+              const SizedBox(width: 8),
+              IconButton(
+                icon: const Icon(Icons.close, size: 16),
+                onPressed: onDismiss,
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(),
+                color: AppColors.textSecondary,
+              ),
+            ],
+          ),
+          const SizedBox(height: 4),
+          Text(
+            'Complete these steps in order — each one unlocks the next part of your supply chain.',
+            style: AppTextStyles.bodySmall.copyWith(color: AppColors.textSecondary),
+          ),
+          const SizedBox(height: 16),
+          ...steps.asMap().entries.map((entry) {
+            final i = entry.key;
+            final s = entry.value;
+            final isDone = s.$4;
+            // A step is locked if the previous step isn't done
+            final isLocked = i > 0 && !steps[i - 1].$4;
+            final isNext = !isDone && !isLocked && (i == 0 || steps[i - 1].$4);
+
+            return Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: InkWell(
+                onTap: (isDone || isLocked) ? null : () => context.go(s.$3),
+                borderRadius: BorderRadius.circular(10),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                  decoration: BoxDecoration(
+                    color: isDone
+                        ? AppColors.success.withValues(alpha: 0.06)
+                        : isNext
+                            ? Colors.white
+                            : AppColors.background,
+                    border: Border.all(
+                      color: isDone
+                          ? AppColors.success.withValues(alpha: 0.35)
+                          : isNext
+                              ? AppColors.primary.withValues(alpha: 0.4)
+                              : AppColors.border.withValues(alpha: 0.5),
+                      width: isNext ? 1.5 : 1,
+                    ),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: Row(
+                    children: [
+                      // Step number / check circle
+                      Container(
+                        width: 28,
+                        height: 28,
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          color: isDone
+                              ? AppColors.success.withValues(alpha: 0.15)
+                              : isNext
+                                  ? AppColors.primary.withValues(alpha: 0.12)
+                                  : AppColors.border.withValues(alpha: 0.5),
+                        ),
+                        child: Center(
+                          child: isDone
+                              ? const Icon(Icons.check, size: 14, color: AppColors.success)
+                              : isLocked
+                                  ? const Icon(Icons.lock_outline, size: 13, color: AppColors.textSecondary)
+                                  : Text(
+                                      '${i + 1}',
+                                      style: TextStyle(
+                                        fontSize: 12,
+                                        fontWeight: FontWeight.w700,
+                                        color: isNext ? AppColors.primary : AppColors.textSecondary,
+                                      ),
+                                    ),
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      // Content
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              children: [
+                                Text(
+                                  s.$1,
+                                  style: AppTextStyles.body.copyWith(
+                                    fontWeight: FontWeight.w600,
+                                    color: isDone
+                                        ? AppColors.success
+                                        : isLocked
+                                            ? AppColors.textSecondary
+                                            : AppColors.textPrimary,
+                                    decoration: isDone ? TextDecoration.lineThrough : null,
+                                  ),
+                                ),
+                                if (isNext) ...[
+                                  const SizedBox(width: 8),
+                                  Container(
+                                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+                                    decoration: BoxDecoration(
+                                      color: AppColors.primary,
+                                      borderRadius: BorderRadius.circular(8),
+                                    ),
+                                    child: const Text('Next step',
+                                        style: TextStyle(
+                                            fontSize: 10,
+                                            color: Colors.white,
+                                            fontWeight: FontWeight.w600)),
+                                  ),
+                                ],
+                              ],
+                            ),
+                            if (!isDone && !isLocked)
+                              Padding(
+                                padding: const EdgeInsets.only(top: 2),
+                                child: Text(
+                                  s.$2,
+                                  style: AppTextStyles.bodySmall
+                                      .copyWith(color: AppColors.textSecondary),
+                                ),
+                              ),
+                          ],
+                        ),
+                      ),
+                      // Arrow
+                      if (!isDone && !isLocked)
+                        const Icon(Icons.chevron_right, size: 18, color: AppColors.primary),
+                      if (isLocked)
+                        const SizedBox(width: 18),
+                    ],
+                  ),
+                ),
+              ),
+            );
+          }),
+        ],
+      ),
+    );
+  }
+}
+
+// ── Shopify banner ──────────────────────────────────────────────────────────
+
+class _ShopifyBanner extends StatelessWidget {
+  final VoidCallback onConnect;
+  final VoidCallback onDismiss;
+  const _ShopifyBanner({required this.onConnect, required this.onDismiss});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 20),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: AppColors.secondary,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: AppColors.primary.withValues(alpha: 0.3)),
+      ),
+      child: Row(children: [
+        const Icon(Icons.store, color: AppColors.primary, size: 24),
+        const SizedBox(width: 16),
+        Expanded(
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text('Connect your Shopify store', style: AppTextStyles.h3),
+            Text(
+              'Automatically sync products, orders, and inventory in real-time.',
+              style: AppTextStyles.body.copyWith(color: AppColors.textSecondary),
+            ),
+          ]),
+        ),
+        ElevatedButton(
+          onPressed: onConnect,
+          style: ElevatedButton.styleFrom(
+            backgroundColor: AppColors.primary,
+            foregroundColor: Colors.white,
+          ),
+          child: const Text('Connect Store'),
+        ),
+        const SizedBox(width: 8),
+        IconButton(
+          icon: const Icon(Icons.close, size: 18),
+          onPressed: onDismiss,
+          color: AppColors.textSecondary,
+        ),
+      ]),
+    );
+  }
+}
+
+// ── Shopify sync chip ───────────────────────────────────────────────────────
+
+class _ShopifySyncChip extends StatelessWidget {
+  final bool syncing;
+  final String domain;
+  final DateTime? lastSync;
+  final VoidCallback onSync;
+
+  const _ShopifySyncChip({
+    required this.syncing,
+    required this.domain,
+    required this.lastSync,
+    required this.onSync,
+  });
+
+  String _ago(DateTime? dt) {
+    if (dt == null) return 'never synced';
+    final diff = DateTime.now().difference(dt);
+    if (diff.inMinutes < 1) return 'synced just now';
+    if (diff.inMinutes < 60) return 'synced ${diff.inMinutes}m ago';
+    if (diff.inHours < 24) return 'synced ${diff.inHours}h ago';
+    return 'synced ${diff.inDays}d ago';
   }
 
-  Widget _buildDemandForecastChart(AppState state, int rangeMonths) {
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        color: AppColors.success.withValues(alpha: 0.08),
+        border: Border.all(color: AppColors.success.withValues(alpha: 0.3)),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Row(mainAxisSize: MainAxisSize.min, children: [
+        const Icon(Icons.store, color: AppColors.success, size: 14),
+        const SizedBox(width: 6),
+        Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(domain,
+                style: AppTextStyles.bodySmall.copyWith(fontWeight: FontWeight.w600, fontSize: 11)),
+            Text(_ago(lastSync),
+                style: AppTextStyles.bodySmall.copyWith(color: AppColors.textSubdued, fontSize: 10)),
+          ],
+        ),
+        const SizedBox(width: 10),
+        SizedBox(
+          height: 28,
+          child: ElevatedButton.icon(
+            onPressed: syncing ? null : onSync,
+            icon: syncing
+                ? const SizedBox(width: 12, height: 12,
+                    child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                : const Icon(Icons.sync, size: 12),
+            label: Text(syncing ? 'Syncing…' : 'Sync',
+                style: const TextStyle(fontSize: 11)),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppColors.primary,
+              foregroundColor: Colors.white,
+              padding: const EdgeInsets.symmetric(horizontal: 10),
+              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            ),
+          ),
+        ),
+      ]),
+    );
+  }
+}
+
+// ── Needs Attention panel ───────────────────────────────────────────────────
+
+class _NeedsAttentionPanel extends StatelessWidget {
+  final int criticalCount;
+  final int lowCount;
+  final int openRecommendations;
+  final int pendingOrders;
+
+  const _NeedsAttentionPanel({
+    required this.criticalCount,
+    required this.lowCount,
+    required this.openRecommendations,
+    required this.pendingOrders,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final items = <_AttentionItem>[];
+    if (criticalCount > 0) {
+      items.add(_AttentionItem(
+        icon: Icons.error_outline,
+        color: AppColors.error,
+        label: '$criticalCount product${criticalCount > 1 ? 's' : ''} out of stock',
+        cta: 'Order now',
+        route: '/replenishment',
+      ));
+    }
+    if (lowCount > 0) {
+      items.add(_AttentionItem(
+        icon: Icons.warning_amber,
+        color: AppColors.warning,
+        label: '$lowCount product${lowCount > 1 ? 's' : ''} below reorder point',
+        cta: 'Review',
+        route: '/replenishment',
+      ));
+    }
+    if (openRecommendations > 0) {
+      items.add(_AttentionItem(
+        icon: Icons.assignment_late_outlined,
+        color: AppColors.primary,
+        label: '$openRecommendations replenishment recommendation${openRecommendations > 1 ? 's' : ''} pending approval',
+        cta: 'Approve',
+        route: '/replenishment',
+      ));
+    }
+    if (pendingOrders > 0) {
+      items.add(_AttentionItem(
+        icon: Icons.receipt_long_outlined,
+        color: AppColors.accent,
+        label: '$pendingOrders purchase order${pendingOrders > 1 ? 's' : ''} awaiting action',
+        cta: 'View orders',
+        route: '/orders',
+      ));
+    }
+
+    if (items.isEmpty) return const SizedBox.shrink();
+
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: AppColors.error.withValues(alpha: 0.04),
+        border: Border.all(color: AppColors.error.withValues(alpha: 0.2)),
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(children: [
+            const Icon(Icons.notifications_active_outlined, size: 15, color: AppColors.error),
+            const SizedBox(width: 6),
+            Text(
+              'Needs your attention today',
+              style: AppTextStyles.label.copyWith(fontWeight: FontWeight.w700, color: AppColors.error),
+            ),
+          ]),
+          const SizedBox(height: 10),
+          ...items.map((item) => Padding(
+            padding: const EdgeInsets.only(bottom: 6),
+            child: Row(children: [
+              Icon(item.icon, size: 14, color: item.color),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(item.label,
+                    style: AppTextStyles.bodySmall.copyWith(fontWeight: FontWeight.w500)),
+              ),
+              TextButton(
+                onPressed: () => context.go(item.route),
+                style: TextButton.styleFrom(
+                  foregroundColor: item.color,
+                  textStyle: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 0),
+                  minimumSize: Size.zero,
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                ),
+                child: Text(item.cta),
+              ),
+            ]),
+          )),
+        ],
+      ),
+    );
+  }
+}
+
+class _AttentionItem {
+  final IconData icon;
+  final Color color;
+  final String label;
+  final String cta;
+  final String route;
+  const _AttentionItem({
+    required this.icon,
+    required this.color,
+    required this.label,
+    required this.cta,
+    required this.route,
+  });
+}
+
+// ── KPI Row ─────────────────────────────────────────────────────────────────
+
+class _KpiRow extends StatelessWidget {
+  final int totalUnits;
+  final int lowStockItems;
+  final int openRecommendations;
+  final double forecastAccuracy;
+
+  const _KpiRow({
+    required this.totalUnits,
+    required this.lowStockItems,
+    required this.openRecommendations,
+    required this.forecastAccuracy,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final accuracy = forecastAccuracy > 0
+        ? '${(forecastAccuracy * 100).toStringAsFixed(1)}%'
+        : 'N/A';
+
+    return LayoutBuilder(builder: (context, constraints) {
+      final w = constraints.maxWidth;
+      final cols = w > 800 ? 4 : w > 500 ? 2 : 1;
+      const spacing = 14.0;
+      final cardW = (w - spacing * (cols - 1)) / cols;
+
+      return Wrap(
+        spacing: spacing,
+        runSpacing: spacing,
+        children: [
+          SizedBox(
+            width: cardW,
+            child: KPICard(
+              title: 'Total Units in Stock',
+              value: NumberFormat.compact().format(totalUnits),
+              icon: Icons.inventory_2,
+            ),
+          ),
+          SizedBox(
+            width: cardW,
+            child: KPICard(
+              title: 'Items Below ROP',
+              value: '$lowStockItems',
+              icon: Icons.warning_amber,
+              isAlert: lowStockItems > 0,
+              color: lowStockItems > 0 ? AppColors.warning : AppColors.success,
+            ),
+          ),
+          SizedBox(
+            width: cardW,
+            child: KPICard(
+              title: 'Open Recommendations',
+              value: '$openRecommendations',
+              icon: Icons.assignment_late,
+              color: openRecommendations > 0 ? AppColors.primary : AppColors.textSecondary,
+            ),
+          ),
+          SizedBox(
+            width: cardW,
+            child: KPICard(
+              title: 'Forecast Accuracy',
+              value: accuracy,
+              icon: Icons.auto_graph,
+              color: forecastAccuracy > 0.9
+                  ? AppColors.success
+                  : forecastAccuracy > 0.75
+                      ? AppColors.warning
+                      : AppColors.textSecondary,
+            ),
+          ),
+        ],
+      );
+    });
+  }
+}
+
+// ── Stock health bar ────────────────────────────────────────────────────────
+
+class _StockHealthBar extends StatelessWidget {
+  final int okCount;
+  final int lowCount;
+  final int criticalCount;
+  final int total;
+
+  const _StockHealthBar({
+    required this.okCount,
+    required this.lowCount,
+    required this.criticalCount,
+    required this.total,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    if (total == 0) return const SizedBox.shrink();
+
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: AppColors.surface,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: AppColors.borderLight),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(children: [
+            Text('Stock Health', style: AppTextStyles.label.copyWith(fontWeight: FontWeight.w600)),
+            const Spacer(),
+            _HealthChip(color: AppColors.success, label: '$okCount OK'),
+            const SizedBox(width: 8),
+            _HealthChip(color: AppColors.warning, label: '$lowCount Low'),
+            const SizedBox(width: 8),
+            _HealthChip(color: AppColors.error, label: '$criticalCount Critical'),
+          ]),
+          const SizedBox(height: 10),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(4),
+            child: SizedBox(
+              height: 8,
+              child: Row(children: [
+                if (okCount > 0)
+                  Flexible(
+                    flex: okCount,
+                    child: Container(color: AppColors.success),
+                  ),
+                if (lowCount > 0)
+                  Flexible(
+                    flex: lowCount,
+                    child: Container(color: AppColors.warning),
+                  ),
+                if (criticalCount > 0)
+                  Flexible(
+                    flex: criticalCount,
+                    child: Container(color: AppColors.error),
+                  ),
+              ]),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _HealthChip extends StatelessWidget {
+  final Color color;
+  final String label;
+  const _HealthChip({required this.color, required this.label});
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(mainAxisSize: MainAxisSize.min, children: [
+      Container(width: 8, height: 8, decoration: BoxDecoration(color: color, shape: BoxShape.circle)),
+      const SizedBox(width: 4),
+      Text(label, style: AppTextStyles.bodySmall.copyWith(fontSize: 11)),
+    ]);
+  }
+}
+
+// ── Demand Forecast Chart Card ──────────────────────────────────────────────
+
+class _DemandForecastCard extends StatelessWidget {
+  final AppState state;
+  final int rangeMonths;
+  final ValueChanged<int> onRangeChanged;
+
+  const _DemandForecastCard({
+    required this.state,
+    required this.rangeMonths,
+    required this.onRangeChanged,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      elevation: 2,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      child: Padding(
+        padding: const EdgeInsets.all(20.0),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(children: [
+              Expanded(
+                child: Text(
+                  'Demand vs Forecast — Last ${rangeMonths}M',
+                  style: AppTextStyles.h3,
+                ),
+              ),
+              _RangePicker(selected: rangeMonths, onChanged: onRangeChanged),
+            ]),
+            const SizedBox(height: 6),
+            Text(
+              state.currentForecast != null
+                  ? 'Showing ${state.currentForecast!.algorithm} forecast overlay'
+                  : 'Run a forecast on the Forecasts page to see the overlay',
+              style: AppTextStyles.bodySmall.copyWith(color: AppColors.textSubdued),
+            ),
+            const SizedBox(height: 16),
+            SizedBox(
+              height: 240,
+              child: _buildChart(state, rangeMonths),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildChart(AppState state, int rangeMonths) {
     final cutoff = DateTime.now().subtract(Duration(days: rangeMonths * 30));
     final forecast = state.currentForecast;
+
     if (forecast == null || forecast.periods.isEmpty) {
-      // Show a simple placeholder line chart using first product demand
       final allDemand = (state.demandByProduct.values.isNotEmpty
               ? state.demandByProduct.values.first
               : <DomainDemandRecord>[])
@@ -515,103 +1077,367 @@ class _DashboardScreenState extends State<DashboardScreen> {
           .map((e) => FlSpot(e.key.toDouble(), e.value.quantity.toDouble()))
           .toList();
 
-      return LineChart(
-        LineChartData(
-          gridData: const FlGridData(show: false),
-          titlesData: const FlTitlesData(
-            rightTitles: AxisTitles(sideTitles: SideTitles(showTitles: false)),
-            topTitles: AxisTitles(sideTitles: SideTitles(showTitles: false)),
-          ),
-          borderData: FlBorderData(
-            show: true,
-            border: Border.all(color: AppColors.border),
-          ),
-          lineBarsData: [
-            if (spots.isNotEmpty)
-              LineChartBarData(
-                spots: spots,
-                isCurved: true,
-                color: AppColors.primary,
-                barWidth: 3,
-                isStrokeCapRound: true,
-                dotData: const FlDotData(show: false),
-                belowBarData: BarAreaData(
-                  show: true,
-                  color: AppColors.primary.withValues(alpha: 0.1),
-                ),
-              ),
-          ],
+      return LineChart(LineChartData(
+        gridData: FlGridData(
+          show: true,
+          drawVerticalLine: false,
+          getDrawingHorizontalLine: (_) =>
+              const FlLine(color: AppColors.borderLight, strokeWidth: 1),
         ),
-      );
+        titlesData: const FlTitlesData(
+          rightTitles: AxisTitles(sideTitles: SideTitles(showTitles: false)),
+          topTitles: AxisTitles(sideTitles: SideTitles(showTitles: false)),
+          leftTitles: AxisTitles(sideTitles: SideTitles(showTitles: false)),
+          bottomTitles: AxisTitles(sideTitles: SideTitles(showTitles: false)),
+        ),
+        borderData: FlBorderData(show: true, border: Border.all(color: AppColors.border)),
+        lineBarsData: [
+          if (spots.isNotEmpty)
+            LineChartBarData(
+              spots: spots,
+              isCurved: true,
+              color: AppColors.primary,
+              barWidth: 3,
+              dotData: const FlDotData(show: false),
+              belowBarData: BarAreaData(
+                show: true,
+                color: AppColors.primary.withValues(alpha: 0.08),
+              ),
+            ),
+        ],
+      ));
     }
 
-    // Use computed ForecastResult — filter to selected date range
     final filteredIndices = forecast.periods
         .asMap()
         .entries
         .where((e) => e.value.isAfter(cutoff))
         .map((e) => e.key)
         .toList();
+
     FlSpot toSpot(int idx, double v) =>
         FlSpot(filteredIndices.indexOf(idx).toDouble(), v);
+
     final actualSpots = filteredIndices
-        .where((i) =>
-            i < forecast.actualDemand.length && forecast.actualDemand[i] > 0)
+        .where((i) => i < forecast.actualDemand.length && forecast.actualDemand[i] > 0)
         .map((i) => toSpot(i, forecast.actualDemand[i]))
         .toList();
     final forecastSpots = filteredIndices
-        .where((i) =>
-            i < forecast.forecast.length && forecast.forecast[i] > 0)
+        .where((i) => i < forecast.forecast.length && forecast.forecast[i] > 0)
         .map((i) => toSpot(i, forecast.forecast[i]))
         .toList();
 
-    return LineChart(
-      LineChartData(
-        gridData: const FlGridData(show: false),
-        titlesData: const FlTitlesData(
-          rightTitles: AxisTitles(sideTitles: SideTitles(showTitles: false)),
-          topTitles: AxisTitles(sideTitles: SideTitles(showTitles: false)),
-        ),
-        borderData: FlBorderData(
-          show: true,
-          border: Border.all(color: AppColors.border),
-        ),
-        lineBarsData: [
-          if (actualSpots.isNotEmpty)
-            LineChartBarData(
-              spots: actualSpots,
-              isCurved: true,
-              color: AppColors.textSecondary,
-              barWidth: 2,
-              dotData: const FlDotData(show: false),
-              belowBarData: BarAreaData(
-                show: true,
-                color: AppColors.primary.withValues(alpha: 0.05),
+    return LineChart(LineChartData(
+      gridData: FlGridData(
+        show: true,
+        drawVerticalLine: false,
+        getDrawingHorizontalLine: (_) =>
+            const FlLine(color: AppColors.borderLight, strokeWidth: 1),
+      ),
+      titlesData: const FlTitlesData(
+        rightTitles: AxisTitles(sideTitles: SideTitles(showTitles: false)),
+        topTitles: AxisTitles(sideTitles: SideTitles(showTitles: false)),
+        leftTitles: AxisTitles(sideTitles: SideTitles(showTitles: false)),
+        bottomTitles: AxisTitles(sideTitles: SideTitles(showTitles: false)),
+      ),
+      borderData: FlBorderData(show: true, border: Border.all(color: AppColors.border)),
+      lineBarsData: [
+        if (actualSpots.isNotEmpty)
+          LineChartBarData(
+            spots: actualSpots,
+            isCurved: true,
+            color: AppColors.textSecondary,
+            barWidth: 2,
+            dotData: const FlDotData(show: false),
+            belowBarData: BarAreaData(
+                show: true, color: AppColors.primary.withValues(alpha: 0.05)),
+          ),
+        if (forecastSpots.isNotEmpty)
+          LineChartBarData(
+            spots: forecastSpots,
+            isCurved: true,
+            color: AppColors.primary,
+            barWidth: 3,
+            dashArray: [5, 5],
+            dotData: const FlDotData(show: false),
+          ),
+      ],
+    ));
+  }
+}
+
+// ── Stock by Warehouse chart ────────────────────────────────────────────────
+
+class _StockByWarehouseCard extends StatelessWidget {
+  final List warehouses;
+  const _StockByWarehouseCard({required this.warehouses});
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      elevation: 2,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      child: Padding(
+        padding: const EdgeInsets.all(20.0),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('Stock by Warehouse', style: AppTextStyles.h3),
+            const SizedBox(height: 6),
+            Text('Total stock units per location',
+                style: AppTextStyles.bodySmall.copyWith(color: AppColors.textSubdued)),
+            const SizedBox(height: 16),
+            if (warehouses.isEmpty)
+              Center(
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 40),
+                  child: Text('No warehouses added yet',
+                      style: AppTextStyles.bodySmall.copyWith(color: AppColors.textSubdued)),
+                ),
+              )
+            else
+              SizedBox(
+                height: 200,
+                child: BarChart(BarChartData(
+                  gridData: const FlGridData(show: false),
+                  titlesData: FlTitlesData(
+                    rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                    topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                    leftTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                    bottomTitles: AxisTitles(
+                      sideTitles: SideTitles(
+                        showTitles: true,
+                        reservedSize: 28,
+                        getTitlesWidget: (v, _) {
+                          final idx = v.toInt();
+                          if (idx < 0 || idx >= warehouses.length) return const SizedBox.shrink();
+                          final name = warehouses[idx].name as String;
+                          return Padding(
+                            padding: const EdgeInsets.only(top: 6),
+                            child: Text(
+                              name.length > 8 ? '${name.substring(0, 7)}…' : name,
+                              style: const TextStyle(fontSize: 10, color: AppColors.textSubdued),
+                            ),
+                          );
+                        },
+                      ),
+                    ),
+                  ),
+                  borderData: FlBorderData(show: false),
+                  barGroups: warehouses.asMap().entries.map((e) {
+                    final colors = [AppColors.primary, AppColors.accent, AppColors.info, AppColors.success];
+                    return BarChartGroupData(
+                      x: e.key,
+                      barRods: [
+                        BarChartRodData(
+                          toY: (e.value.totalStock as int).toDouble(),
+                          color: colors[e.key % colors.length],
+                          width: 28,
+                          borderRadius: const BorderRadius.vertical(top: Radius.circular(4)),
+                        ),
+                      ],
+                    );
+                  }).toList(),
+                )),
               ),
-            ),
-          if (forecastSpots.isNotEmpty)
-            LineChartBarData(
-              spots: forecastSpots,
-              isCurved: true,
-              color: AppColors.primary,
-              barWidth: 3,
-              dashArray: [5, 5],
-              isStrokeCapRound: true,
-              dotData: const FlDotData(show: false),
-            ),
-        ],
+            const SizedBox(height: 8),
+            ...warehouses.asMap().entries.map((e) {
+              final colors = [AppColors.primary, AppColors.accent, AppColors.info, AppColors.success];
+              return Padding(
+                padding: const EdgeInsets.only(top: 3),
+                child: Row(children: [
+                  Container(
+                    width: 8, height: 8,
+                    decoration: BoxDecoration(
+                        color: colors[e.key % colors.length], shape: BoxShape.circle),
+                  ),
+                  const SizedBox(width: 6),
+                  Text('${e.value.name}: ${e.value.totalStock} units',
+                      style: AppTextStyles.label),
+                ]),
+              );
+            }),
+          ],
+        ),
       ),
     );
   }
 }
 
-/// Compact segmented toggle for chart date-range selection.
+// ── Inventory overview table ────────────────────────────────────────────────
+
+class _InventoryOverviewTable extends StatelessWidget {
+  final List products;
+  final List recommendations;
+
+  const _InventoryOverviewTable({required this.products, required this.recommendations});
+
+  @override
+  Widget build(BuildContext context) {
+    final rows = products.take(8).map((p) {
+      final rec = recommendations.where((r) => r.productId == p.id).firstOrNull;
+      final rop = rec?.reorderPoint ?? 0;
+      final suggested = rec?.suggestedOrderQty ?? 0;
+      final urgency = rec?.urgency as String? ?? '';
+
+      String status;
+      Color statusColor;
+      if (p.currentStock == 0) {
+        status = 'Critical';
+        statusColor = AppColors.error;
+      } else if (rop > 0 && p.currentStock <= rop) {
+        status = 'Low';
+        statusColor = AppColors.warning;
+      } else {
+        status = 'OK';
+        statusColor = AppColors.success;
+      }
+
+      return (p, rop, suggested, urgency, status, statusColor);
+    }).toList();
+
+    return Card(
+      elevation: 2,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      child: Padding(
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(children: [
+              Text('Inventory Overview', style: AppTextStyles.h3),
+              const Spacer(),
+              TextButton.icon(
+                onPressed: () => context.go('/products'),
+                icon: const Icon(Icons.open_in_new, size: 13),
+                label: const Text('View all'),
+                style: TextButton.styleFrom(
+                  foregroundColor: AppColors.primary,
+                  textStyle: const TextStyle(fontSize: 12),
+                ),
+              ),
+            ]),
+            const SizedBox(height: 4),
+            Text(
+              'Showing top ${rows.length} products with stock status',
+              style: AppTextStyles.bodySmall.copyWith(color: AppColors.textSubdued),
+            ),
+            const SizedBox(height: 12),
+            HorizontallyScrollableTable(
+              child: DataTable(
+                headingRowColor: WidgetStateProperty.all(AppColors.background),
+                dataRowMinHeight: 44,
+                dataRowMaxHeight: 56,
+                columns: const [
+                  DataColumn(label: Text('Product')),
+                  DataColumn(label: Text('Stock'), numeric: true),
+                  DataColumn(label: Text('ROP'), numeric: true),
+                  DataColumn(label: Text('Suggested Qty'), numeric: true),
+                  DataColumn(label: Text('Status')),
+                  DataColumn(label: Text('Action')),
+                ],
+                rows: rows.map((r) {
+                  final (p, rop, suggested, urgency, status, statusColor) = r;
+                  return DataRow(cells: [
+                    DataCell(Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Text(p.name,
+                            style: AppTextStyles.body.copyWith(fontWeight: FontWeight.w600),
+                            overflow: TextOverflow.ellipsis),
+                        Text(p.sku, style: AppTextStyles.label.copyWith(fontSize: 10)),
+                      ],
+                    )),
+                    DataCell(Text('${p.currentStock}',
+                        style: TextStyle(
+                          fontWeight: FontWeight.w600,
+                          color: status == 'Critical'
+                              ? AppColors.error
+                              : status == 'Low'
+                                  ? AppColors.warning
+                                  : AppColors.textPrimary,
+                        ))),
+                    DataCell(Text('$rop')),
+                    DataCell(Text(suggested > 0 ? '$suggested' : '—')),
+                    DataCell(Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                      decoration: BoxDecoration(
+                        color: statusColor.withValues(alpha: 0.1),
+                        border: Border.all(color: statusColor.withValues(alpha: 0.3)),
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: Text(status,
+                          style: TextStyle(
+                              fontSize: 11, fontWeight: FontWeight.w600, color: statusColor)),
+                    )),
+                    DataCell(
+                      status == 'OK'
+                          ? const Text('—', style: TextStyle(color: AppColors.textSubdued))
+                          : TextButton(
+                              onPressed: () => context.go('/replenishment'),
+                              style: TextButton.styleFrom(
+                                foregroundColor: AppColors.primary,
+                                textStyle: const TextStyle(fontSize: 11),
+                                padding: EdgeInsets.zero,
+                                minimumSize: Size.zero,
+                                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                              ),
+                              child: const Text('Order →'),
+                            ),
+                    ),
+                  ]);
+                }).toList(),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ── Empty state ─────────────────────────────────────────────────────────────
+
+class _EmptyDashboard extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 60),
+        child: Column(
+          children: [
+            const Icon(Icons.inventory_2_outlined, size: 64, color: AppColors.border),
+            const SizedBox(height: 16),
+            Text('No data yet', style: AppTextStyles.h2),
+            const SizedBox(height: 8),
+            Text(
+              'Add products to get started with inventory tracking.',
+              style: AppTextStyles.body.copyWith(color: AppColors.textSecondary),
+            ),
+            const SizedBox(height: 20),
+            ElevatedButton.icon(
+              onPressed: () => context.go('/products'),
+              icon: const Icon(Icons.add),
+              label: const Text('Add Products'),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppColors.primary,
+                foregroundColor: Colors.white,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ── Range Picker ─────────────────────────────────────────────────────────────
+
 class _RangePicker extends StatelessWidget {
   const _RangePicker({required this.selected, required this.onChanged});
-
   final int selected;
   final ValueChanged<int> onChanged;
-
   static const _options = [1, 3, 6, 12];
 
   @override

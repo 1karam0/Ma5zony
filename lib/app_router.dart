@@ -11,7 +11,8 @@ import 'package:ma5zony/features/suppliers/suppliers_screen.dart';
 import 'package:ma5zony/features/warehouses/warehouses_screen.dart';
 import 'package:ma5zony/features/demand_data/demand_data_screen.dart';
 import 'package:ma5zony/features/forecasts/forecasts_screen.dart';
-import 'package:ma5zony/features/replenishment/replenishment_screen.dart';
+import 'package:ma5zony/features/forecasts/forecast_comparison_screen.dart';
+import 'package:ma5zony/features/classification/abc_xyz_screen.dart';
 import 'package:ma5zony/features/integrations/integrations_screen.dart';
 import 'package:ma5zony/features/settings/settings_screen.dart';
 import 'package:ma5zony/features/financial_analytics/financial_analytics_screen.dart';
@@ -29,16 +30,20 @@ import 'package:ma5zony/features/cash_flow/cash_flow_screen.dart';
 import 'package:ma5zony/features/manufacturer_portal/manufacturer_portal_screen.dart';
 import 'package:ma5zony/features/factory_portal/factory_portal_screen.dart';
 import 'package:ma5zony/features/legal/legal_screens.dart';
+import 'package:ma5zony/features/onboarding/setup_wizard_screen.dart';
+import 'package:ma5zony/features/orders/raw_material_orders_screen.dart';
+import 'package:ma5zony/features/orders/create_raw_material_order_screen.dart';
 import 'package:ma5zony/utils/role_guard.dart';
 
 // Private navigators
 final _rootNavigatorKey = GlobalKey<NavigatorState>();
 final _shellNavigatorKey = GlobalKey<NavigatorState>();
 
-GoRouter buildAppRouter(AppState appState) => GoRouter(
+GoRouter buildAppRouter(AppState appState) {
+  return GoRouter(
   navigatorKey: _rootNavigatorKey,
   initialLocation: '/login',
-  refreshListenable: appState,
+  refreshListenable: appState.authNotifier,
   routes: [
     GoRoute(path: '/login', builder: (context, state) => const LoginScreen()),
     GoRoute(
@@ -119,13 +124,26 @@ GoRouter buildAppRouter(AppState appState) => GoRouter(
         ),
         GoRoute(
           path: '/forecasts',
+          pageBuilder: (context, state) {
+            final productId = state.uri.queryParameters['productId'];
+            return NoTransitionPage(
+              child: ForecastsScreen(preSelectedProductId: productId),
+            );
+          },
+        ),
+        GoRoute(
+          path: '/forecasts/compare',
           pageBuilder: (context, state) =>
-              const NoTransitionPage(child: ForecastsScreen()),
+              const NoTransitionPage(child: ForecastComparisonScreen()),
+        ),
+        GoRoute(
+          path: '/classification',
+          pageBuilder: (context, state) =>
+              const NoTransitionPage(child: AbcXyzScreen()),
         ),
         GoRoute(
           path: '/replenishment',
-          pageBuilder: (context, state) =>
-              const NoTransitionPage(child: ReplenishmentScreen()),
+          redirect: (_, _) => '/forecasts',
         ),
         GoRoute(
           path: '/integrations',
@@ -200,6 +218,28 @@ GoRouter buildAppRouter(AppState appState) => GoRouter(
           pageBuilder: (context, state) =>
               const NoTransitionPage(child: CashFlowScreen()),
         ),
+        GoRoute(
+          path: '/orders/raw-materials',
+          pageBuilder: (context, state) =>
+              const NoTransitionPage(child: RawMaterialOrdersScreen()),
+        ),
+        GoRoute(
+          path: '/orders/raw-materials/create',
+          pageBuilder: (context, state) {
+            final productId = state.uri.queryParameters['productId'] ?? '';
+            final qty = double.tryParse(
+                state.uri.queryParameters['qty'] ?? '0') ?? 0;
+            return NoTransitionPage(
+              child: CreateRawMaterialOrderScreen(
+                  productId: productId, forecastQty: qty),
+            );
+          },
+        ),
+        GoRoute(
+          path: '/setup',
+          pageBuilder: (context, state) =>
+              const NoTransitionPage(child: SetupWizardScreen()),
+        ),
       ],
     ),
   ],
@@ -217,12 +257,31 @@ GoRouter buildAppRouter(AppState appState) => GoRouter(
       return null;
     }
 
-    if (!loggedIn && !loggingIn) return '/login';
-    if (loggedIn && loggingIn) return '/dashboard';
+    if (!loggedIn && !loggingIn) {
+      return '/login';
+    }
+    if (loggedIn && loggingIn) {
+      return '/dashboard';
+    }
+
+    // Setup wizard is accessible after login
+    if (path == '/setup' && !loggedIn) return '/login';
+
+    // Force the setup wizard for owners that have not completed onboarding yet.
+    // Wait until the onboarding doc has been read so existing users don't bounce
+    // through /setup on every login. Once `onboardingComplete == true`, the
+    // redirect never fires again.
+    if (loggedIn &&
+        isOwner(appState.currentUser) &&
+        appState.onboardingStateLoaded &&
+        !appState.onboardingComplete &&
+        path != '/setup' &&
+        !loggingIn) {
+      return '/setup';
+    }
 
     // Role-based route guard: block owner-only routes for Inventory Managers
     if (loggedIn) {
-      final path = state.uri.toString();
       if (ownerOnlyRoutes.contains(path) &&
           !isOwner(appState.currentUser)) {
         return '/dashboard';
@@ -232,3 +291,4 @@ GoRouter buildAppRouter(AppState appState) => GoRouter(
     return null;
   },
 );
+}

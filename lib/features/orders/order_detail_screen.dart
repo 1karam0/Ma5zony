@@ -162,7 +162,7 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
               Expanded(
                 child: KPICard(
                   title: 'Estimated Cost',
-                  value: '\$${order.totalEstimatedCost.toStringAsFixed(2)}',
+                  value: 'EGP ${order.totalEstimatedCost.toStringAsFixed(2)}',
                   icon: Icons.attach_money,
                   color: AppColors.primary,
                 ),
@@ -182,53 +182,26 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
 
           // Action: Send to suppliers
           if (order.status == OrderStatus.confirmed)
-            Card(
-              color: Colors.blue.shade50,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(12),
-              ),
-              child: Padding(
-                padding: const EdgeInsets.all(16),
-                child: Row(
-                  children: [
-                    const Icon(Icons.email, color: Colors.blue),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            'Ready to send to suppliers',
-                            style: AppTextStyles.body
-                                .copyWith(fontWeight: FontWeight.w600),
-                          ),
-                          Text(
-                            'Email notifications will be sent to ${supplierOrders.length} supplier(s) '
-                            'with their respective order details and a link to respond.',
-                            style: AppTextStyles.label,
-                          ),
-                        ],
-                      ),
-                    ),
-                    const SizedBox(width: 16),
-                    ElevatedButton.icon(
-                      onPressed: _sendingEmails ? null : _sendEmails,
-                      icon: _sendingEmails
-                          ? const SizedBox(
-                              width: 18,
-                              height: 18,
-                              child: CircularProgressIndicator(
-                                  strokeWidth: 2, color: Colors.white),
-                            )
-                          : const Icon(Icons.send),
-                      label: Text(
-                          _sendingEmails ? 'Sending...' : 'Send to Suppliers'),
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.blue,
-                        foregroundColor: Colors.white,
-                      ),
-                    ),
-                  ],
+            AlertBanner(
+              severity: AlertSeverity.info,
+              title: 'Ready to send to suppliers',
+              message:
+                  'Email notifications will be sent to ${supplierOrders.length} supplier(s) '
+                  'with their respective order details and a link to respond.',
+              action: ElevatedButton.icon(
+                onPressed: _sendingEmails ? null : _sendEmails,
+                icon: _sendingEmails
+                    ? const SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(
+                            strokeWidth: 2, color: Colors.white),
+                      )
+                    : const Icon(Icons.send),
+                label: Text(_sendingEmails ? 'Sending...' : 'Send to Suppliers'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: AppColors.info,
+                  foregroundColor: Colors.white,
                 ),
               ),
             ),
@@ -270,9 +243,9 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
                               style: const TextStyle(
                                   fontWeight: FontWeight.bold))),
                           DataCell(
-                              Text('\$${item.unitCost.toStringAsFixed(2)}')),
+                              Text('EGP ${item.unitCost.toStringAsFixed(2)}')),
                           DataCell(Text(
-                            '\$${item.estimatedCost.toStringAsFixed(2)}',
+                            'EGP ${item.estimatedCost.toStringAsFixed(2)}',
                             style: const TextStyle(fontWeight: FontWeight.w600),
                           )),
                         ]);
@@ -417,7 +390,7 @@ class _SupplierOrderCardState extends State<_SupplierOrderCard> {
                           child: Text('${item.productName} (${item.sku})')),
                       Text('${item.quantity} units'),
                       const SizedBox(width: 16),
-                      Text('\$${item.estimatedCost.toStringAsFixed(2)}'),
+                      Text('EGP ${item.estimatedCost.toStringAsFixed(2)}'),
                     ],
                   ),
                 )),
@@ -425,7 +398,7 @@ class _SupplierOrderCardState extends State<_SupplierOrderCard> {
             Row(
               children: [
                 Text(
-                  'Total: \$${so.totalEstimatedCost.toStringAsFixed(2)}',
+                  'Total: EGP ${so.totalEstimatedCost.toStringAsFixed(2)}',
                   style: AppTextStyles.body.copyWith(
                     fontWeight: FontWeight.bold,
                     color: AppColors.primary,
@@ -445,7 +418,7 @@ class _SupplierOrderCardState extends State<_SupplierOrderCard> {
                   const SizedBox(width: 4),
                   Text(
                     'Responded: ${so.response!.estimatedDeliveryDays ?? "?"} days, '
-                    '\$${so.response!.totalCost?.toStringAsFixed(2) ?? "?"}',
+                    'EGP ${so.response!.totalCost?.toStringAsFixed(2) ?? "?"}',
                     style: AppTextStyles.label.copyWith(
                       color: AppColors.success,
                     ),

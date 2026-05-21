@@ -18,21 +18,57 @@
 
   <meta charset="UTF-8">
   <meta content="IE=Edge" http-equiv="X-UA-Compatible">
-  <meta name="description" content="A new Flutter project.">
+  <meta name="description" content="Ma5zony — AI-powered inventory, forecasting, and replenishment for SMEs.">
+  <meta name="theme-color" content="#008060">
 
   <!-- iOS meta tags & icons -->
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black">
-  <meta name="apple-mobile-web-app-title" content="ma5zony">
+  <meta name="apple-mobile-web-app-title" content="Ma5zony">
   <link rel="apple-touch-icon" href="icons/Icon-192.png">
 
   <!-- Favicon -->
   <link rel="icon" type="image/png" href="favicon.png"/>
 
-  <title>ma5zony</title>
+  <title>Ma5zony — Inventory Management</title>
   <link rel="manifest" href="manifest.json">
+
+  <style>
+    html, body { margin: 0; padding: 0; height: 100%; background: #F6F6F7; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }
+    #ma5zony-splash {
+      position: fixed; inset: 0; display: flex; flex-direction: column;
+      align-items: center; justify-content: center; gap: 24px;
+      background: #F6F6F7; z-index: 9999; transition: opacity .35s ease;
+    }
+    #ma5zony-splash.hide { opacity: 0; pointer-events: none; }
+    .ma5zony-logo {
+      width: 64px; height: 64px; border-radius: 16px; background: #008060;
+      display: flex; align-items: center; justify-content: center;
+      color: #fff; font-weight: 700; font-size: 28px; letter-spacing: -1px;
+      box-shadow: 0 8px 24px rgba(0,128,96,.25);
+    }
+    .ma5zony-title { color: #1A1A2E; font-size: 18px; font-weight: 600; }
+    .ma5zony-bar {
+      width: 180px; height: 4px; border-radius: 4px; background: #E1E3E5;
+      overflow: hidden; position: relative;
+    }
+    .ma5zony-bar::after {
+      content: ''; position: absolute; left: -40%; top: 0; height: 100%; width: 40%;
+      background: #008060; border-radius: 4px;
+      animation: ma5zony-slide 1.1s ease-in-out infinite;
+    }
+    @keyframes ma5zony-slide {
+      0%   { left: -40%; }
+      100% { left: 100%; }
+    }
+  </style>
 </head>
 <body>
+  <div id="ma5zony-splash">
+    <div class="ma5zony-logo">M</div>
+    <div class="ma5zony-title">Ma5zony</div>
+    <div class="ma5zony-bar"></div>
+  </div>
   <!--
     You can customize the "flutter_bootstrap.js" script.
     This is useful to provide a custom configuration to the Flutter loader
@@ -42,5 +78,14 @@
     * https://docs.flutter.dev/platform-integration/web/initialization
   -->
   <script src="flutter_bootstrap.js" async></script>
+  <script>
+    // Hide splash once Flutter has painted its first frame.
+    window.addEventListener('flutter-first-frame', function () {
+      var el = document.getElementById('ma5zony-splash');
+      if (!el) return;
+      el.classList.add('hide');
+      setTimeout(function () { el.remove(); }, 400);
+    });
+  </script>
 </body>
 </html>

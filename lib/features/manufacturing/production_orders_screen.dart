@@ -74,7 +74,7 @@ class _ProductionOrdersScreenState extends State<ProductionOrdersScreen> {
                 width: 200,
                 child: KPICard(
                   title: 'Open Cost',
-                  value: '\$${totalCost.toStringAsFixed(0)}',
+                  value: 'EGP ${totalCost.toStringAsFixed(0)}',
                   icon: Icons.attach_money,
                 ),
               ),
@@ -100,51 +100,62 @@ class _ProductionOrdersScreenState extends State<ProductionOrdersScreen> {
             ],
           ),
           const SizedBox(height: 16),
+          if (orders.isEmpty)
+            EmptyStateWidget(
+              icon: Icons.factory_outlined,
+              title: 'No production orders yet',
+              description: 'Approve a manufacturing recommendation to create a production order.',
+              primaryLabel: 'View Recommendations',
+              onPrimary: () => context.go('/recommendations'),
+            )
+          else
           Card(
-            child: SizedBox(
-              width: double.infinity,
+            child: HorizontallyScrollableTable(
               child: DataTable(
-                columns: const [
-                  DataColumn(label: Text('Product')),
-                  DataColumn(label: Text('Qty')),
-                  DataColumn(label: Text('Status')),
-                  DataColumn(label: Text('Manufacturer')),
-                  DataColumn(label: Text('Cost')),
-                  DataColumn(label: Text('Created')),
-                  DataColumn(label: Text('Actions')),
+                columns: [
+                  DataColumn(label: Text('PRODUCT', style: AppTextStyles.tableHeader)),
+                  DataColumn(label: Text('QTY', style: AppTextStyles.tableHeader), numeric: true),
+                  DataColumn(label: Text('STATUS', style: AppTextStyles.tableHeader)),
+                  DataColumn(label: Text('MANUFACTURER', style: AppTextStyles.tableHeader)),
+                  DataColumn(label: Text('COST', style: AppTextStyles.tableHeader), numeric: true),
+                  DataColumn(label: Text('CREATED', style: AppTextStyles.tableHeader)),
+                  DataColumn(label: Text('ACTIONS', style: AppTextStyles.tableHeader)),
                 ],
                 rows: orders.map((o) {
-                  return DataRow(cells: [
-                    DataCell(Text(products[o.finalProductId] ?? '—')),
-                    DataCell(Text('${o.quantity}')),
+                  return DataRow(
+                    color: AppColors.dataRowColor,
+                    cells: [
+                    DataCell(Text(products[o.finalProductId] ?? '—', style: AppTextStyles.tableCell)),
+                    DataCell(Text('${o.quantity}', style: AppTextStyles.tableNum)),
                     DataCell(_StatusChip(status: o.status)),
-                    DataCell(
-                        Text(manufacturers[o.manufacturerId] ?? '—')),
-                    DataCell(Text(
-                        '\$${o.estimatedCost.toStringAsFixed(0)}')),
-                    DataCell(Text(_formatDate(o.createdAt))),
+                    DataCell(Text(manufacturers[o.manufacturerId] ?? '—', style: AppTextStyles.tableCell)),
+                    DataCell(Text('EGP ${o.estimatedCost.toStringAsFixed(0)}', style: AppTextStyles.tableNum)),
+                    DataCell(Text(_formatDate(o.createdAt), style: AppTextStyles.tableCell)),
                     DataCell(Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
                         IconButton(
-                          icon: const Icon(Icons.visibility, size: 18),
+                          icon: const Icon(Icons.visibility_outlined, size: 18),
                           tooltip: 'Details',
                           onPressed: () =>
                               context.go('/production-orders/${o.id}'),
+                          color: AppColors.textSecondary,
                         ),
                         if (o.status == ProductionOrderStatus.draft)
                           IconButton(
                             icon: const Icon(Icons.delete_outline,
-                                size: 18, color: Colors.red),
+                                size: 18),
                             tooltip: 'Delete',
+                            color: AppColors.error,
                             onPressed: () => _confirmDelete(context, state, o),
                           ),
                         if (o.status != ProductionOrderStatus.draft &&
                             o.status != ProductionOrderStatus.completed)
                           IconButton(
                             icon: const Icon(Icons.cancel_outlined,
-                                size: 18, color: Colors.orange),
+                                size: 18),
                             tooltip: 'Cancel',
+                            color: AppColors.warning,
                             onPressed: () => _confirmCancel(context, state, o),
                           ),
                       ],
@@ -154,21 +165,6 @@ class _ProductionOrdersScreenState extends State<ProductionOrdersScreen> {
               ),
             ),
           ),
-          if (orders.isEmpty)
-            const Padding(
-              padding: EdgeInsets.all(32),
-              child: Center(
-                child: Column(
-                  children: [
-                    Icon(Icons.inbox_outlined,
-                        size: 48, color: AppColors.textSecondary),
-                    SizedBox(height: 8),
-                    Text('No production orders yet',
-                        style: TextStyle(color: AppColors.textSecondary)),
-                  ],
-                ),
-              ),
-            ),
         ],
       ),
     );

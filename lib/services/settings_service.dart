@@ -8,6 +8,11 @@ class UserSettings {
   final String defaultAlgorithm;
   final int smaWindow;
   final double sesAlpha;
+  final double holtBeta;
+  final double holtGamma;
+  final int holtWintersSeasonLength;
+  final double orderingCost;
+  final double holdingRate;
   final bool emailDigest;
   final bool lowStockAlerts;
 
@@ -18,6 +23,11 @@ class UserSettings {
     this.defaultAlgorithm = 'SMA',
     this.smaWindow = 3,
     this.sesAlpha = 0.3,
+    this.holtBeta = 0.1,
+    this.holtGamma = 0.2,
+    this.holtWintersSeasonLength = 12,
+    this.orderingCost = 250.0,
+    this.holdingRate = 0.20,
     this.emailDigest = true,
     this.lowStockAlerts = true,
   });
@@ -30,6 +40,11 @@ class UserSettings {
       defaultAlgorithm: m['defaultAlgorithm'] as String? ?? 'SMA',
       smaWindow: (m['smaWindow'] as num?)?.toInt() ?? 3,
       sesAlpha: (m['sesAlpha'] as num?)?.toDouble() ?? 0.3,
+      holtBeta: (m['holtBeta'] as num?)?.toDouble() ?? 0.1,
+      holtGamma: (m['holtGamma'] as num?)?.toDouble() ?? 0.2,
+      holtWintersSeasonLength: (m['holtWintersSeasonLength'] as num?)?.toInt() ?? 12,
+      orderingCost: (m['orderingCost'] as num?)?.toDouble() ?? 250.0,
+      holdingRate: (m['holdingRate'] as num?)?.toDouble() ?? 0.20,
       emailDigest: m['emailDigest'] as bool? ?? true,
       lowStockAlerts: m['lowStockAlerts'] as bool? ?? true,
     );
@@ -42,6 +57,11 @@ class UserSettings {
         'defaultAlgorithm': defaultAlgorithm,
         'smaWindow': smaWindow,
         'sesAlpha': sesAlpha,
+        'holtBeta': holtBeta,
+        'holtGamma': holtGamma,
+        'holtWintersSeasonLength': holtWintersSeasonLength,
+        'orderingCost': orderingCost,
+        'holdingRate': holdingRate,
         'emailDigest': emailDigest,
         'lowStockAlerts': lowStockAlerts,
       };
@@ -53,6 +73,11 @@ class UserSettings {
     String? defaultAlgorithm,
     int? smaWindow,
     double? sesAlpha,
+    double? holtBeta,
+    double? holtGamma,
+    int? holtWintersSeasonLength,
+    double? orderingCost,
+    double? holdingRate,
     bool? emailDigest,
     bool? lowStockAlerts,
   }) {
@@ -63,6 +88,11 @@ class UserSettings {
       defaultAlgorithm: defaultAlgorithm ?? this.defaultAlgorithm,
       smaWindow: smaWindow ?? this.smaWindow,
       sesAlpha: sesAlpha ?? this.sesAlpha,
+      holtBeta: holtBeta ?? this.holtBeta,
+      holtGamma: holtGamma ?? this.holtGamma,
+      holtWintersSeasonLength: holtWintersSeasonLength ?? this.holtWintersSeasonLength,
+      orderingCost: orderingCost ?? this.orderingCost,
+      holdingRate: holdingRate ?? this.holdingRate,
       emailDigest: emailDigest ?? this.emailDigest,
       lowStockAlerts: lowStockAlerts ?? this.lowStockAlerts,
     );

@@ -155,41 +155,39 @@ class _CostAnalysisTab extends StatelessWidget {
             state.products.length;
 
     return LayoutBuilder(builder: (context, constraints) {
-      final crossAxisCount =
-          constraints.maxWidth > 1200 ? 4 : (constraints.maxWidth > 600 ? 2 : 1);
-      return GridView.count(
-        crossAxisCount: crossAxisCount,
-        shrinkWrap: true,
-        crossAxisSpacing: 16,
-        mainAxisSpacing: 16,
-        childAspectRatio: 2.2,
-        physics: const NeverScrollableScrollPhysics(),
+      final w = constraints.maxWidth;
+      final cols = w > 1200 ? 4 : (w > 600 ? 2 : 1);
+      const spacing = 16.0;
+      final cardW = (w - spacing * (cols - 1)) / cols;
+      return Wrap(
+        spacing: spacing,
+        runSpacing: spacing,
         children: [
           KPICard(
             title: 'Total Inventory Value',
-            value: '\$${totalInventoryValue.toStringAsFixed(0)}',
+            value: 'EGP ${totalInventoryValue.toStringAsFixed(0)}',
             icon: Icons.account_balance_wallet,
             color: AppColors.primary,
           ),
           KPICard(
             title: 'Monthly COGS',
-            value: '\$${monthlyCogs.toStringAsFixed(0)}',
+            value: 'EGP ${monthlyCogs.toStringAsFixed(0)}',
             icon: Icons.receipt_long,
             color: AppColors.accent,
           ),
           KPICard(
             title: 'Annual Holding Cost',
-            value: '\$${annualHolding.toStringAsFixed(0)}',
+            value: 'EGP ${annualHolding.toStringAsFixed(0)}',
             icon: Icons.warehouse,
             color: AppColors.warning,
           ),
           KPICard(
             title: 'Avg Unit Cost',
-            value: '\$${avgUnitCost.toStringAsFixed(2)}',
+            value: 'EGP ${avgUnitCost.toStringAsFixed(2)}',
             icon: Icons.calculate,
             color: AppColors.textSecondary,
           ),
-        ],
+        ].map((c) => SizedBox(width: cardW, child: c)).toList(),
       );
     });
   }
@@ -251,7 +249,7 @@ class _CostAnalysisTab extends StatelessWidget {
               return _legendItem(
                 color,
                 e.value.category,
-                '\$${e.value.value.toStringAsFixed(0)}',
+                'EGP ${e.value.value.toStringAsFixed(0)}',
               );
             }),
           ],
@@ -434,8 +432,7 @@ class _CostAnalysisTab extends StatelessWidget {
           children: [
             Text('Category Cost Detail', style: AppTextStyles.h3),
             const SizedBox(height: 16),
-            SizedBox(
-              width: double.infinity,
+            HorizontallyScrollableTable(
               child: DataTable(
                 columns: const [
                   DataColumn(label: Text('Category')),
@@ -452,7 +449,7 @@ class _CostAnalysisTab extends StatelessWidget {
                             .copyWith(fontWeight: FontWeight.w600))),
                     DataCell(Text('${c.productCount}')),
                     DataCell(
-                        Text('\$${c.value.toStringAsFixed(0)}')),
+                        Text('EGP ${c.value.toStringAsFixed(0)}')),
                     DataCell(Text('${pct.toStringAsFixed(1)}%')),
                   ]);
                 }).toList(),
@@ -618,15 +615,13 @@ class _InventoryValuationTab extends StatelessWidget {
     final cCount = data.where((p) => p.grade == 'C').length;
 
     return LayoutBuilder(builder: (context, constraints) {
-      final crossAxisCount =
-          constraints.maxWidth > 900 ? 3 : (constraints.maxWidth > 500 ? 2 : 1);
-      return GridView.count(
-        crossAxisCount: crossAxisCount,
-        shrinkWrap: true,
-        crossAxisSpacing: 16,
-        mainAxisSpacing: 16,
-        childAspectRatio: 2.4,
-        physics: const NeverScrollableScrollPhysics(),
+      final w = constraints.maxWidth;
+      final cols = w > 900 ? 3 : (w > 500 ? 2 : 1);
+      const spacing = 16.0;
+      final cardW = (w - spacing * (cols - 1)) / cols;
+      return Wrap(
+        spacing: spacing,
+        runSpacing: spacing,
         children: [
           KPICard(
             title: 'A Items (Top 80%)',
@@ -646,7 +641,7 @@ class _InventoryValuationTab extends StatelessWidget {
             icon: Icons.star_border,
             color: AppColors.success,
           ),
-        ],
+        ].map((c) => SizedBox(width: cardW, child: c)).toList(),
       );
     });
   }
@@ -719,11 +714,11 @@ class _InventoryValuationTab extends StatelessWidget {
             ),
             const SizedBox(height: 12),
             _legendItem(AppColors.error, 'A — High Value',
-                '\$${aValue.toStringAsFixed(0)}'),
+                'EGP ${aValue.toStringAsFixed(0)}'),
             _legendItem(AppColors.warning, 'B — Medium Value',
-                '\$${bValue.toStringAsFixed(0)}'),
+                'EGP ${bValue.toStringAsFixed(0)}'),
             _legendItem(AppColors.success, 'C — Low Value',
-                '\$${cValue.toStringAsFixed(0)}'),
+                'EGP ${cValue.toStringAsFixed(0)}'),
           ],
         ),
       ),
@@ -741,8 +736,7 @@ class _InventoryValuationTab extends StatelessWidget {
           children: [
             Text('Product ABC Classification', style: AppTextStyles.h3),
             const SizedBox(height: 16),
-            SizedBox(
-              width: double.infinity,
+            HorizontallyScrollableTable(
               child: DataTable(
                 columns: const [
                   DataColumn(label: Text('Grade')),
@@ -766,10 +760,10 @@ class _InventoryValuationTab extends StatelessWidget {
                       ],
                     )),
                     DataCell(
-                        Text('\$${p.unitCost.toStringAsFixed(2)}')),
+                        Text('EGP ${p.unitCost.toStringAsFixed(2)}')),
                     DataCell(Text('${p.stock}')),
                     DataCell(
-                        Text('\$${p.value.toStringAsFixed(0)}')),
+                        Text('EGP ${p.value.toStringAsFixed(0)}')),
                     DataCell(
                         Text('${p.cumulativePercent.toStringAsFixed(1)}%')),
                   ]);
@@ -810,8 +804,7 @@ class _InventoryValuationTab extends StatelessWidget {
                 child: Text('No dead stock detected — all products have recent demand.'),
               )
             else
-              SizedBox(
-                width: double.infinity,
+              HorizontallyScrollableTable(
                 child: DataTable(
                   columns: const [
                     DataColumn(label: Text('Product')),
@@ -834,7 +827,7 @@ class _InventoryValuationTab extends StatelessWidget {
                       )),
                       DataCell(Text('${p.stock}')),
                       DataCell(Text(
-                          '\$${p.valueTiedUp.toStringAsFixed(0)}')),
+                          'EGP ${p.valueTiedUp.toStringAsFixed(0)}')),
                       DataCell(Text('${p.recentDemand}')),
                       DataCell(StatusChip(
                           p.recentDemand == 0 ? 'Critical' : 'Low')),
@@ -973,15 +966,13 @@ class _EfficiencyMetricsTab extends StatelessWidget {
 
   Widget _buildMetricsKPIs(_GlobalMetrics metrics) {
     return LayoutBuilder(builder: (context, constraints) {
-      final crossAxisCount =
-          constraints.maxWidth > 1200 ? 4 : (constraints.maxWidth > 600 ? 2 : 1);
-      return GridView.count(
-        crossAxisCount: crossAxisCount,
-        shrinkWrap: true,
-        crossAxisSpacing: 16,
-        mainAxisSpacing: 16,
-        childAspectRatio: 2.2,
-        physics: const NeverScrollableScrollPhysics(),
+      final w = constraints.maxWidth;
+      final cols = w > 1200 ? 4 : (w > 600 ? 2 : 1);
+      const spacing = 16.0;
+      final cardW = (w - spacing * (cols - 1)) / cols;
+      return Wrap(
+        spacing: spacing,
+        runSpacing: spacing,
         children: [
           KPICard(
             title: 'Inventory Turnover',
@@ -1013,7 +1004,7 @@ class _EfficiencyMetricsTab extends StatelessWidget {
             isAlert: metrics.overstockCount > 0,
             color: AppColors.warning,
           ),
-        ],
+        ].map((c) => SizedBox(width: cardW, child: c)).toList(),
       );
     });
   }
@@ -1141,8 +1132,7 @@ class _EfficiencyMetricsTab extends StatelessWidget {
           children: [
             Text('Product Efficiency Details', style: AppTextStyles.h3),
             const SizedBox(height: 16),
-            SizedBox(
-              width: double.infinity,
+            HorizontallyScrollableTable(
               child: DataTable(
                 columns: const [
                   DataColumn(label: Text('Product')),
