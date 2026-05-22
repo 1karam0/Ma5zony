@@ -513,6 +513,9 @@ exports.shopifyDisconnectStore = onRequest(async (req, res) => {
 // ── 6. shopifyImportOrders (GraphQL) ─────────────────────────────────────────
 // Fetches order history from Shopify using GraphQL and writes demand records
 // to Firestore, aggregated into monthly buckets per product.
+// Resolution order: shopifyVariantId → SKU (case-insensitive) → shopifyProductId
+// This ensures variant-level products (e.g. same shirt, different size/color)
+// each get their own demand bucket rather than being lumped under the parent.
 
 exports.shopifyImportOrders = onRequest(
   { secrets: [SHOPIFY_API_KEY, SHOPIFY_API_SECRET] },
@@ -536,6 +539,8 @@ exports.shopifyImportOrders = onRequest(
 
     const { shopDomain, accessToken } = connDoc.data();
 
+    // Fetch variant SKU + titles so we can match the correct Ma5zony product
+    // even when it was added manually (no Shopify IDs, SKU possibly differs).
     const ORDERS_QUERY = `
       query FetchOrders($cursor: String) {
         orders(first: 100, after: $cursor) {
@@ -548,8 +553,11 @@ exports.shopifyImportOrders = onRequest(
                 edges {
                   node {
                     quantity
-                    product { id }
-                    variant { id }
+                    title
+                    name
+                    sku
+                    product { id title }
+                    variant { id sku title }
                   }
                 }
               }
@@ -561,11 +569,113 @@ exports.shopifyImportOrders = onRequest(
 
     try {
       console.log(`shopifyImportOrders: starting for shop=${shopDomain}`);
-      // Collect all line items from orders
-      const lineItems = []; // { shopifyProductId, shopifyVariantId, quantity, orderDate }
+
+      // ── Build product resolution maps from Firestore ──────────────────────
+      // Priority: shopifyVariantId → sku exact → sku normalised → name → contains → shopifyProductId
+      const productsSnap = await db
+        .collection("users")
+        .doc(uid)
+        .collection("products")
+        .get();
+
+      const byVariantId = {};
+      const bySku       = {};
+      const bySkuNorm   = {};
+      const byName      = {};
+      const byProductId = {};
+
+      const normalise = (s) =>
+        String(s || "").toLowerCase().replace(/[^a-z0-9]+/g, "");
+
+      for (const doc of productsSnap.docs) {
+        const d = doc.data();
+        if (d.shopifyVariantId) byVariantId[String(d.shopifyVariantId)] = doc.id;
+        if (d.sku) {
+          const sku = String(d.sku);
+          bySku[sku.toLowerCase()] = doc.id;
+          const n = normalise(sku);
+          if (n.length >= 3) bySkuNorm[n] = doc.id;
+        }
+        if (d.name) {
+          const n = normalise(d.name);
+          if (n.length >= 3) byName[n] = doc.id;
+        }
+        if (d.shopifyProductId) byProductId[String(d.shopifyProductId)] = doc.id;
+      }
+
+      const unmatchedSamples = new Map(); // key → diagnostic record
+
+      function resolveProductId(line) {
+        const { shopifyProductId, shopifyVariantId, variantSku, lineSku,
+                productTitle, variantTitle, lineTitle } = line;
+
+        // 1. Exact Shopify variant id
+        if (shopifyVariantId && byVariantId[shopifyVariantId])
+          return byVariantId[shopifyVariantId];
+
+        // 2. Exact SKU (variant SKU, then line-item SKU)
+        const skuCandidates = [variantSku, lineSku].filter(Boolean);
+        for (const s of skuCandidates) {
+          const lc = String(s).toLowerCase();
+          if (bySku[lc]) return bySku[lc];
+        }
+
+        // 3. Normalised SKU (strip whitespace / punctuation)
+        for (const s of skuCandidates) {
+          const n = normalise(s);
+          if (n.length >= 3 && bySkuNorm[n]) return bySkuNorm[n];
+        }
+
+        // 4. Normalised name — exact, then bidirectional "contains"
+        const nameCandidates = [
+          lineTitle,
+          productTitle && variantTitle ? `${productTitle} ${variantTitle}` : null,
+          productTitle,
+        ].filter(Boolean);
+        for (const t of nameCandidates) {
+          const n = normalise(t);
+          if (n.length >= 3 && byName[n]) return byName[n];
+        }
+        for (const t of nameCandidates) {
+          const n = normalise(t);
+          if (n.length < 4) continue;
+          let bestKey = null;
+          for (const key of Object.keys(byName)) {
+            if (key.length < 4) continue;
+            if (n.includes(key) || key.includes(n)) {
+              if (!bestKey || key.length > bestKey.length) bestKey = key;
+            }
+          }
+          if (bestKey) return byName[bestKey];
+        }
+
+        // 5. Parent Shopify product id (variant-level products will collide)
+        if (shopifyProductId && byProductId[shopifyProductId])
+          return byProductId[shopifyProductId];
+
+        // Unmatched — record diagnostics so the UI can tell the user exactly
+        // which Shopify SKUs / titles do not match any Ma5zony product.
+        const key = shopifyVariantId || variantSku || lineSku || lineTitle || shopifyProductId || "unknown";
+        const prev = unmatchedSamples.get(key);
+        if (prev) prev.count += 1;
+        else unmatchedSamples.set(key, {
+          sku: variantSku || lineSku || null,
+          title: lineTitle || null,
+          productTitle: productTitle || null,
+          shopifyProductId,
+          shopifyVariantId,
+          count: 1,
+        });
+        return `shopify_${shopifyProductId || "unknown"}`;
+      }
+
+      // ── Paginate through all orders ───────────────────────────────────────
+      const monthlyMap = {};
       let cursor = null;
       let hasNextPage = true;
       let totalOrders = 0;
+      let totalLineItems = 0;
+      let matchedLineItems = 0;
       const MAX_PAGES = 50;
       let page = 0;
 
@@ -582,58 +692,60 @@ exports.shopifyImportOrders = onRequest(
 
         for (const { node: order } of edges) {
           totalOrders++;
-          const orderId = order.id.split("/").pop();
           const orderDate = order.createdAt || new Date().toISOString();
+          const d = new Date(orderDate);
+          const year  = d.getUTCFullYear();
+          const month = String(d.getUTCMonth() + 1).padStart(2, "0");
 
           for (const { node: item } of order.lineItems.edges) {
-            if (!item.product || !item.product.id) continue;
-            const shopifyProductId = item.product.id.split("/").pop();
-            const shopifyVariantId = item.variant ? item.variant.id.split("/").pop() : null;
-
-            lineItems.push({
+            totalLineItems++;
+            const shopifyProductId = item.product && item.product.id ? item.product.id.split("/").pop() : null;
+            const shopifyVariantId = item.variant && item.variant.id ? item.variant.id.split("/").pop() : null;
+            const line = {
               shopifyProductId,
               shopifyVariantId,
-              quantity: item.quantity || 0,
-              orderDate,
-              orderId,
-            });
+              variantSku:   item.variant ? (item.variant.sku || null) : null,
+              lineSku:      item.sku || null,
+              productTitle: item.product ? (item.product.title || null) : null,
+              variantTitle: item.variant ? (item.variant.title || null) : null,
+              lineTitle:    item.title || item.name || null,
+            };
+
+            const firestoreId = resolveProductId(line);
+            if (firestoreId && !firestoreId.startsWith("shopify_")) matchedLineItems++;
+
+            const key = `${firestoreId}||${year}-${month}`;
+            if (!monthlyMap[key]) {
+              monthlyMap[key] = {
+                productId: firestoreId,
+                periodStart: new Date(Date.UTC(year, d.getUTCMonth(), 1)).toISOString(),
+                quantity: 0,
+              };
+            }
+            monthlyMap[key].quantity += item.quantity || 0;
           }
         }
       }
 
-      // Aggregate line items by productId + year-month
-      // Key: "shopify_<productId>_YYYY-MM" → { periodStart ISO, totalQuantity }
-      const monthlyMap = {};
-
-      for (const item of lineItems) {
-        const d = new Date(item.orderDate);
-        const year = d.getUTCFullYear();
-        const month = String(d.getUTCMonth() + 1).padStart(2, "0");
-        const key = `shopify_${item.shopifyProductId}_${year}-${month}`;
-
-        if (!monthlyMap[key]) {
-          monthlyMap[key] = {
-            productId: `shopify_${item.shopifyProductId}`,
-            // First day of the month in UTC
-            periodStart: new Date(Date.UTC(year, d.getUTCMonth(), 1)).toISOString(),
-            quantity: 0,
-          };
-        }
-        monthlyMap[key].quantity += item.quantity || 0;
-      }
-
-      // Use deterministic doc IDs (key) so re-imports overwrite cleanly
+      // ── Write to Firestore ────────────────────────────────────────────────
+      // Use deterministic doc IDs derived from (productId, year-month) so that
+      // re-imports overwrite cleanly without creating duplicates.
       const batch = db.batch();
       let imported = 0;
 
       for (const [key, record] of Object.entries(monthlyMap)) {
         if (record.quantity <= 0) continue;
 
+        // Build a stable doc ID: "shopify_<safeProductId>_YYYY-MM"
+        const safeId = record.productId.replace(/[^a-zA-Z0-9_-]/g, "_");
+        const yearMonth = key.split("||")[1];
+        const docId = `shopify_${safeId}_${yearMonth}`;
+
         const ref = db
           .collection("users")
           .doc(uid)
           .collection("demandRecords")
-          .doc(key);
+          .doc(docId);
 
         batch.set(ref, {
           productId: record.productId,
@@ -650,12 +762,24 @@ exports.shopifyImportOrders = onRequest(
         await batch.commit();
       }
 
-      console.log(`shopifyImportOrders: done. totalOrders=${totalOrders}, monthlyBuckets=${imported}`);
+      // Build top-20 list of unmatched SKUs/titles for diagnostics.
+      const unmatched = Array.from(unmatchedSamples.values())
+        .sort((a, b) => b.count - a.count)
+        .slice(0, 20);
+
+      console.log(
+        `shopifyImportOrders: done. totalOrders=${totalOrders}, lineItems=${totalLineItems}, ` +
+        `matched=${matchedLineItems}, unmatchedSkus=${unmatchedSamples.size}, monthlyBuckets=${imported}`
+      );
       res.json({
         result: {
           totalOrders,
+          totalLineItems,
+          matchedLineItems,
+          unmatchedLineItems: totalLineItems - matchedLineItems,
           newRecordsImported: imported,
           monthlyBuckets: imported,
+          unmatchedSamples: unmatched,
         },
       });
     } catch (err) {

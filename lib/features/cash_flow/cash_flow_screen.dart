@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import 'package:ma5zony/providers/app_state.dart';
 import 'package:ma5zony/utils/constants.dart';
 import 'package:ma5zony/widgets/shared_widgets.dart';
+import 'package:ma5zony/widgets/zoho_patterns.dart';
 
 class CashFlowScreen extends StatefulWidget {
   const CashFlowScreen({super.key});
@@ -177,12 +178,12 @@ class _CashFlowScreenState extends State<CashFlowScreen> {
   void _showImportDialog(BuildContext context, AppState state) {
     showDialog(
       context: context,
-      builder: (_) => SimpleDialog(
+      builder: (dialogContext) => SimpleDialog(
         title: const Text('Import Cash Flow'),
         children: [
           SimpleDialogOption(
             onPressed: () {
-              Navigator.pop(context);
+              Navigator.pop(dialogContext);
               _pickExcelFile(context, state);
             },
             child: const ListTile(
@@ -193,7 +194,7 @@ class _CashFlowScreenState extends State<CashFlowScreen> {
           ),
           SimpleDialogOption(
             onPressed: () {
-              Navigator.pop(context);
+              Navigator.pop(dialogContext);
               showDialog(
                 context: context,
                 builder: (_) => _ManualCashFlowDialog(
@@ -268,84 +269,142 @@ class _ManualCashFlowDialogState extends State<_ManualCashFlowDialog> {
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
-      title: const Text('Import Cash Flow'),
+      titlePadding: const EdgeInsets.fromLTRB(24, 20, 24, 0),
+      contentPadding: const EdgeInsets.fromLTRB(24, 16, 24, 0),
+      title: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              color: AppColors.primary.withValues(alpha: 0.1),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: const Icon(Icons.edit_note,
+                size: 20, color: AppColors.primary),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('Manual Cash Flow Entry', style: AppTextStyles.h3),
+                const SizedBox(height: 2),
+                Text(
+                  'Add income (positive) and expense (negative) rows.',
+                  style: AppTextStyles.bodySmall
+                      .copyWith(color: AppColors.textSecondary),
+                ),
+              ],
+            ),
+          ),
+          IconButton(
+            icon: const Icon(Icons.close, size: 20),
+            color: AppColors.textSecondary,
+            onPressed: _saving ? null : () => Navigator.pop(context),
+          ),
+        ],
+      ),
       content: SizedBox(
-        width: 600,
+        width: 640,
         child: SingleChildScrollView(
           child: Column(
-            mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Text(
-                'Add income and expense entries. Use negative amounts for expenses.',
-                style: TextStyle(color: AppColors.textSecondary),
-              ),
-              const SizedBox(height: 16),
-              ..._rows.asMap().entries.map((entry) {
-                final i = entry.key;
-                final row = entry.value;
-                return Padding(
-                  padding: const EdgeInsets.only(bottom: 8),
-                  child: Row(
-                    children: [
-                      Expanded(
-                        flex: 2,
-                        child: TextField(
-                          controller: row.categoryCtrl,
-                          decoration: const InputDecoration(
-                              labelText: 'Category', isDense: true),
-                        ),
+              ZohoFormSection(
+                title: 'Entries',
+                subtitle:
+                    'Use negative amounts for expenses (e.g. -500 for a purchase).',
+                children: [
+                  ..._rows.asMap().entries.map((entry) {
+                    final i = entry.key;
+                    final row = entry.value;
+                    return Padding(
+                      padding: const EdgeInsets.only(bottom: 8),
+                      child: Row(
+                        children: [
+                          Expanded(
+                            flex: 2,
+                            child: TextField(
+                              controller: row.categoryCtrl,
+                              decoration: const InputDecoration(
+                                  labelText: 'Category', isDense: true),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: TextField(
+                              controller: row.amountCtrl,
+                              decoration: const InputDecoration(
+                                  labelText: 'Amount',
+                                  isDense: true,
+                                  prefixText: 'EGP '),
+                              keyboardType: TextInputType.number,
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: TextField(
+                              controller: row.notesCtrl,
+                              decoration: const InputDecoration(
+                                  labelText: 'Notes', isDense: true),
+                            ),
+                          ),
+                          IconButton(
+                            tooltip: 'Remove row',
+                            icon: const Icon(Icons.remove_circle_outline,
+                                color: AppColors.error),
+                            onPressed: () => setState(() {
+                              _rows[i].dispose();
+                              _rows.removeAt(i);
+                            }),
+                          ),
+                        ],
                       ),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: TextField(
-                          controller: row.amountCtrl,
-                          decoration: const InputDecoration(
-                              labelText: 'Amount', isDense: true),
-                          keyboardType: TextInputType.number,
-                        ),
+                    );
+                  }),
+                  if (_rows.isEmpty)
+                    Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 16),
+                      child: Text(
+                        'No entries yet. Click "Add Row" to start.',
+                        style: AppTextStyles.bodySmall
+                            .copyWith(color: AppColors.textSecondary),
                       ),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: TextField(
-                          controller: row.notesCtrl,
-                          decoration: const InputDecoration(
-                              labelText: 'Notes', isDense: true),
-                        ),
-                      ),
-                      IconButton(
-                        icon: const Icon(Icons.remove_circle,
-                            color: AppColors.error),
-                        onPressed: () => setState(() {
-                          _rows[i].dispose();
-                          _rows.removeAt(i);
-                        }),
-                      ),
-                    ],
+                    ),
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: TextButton.icon(
+                      icon: const Icon(Icons.add, size: 18),
+                      label: const Text('Add Row'),
+                      onPressed: () =>
+                          setState(() => _rows.add(_EntryRow())),
+                    ),
                   ),
-                );
-              }),
-              TextButton.icon(
-                icon: const Icon(Icons.add),
-                label: const Text('Add Row'),
-                onPressed: () => setState(() => _rows.add(_EntryRow())),
+                ],
               ),
             ],
           ),
         ),
       ),
+      actionsPadding: const EdgeInsets.fromLTRB(24, 8, 24, 20),
       actions: [
         TextButton(
           onPressed: _saving ? null : () => Navigator.pop(context),
           child: const Text('Cancel'),
         ),
         ElevatedButton(
+          style: ElevatedButton.styleFrom(
+            backgroundColor: AppColors.primary,
+            foregroundColor: Colors.white,
+          ),
           onPressed: _saving || _rows.isEmpty ? null : _import,
           child: _saving
               ? const SizedBox(
                   width: 18,
                   height: 18,
-                  child: CircularProgressIndicator(strokeWidth: 2),
+                  child: CircularProgressIndicator(
+                      strokeWidth: 2, color: Colors.white),
                 )
               : const Text('Import'),
         ),

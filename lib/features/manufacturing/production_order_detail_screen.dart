@@ -5,6 +5,7 @@ import 'package:ma5zony/models/production_order.dart';
 import 'package:ma5zony/providers/app_state.dart';
 import 'package:ma5zony/utils/constants.dart';
 import 'package:ma5zony/widgets/shared_widgets.dart';
+import 'package:ma5zony/widgets/zoho_patterns.dart';
 
 class ProductionOrderDetailScreen extends StatefulWidget {
   final String orderId;
@@ -82,6 +83,28 @@ class _ProductionOrderDetailScreenState
               ),
               _StatusChip(status: order.status),
             ],
+          ),
+          const SizedBox(height: 20),
+
+          // Workflow stepper
+          Container(
+            padding: const EdgeInsets.symmetric(vertical: 20, horizontal: 24),
+            decoration: BoxDecoration(
+              color: AppColors.surfaceCard,
+              borderRadius: AppRadius.lg,
+              border: Border.all(color: AppColors.borderSubtle),
+            ),
+            child: ZohoStepper(
+              currentIndex: _stepIndexFor(order.status),
+              steps: const [
+                ZohoStepperStep(label: 'Draft', icon: Icons.edit_note),
+                ZohoStepperStep(label: 'Approved', icon: Icons.check_circle_outline),
+                ZohoStepperStep(label: 'Materials Ordered', icon: Icons.local_shipping_outlined),
+                ZohoStepperStep(label: 'Materials Ready', icon: Icons.inventory_2_outlined),
+                ZohoStepperStep(label: 'In Production', icon: Icons.precision_manufacturing_outlined),
+                ZohoStepperStep(label: 'Completed', icon: Icons.done_all),
+              ],
+            ),
           ),
           const SizedBox(height: 24),
 
@@ -261,6 +284,23 @@ class _ProductionOrderDetailScreenState
 
   String _formatDateTime(DateTime d) =>
       '${_formatDate(d)} ${d.hour.toString().padLeft(2, '0')}:${d.minute.toString().padLeft(2, '0')}';
+
+  int _stepIndexFor(ProductionOrderStatus s) {
+    switch (s) {
+      case ProductionOrderStatus.draft:
+        return 0;
+      case ProductionOrderStatus.approved:
+        return 1;
+      case ProductionOrderStatus.materialsOrdered:
+        return 2;
+      case ProductionOrderStatus.materialsReady:
+        return 3;
+      case ProductionOrderStatus.inProduction:
+        return 4;
+      case ProductionOrderStatus.completed:
+        return 5;
+    }
+  }
 }
 
 class _ActionButtons extends StatefulWidget {

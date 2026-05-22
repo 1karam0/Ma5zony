@@ -10,6 +10,7 @@ import 'package:ma5zony/providers/app_state.dart';
 import 'package:ma5zony/utils/cloud_function_config.dart';
 import 'package:ma5zony/utils/constants.dart';
 import 'package:ma5zony/widgets/shared_widgets.dart';
+import 'package:ma5zony/widgets/zoho_patterns.dart';
 
 class OrderDetailScreen extends StatefulWidget {
   final String orderId;
@@ -137,6 +138,29 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
               _buildStatusBadge(order.status),
             ],
           ),
+
+          const SizedBox(height: 20),
+
+          // Workflow stepper
+          if (order.status != OrderStatus.cancelled)
+            Container(
+              padding: const EdgeInsets.symmetric(vertical: 20, horizontal: 24),
+              decoration: BoxDecoration(
+                color: AppColors.surfaceCard,
+                borderRadius: AppRadius.lg,
+                border: Border.all(color: AppColors.borderSubtle),
+              ),
+              child: ZohoStepper(
+                currentIndex: _stepIndexFor(order.status),
+                steps: const [
+                  ZohoStepperStep(label: 'Draft', icon: Icons.edit_note),
+                  ZohoStepperStep(label: 'Confirmed', icon: Icons.check_circle_outline),
+                  ZohoStepperStep(label: 'Sent', icon: Icons.send_outlined),
+                  ZohoStepperStep(label: 'Receiving', icon: Icons.inbox_outlined),
+                  ZohoStepperStep(label: 'Completed', icon: Icons.done_all),
+                ],
+              ),
+            ),
 
           const SizedBox(height: 24),
 
@@ -294,6 +318,23 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
         ],
       ),
     );
+  }
+
+  int _stepIndexFor(OrderStatus status) {
+    switch (status) {
+      case OrderStatus.draft:
+        return 0;
+      case OrderStatus.confirmed:
+        return 1;
+      case OrderStatus.sent:
+        return 2;
+      case OrderStatus.partiallyFulfilled:
+        return 3;
+      case OrderStatus.completed:
+        return 4;
+      case OrderStatus.cancelled:
+        return 0;
+    }
   }
 
   Widget _buildStatusBadge(OrderStatus status) {

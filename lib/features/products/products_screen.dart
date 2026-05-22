@@ -6,6 +6,26 @@ import 'package:ma5zony/models/bill_of_materials.dart';
 import 'package:ma5zony/providers/app_state.dart';
 import 'package:ma5zony/utils/constants.dart';
 import 'package:ma5zony/widgets/shared_widgets.dart';
+import 'package:ma5zony/widgets/zoho_patterns.dart';
+
+/// Opens the product Add/Edit dialog pre-filled for [product]. The dialog
+/// includes Supplier and Manufacturer pickers, lead time, unit cost, etc.
+/// Used by other screens (e.g. the Forecasts readiness gate) to jump straight
+/// to the form where supplier / manufacturer are linked to a product.
+Future<void> showProductEditDialog(BuildContext context, Product product) async {
+  final state = context.read<AppState>();
+  await showDialog(
+    context: context,
+    builder: (_) => _AddProductDialog(
+      suppliers: state.suppliers,
+      manufacturers: state.manufacturers,
+      warehouses: state.warehouses,
+      rawMaterials: state.rawMaterials,
+      existingProduct: product,
+      existingBom: state.boms.where((b) => b.finalProductId == product.id).firstOrNull,
+    ),
+  );
+}
 
 class ProductsScreen extends StatefulWidget {
   const ProductsScreen({super.key});
@@ -229,6 +249,7 @@ class _ProductsScreenState extends State<ProductsScreen> {
         suppliers: state.suppliers,
         manufacturers: state.manufacturers,
         warehouses: state.warehouses,
+        rawMaterials: state.rawMaterials,
       ),
     );
   }
@@ -338,7 +359,11 @@ class _ProductDataSource extends DataTableSource {
                       suppliers: st.suppliers,
                       manufacturers: st.manufacturers,
                       warehouses: st.warehouses,
+                      rawMaterials: st.rawMaterials,
                       existingProduct: p,
+                      existingBom: st.boms
+                          .where((b) => b.finalProductId == p.id)
+                          .firstOrNull,
                     ),
                   );
                 },
@@ -674,10 +699,32 @@ class _AddProductDialog extends StatefulWidget {
   final List manufacturers;
   final Product? existingProduct;
   final List<dynamic> warehouses;
-  const _AddProductDialog({required this.suppliers, required this.manufacturers, required this.warehouses, this.existingProduct});
+  final List<dynamic> rawMaterials;
+  final BillOfMaterials? existingBom;
+  const _AddProductDialog({
+    required this.suppliers,
+    required this.manufacturers,
+    required this.warehouses,
+    required this.rawMaterials,
+    this.existingProduct,
+    this.existingBom,
+  });
 
   @override
   State<_AddProductDialog> createState() => _AddProductDialogState();
+}
+
+enum _ProductSourceType { purchased, manufactured }
+
+class _BomRowState {
+  String? rawMaterialId;
+  final TextEditingController qtyCtrl;
+  String uom;
+  _BomRowState({this.rawMaterialId, double qty = 1, this.uom = 'pcs'})
+      : qtyCtrl = TextEditingController(text: qty == qty.truncate()
+            ? qty.toStringAsFixed(0)
+            : qty.toString());
+  void dispose() => qtyCtrl.dispose();
 }
 
 class _AddProductDialogState extends State<_AddProductDialog> {
@@ -691,6 +738,8 @@ class _AddProductDialogState extends State<_AddProductDialog> {
   String? _selectedSupplierId;
   String? _selectedManufacturerId;
   String? _selectedWarehouseId;
+  _ProductSourceType _sourceType = _ProductSourceType.purchased;
+  final List<_BomRowState> _bomRows = [];
 
   bool get _isEdit => widget.existingProduct != null;
 
@@ -705,95 +754,223 @@ class _AddProductDialogState extends State<_AddProductDialog> {
       _costCtrl.text = p.unitCost.toStringAsFixed(2);
       _stockCtrl.text = '${p.currentStock}';
       _leadTimeCtrl.text = '${p.leadTimeDays}';
-      _selectedSupplierId = p.supplierId;
-      _selectedManufacturerId = p.manufacturerId;
-      _selectedWarehouseId = p.warehouseId;
+      // Validate IDs against the passed lists so no DropdownButton assertion
+      // fires if the lists haven't loaded yet or IDs became stale.
+      _selectedSupplierId = widget.suppliers.any((s) => s.id == p.supplierId)
+          ? p.supplierId
+          : null;
+      _selectedManufacturerId =
+          widget.manufacturers.any((m) => m.id == p.manufacturerId)
+              ? p.manufacturerId
+              : null;
+      _selectedWarehouseId =
+          widget.warehouses.any((w) => w.id == p.warehouseId)
+              ? p.warehouseId
+              : null;
+      // Infer source: if a manufacturer is set on the existing product,
+      // treat it as manufactured; otherwise purchased.
+      _sourceType = (_selectedManufacturerId != null &&
+              _selectedManufacturerId!.isNotEmpty)
+          ? _ProductSourceType.manufactured
+          : _ProductSourceType.purchased;
+    }
+    // Seed BOM rows from the existing recipe, if any.
+    final bom = widget.existingBom;
+    if (bom != null) {
+      for (final m in bom.materials) {
+        _bomRows.add(_BomRowState(
+          rawMaterialId: m.rawMaterialId,
+          qty: m.quantityPerUnit,
+          uom: m.unitOfMeasure,
+        ));
+      }
     }
   }
 
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
-      title: Text(_isEdit ? 'Edit Product' : 'Add New Product'),
+      titlePadding: const EdgeInsets.fromLTRB(24, 20, 24, 0),
+      contentPadding: const EdgeInsets.fromLTRB(24, 16, 24, 0),
+      title: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              color: AppColors.primary.withValues(alpha: 0.1),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: const Icon(Icons.inventory_2_outlined,
+                size: 20, color: AppColors.primary),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(_isEdit ? 'Edit Product' : 'New Product',
+                    style: AppTextStyles.h3),
+                const SizedBox(height: 2),
+                Text(
+                  _isEdit
+                      ? 'Update product details and supply chain settings.'
+                      : 'Add a new SKU to your catalog. Required fields are in red.',
+                  style: AppTextStyles.bodySmall
+                      .copyWith(color: AppColors.textSecondary),
+                ),
+              ],
+            ),
+          ),
+          IconButton(
+            icon: const Icon(Icons.close, size: 20),
+            color: AppColors.textSecondary,
+            onPressed: () => Navigator.pop(context),
+          ),
+        ],
+      ),
       content: SizedBox(
-        width: 600,
+        width: 720,
         child: Form(
           key: _formKey,
           child: SingleChildScrollView(
             child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Row(
+                // ── Section 1: Basic Information ─────────────────────────
+                ZohoFormSection(
+                  title: 'Basic Information',
+                  subtitle: 'Identify the product within your catalog.',
                   children: [
-                    Expanded(
-                      child: TextFormField(
-                        controller: _skuCtrl,
-                        decoration: const InputDecoration(labelText: 'SKU'),
-                        validator: (v) => v == null || v.trim().isEmpty ? 'SKU is required' : null,
-                      ),
-                    ),
-                    const SizedBox(width: 16),
-                    Expanded(
-                      child: TextFormField(
-                        controller: _nameCtrl,
-                        decoration: const InputDecoration(
-                          labelText: 'Product Name',
+                    Row(
+                      children: [
+                        Expanded(
+                          child: TextFormField(
+                            controller: _skuCtrl,
+                            decoration: const InputDecoration(labelText: 'SKU *'),
+                            validator: (v) => v == null || v.trim().isEmpty
+                                ? 'SKU is required'
+                                : null,
+                          ),
                         ),
-                        validator: (v) => v == null || v.trim().isEmpty ? 'Name is required' : null,
+                        const SizedBox(width: 16),
+                        Expanded(
+                          flex: 2,
+                          child: TextFormField(
+                            controller: _nameCtrl,
+                            decoration: const InputDecoration(
+                              labelText: 'Product Name *',
+                            ),
+                            validator: (v) => v == null || v.trim().isEmpty
+                                ? 'Name is required'
+                                : null,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 16),
+                    TextFormField(
+                      controller: _categoryCtrl,
+                      decoration: const InputDecoration(
+                        labelText: 'Category *',
+                        hintText: 'e.g. Apparel, Electronics, Raw Goods',
                       ),
+                      validator: (v) => v == null || v.trim().isEmpty
+                          ? 'Category is required'
+                          : null,
                     ),
                   ],
                 ),
-                const SizedBox(height: 16),
-                Row(
+
+                // ── Section 2: Pricing & Inventory ───────────────────────
+                ZohoFormSection(
+                  title: 'Pricing & Inventory',
+                  subtitle:
+                      'Unit cost drives EOQ, holding cost and forecast spend.',
                   children: [
-                    Expanded(
-                      child: TextFormField(
-                        controller: _categoryCtrl,
-                        decoration: const InputDecoration(labelText: 'Category'),
-                        validator: (v) => v == null || v.trim().isEmpty ? 'Category is required' : null,
-                      ),
-                    ),
-                    const SizedBox(width: 16),
-                    Expanded(
-                      child: TextFormField(
-                        controller: _costCtrl,
-                        decoration: const InputDecoration(
-                          labelText: 'Unit Cost',
-                          prefixText: 'EGP ',
+                    Row(
+                      children: [
+                        Expanded(
+                          child: TextFormField(
+                            controller: _costCtrl,
+                            decoration: const InputDecoration(
+                              labelText: 'Unit Cost *',
+                              prefixText: 'EGP ',
+                            ),
+                            keyboardType: TextInputType.number,
+                            validator: (v) {
+                              final val = double.tryParse(v ?? '');
+                              if (val == null || val < 0) {
+                                return 'Enter a valid cost';
+                              }
+                              return null;
+                            },
+                          ),
                         ),
-                        keyboardType: TextInputType.number,
-                        validator: (v) {
-                          final val = double.tryParse(v ?? '');
-                          if (val == null || val < 0) return 'Enter a valid cost';
-                          return null;
-                        },
-                      ),
+                        const SizedBox(width: 16),
+                        Expanded(
+                          child: TextFormField(
+                            controller: _stockCtrl,
+                            decoration: const InputDecoration(
+                              labelText: 'Current Stock *',
+                              suffixText: 'units',
+                            ),
+                            keyboardType: TextInputType.number,
+                            validator: (v) {
+                              final val = int.tryParse(v ?? '');
+                              if (val == null || val < 0) {
+                                return 'Enter a valid stock count';
+                              }
+                              return null;
+                            },
+                          ),
+                        ),
+                      ],
                     ),
                   ],
                 ),
-                const SizedBox(height: 16),
-                Row(
+
+                // ── Section 3: Supply Chain ──────────────────────────────
+                ZohoFormSection(
+                  title: 'Supply Chain',
+                  subtitle:
+                      'How does this product reach your warehouse?',
+                  collapsible: true,
+                  initiallyExpanded: true,
                   children: [
-                    Expanded(
-                      child: TextFormField(
-                        controller: _stockCtrl,
-                        decoration: const InputDecoration(
-                          labelText: 'Current Stock',
+                    TypeSelectorGroup<_ProductSourceType>(
+                      value: _sourceType,
+                      onChanged: (v) => setState(() {
+                        _sourceType = v;
+                        // Enforce mutual exclusion as the user toggles.
+                        if (v == _ProductSourceType.purchased) {
+                          _selectedManufacturerId = null;
+                        } else {
+                          _selectedSupplierId = null;
+                        }
+                      }),
+                      options: const [
+                        TypeOption(
+                          value: _ProductSourceType.purchased,
+                          label: 'Purchased from supplier',
+                          icon: Icons.local_shipping_outlined,
                         ),
-                        keyboardType: TextInputType.number,
-                        validator: (v) {
-                          final val = int.tryParse(v ?? '');
-                          if (val == null || val < 0) return 'Enter a valid stock count';
-                          return null;
-                        },
-                      ),
+                        TypeOption(
+                          value: _ProductSourceType.manufactured,
+                          label: 'Manufactured for us',
+                          icon: Icons.precision_manufacturing_outlined,
+                        ),
+                      ],
                     ),
-                    const SizedBox(width: 16),
-                    Expanded(
-                      child: DropdownButtonFormField<String>(
-                        decoration: const InputDecoration(labelText: 'Supplier'),
-                        // ignore: deprecated_member_use
-                        value: _selectedSupplierId,
+                    const SizedBox(height: 16),
+                    if (_sourceType == _ProductSourceType.purchased)
+                      DropdownButtonFormField<String>(
+                        decoration: const InputDecoration(
+                          labelText: 'Supplier *',
+                          helperText:
+                              'Replenishment approvals will create a purchase order for this supplier.',
+                        ),
+                        initialValue: _selectedSupplierId,
                         items: widget.suppliers
                             .map<DropdownMenuItem<String>>(
                               (s) => DropdownMenuItem<String>(
@@ -802,33 +979,19 @@ class _AddProductDialogState extends State<_AddProductDialog> {
                               ),
                             )
                             .toList(),
-                        onChanged: (v) => setState(() => _selectedSupplierId = v),
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 16),
-                Row(
-                  children: [
-                    Expanded(
-                      child: TextFormField(
-                        controller: _leadTimeCtrl,
+                        onChanged: (v) =>
+                            setState(() => _selectedSupplierId = v),
+                        validator: (v) => (v == null || v.isEmpty)
+                            ? 'Pick a supplier for purchased products'
+                            : null,
+                      )
+                    else
+                      DropdownButtonFormField<String>(
                         decoration: const InputDecoration(
-                          labelText: 'Lead Time (Days)',
-                          helperText: '0 = use supplier default',
+                          labelText: 'Manufacturer *',
+                          helperText:
+                              'Replenishment approvals will create a production order with this manufacturer.',
                         ),
-                        keyboardType: TextInputType.number,
-                        validator: (v) {
-                          final val = int.tryParse(v ?? '');
-                          if (val == null || val < 0) return 'Enter a valid number';
-                          return null;
-                        },
-                      ),
-                    ),
-                    const SizedBox(width: 16),
-                    Expanded(
-                      child: DropdownButtonFormField<String>(
-                        decoration: const InputDecoration(labelText: 'Default Manufacturer'),
                         initialValue: _selectedManufacturerId,
                         items: widget.manufacturers
                             .map<DropdownMenuItem<String>>(
@@ -838,37 +1001,190 @@ class _AddProductDialogState extends State<_AddProductDialog> {
                               ),
                             )
                             .toList(),
-                        onChanged: (v) => setState(() => _selectedManufacturerId = v),
+                        onChanged: (v) =>
+                            setState(() => _selectedManufacturerId = v),
+                        validator: (v) => (v == null || v.isEmpty)
+                            ? 'Pick a manufacturer for manufactured products'
+                            : null,
                       ),
+                    const SizedBox(height: 16),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: TextFormField(
+                            controller: _leadTimeCtrl,
+                            decoration: const InputDecoration(
+                              labelText: 'Lead Time (Days)',
+                              helperText: '0 = use supplier default',
+                            ),
+                            keyboardType: TextInputType.number,
+                            validator: (v) {
+                              final val = int.tryParse(v ?? '');
+                              if (val == null || val < 0) {
+                                return 'Enter a valid number';
+                              }
+                              return null;
+                            },
+                          ),
+                        ),
+                        const SizedBox(width: 16),
+                        Expanded(
+                          child: DropdownButtonFormField<String?>(
+                            decoration: const InputDecoration(
+                              labelText: 'Warehouse',
+                              helperText: 'Where this product is stored',
+                            ),
+                            initialValue: _selectedWarehouseId,
+                            items: [
+                              const DropdownMenuItem<String?>(
+                                value: null,
+                                child: Text('Unassigned'),
+                              ),
+                              ...widget.warehouses
+                                  .map<DropdownMenuItem<String?>>(
+                                (w) => DropdownMenuItem<String?>(
+                                  value: w.id as String,
+                                  child: Text(
+                                      '${w.name} — ${w.city}, ${w.country}'),
+                                ),
+                              ),
+                            ],
+                            onChanged: (v) =>
+                                setState(() => _selectedWarehouseId = v),
+                          ),
+                        ),
+                      ],
                     ),
                   ],
                 ),
-                const SizedBox(height: 16),
-                DropdownButtonFormField<String?>(
-                  decoration: const InputDecoration(
-                    labelText: 'Warehouse',
-                    helperText: 'Where this product is stored',
+
+                // ── Section 4: Raw Materials Used (Manufactured only) ────
+                if (_sourceType == _ProductSourceType.manufactured)
+                  ZohoFormSection(
+                    title: 'Raw Materials Used',
+                    subtitle:
+                        'How much of each raw material is consumed to build one unit of this product. Drives raw-material orders when production is scheduled.',
+                    children: [
+                      if (_bomRows.isEmpty)
+                        Container(
+                          width: double.infinity,
+                          padding: const EdgeInsets.symmetric(
+                              vertical: 16, horizontal: 12),
+                          decoration: BoxDecoration(
+                            color: AppColors.background,
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(color: AppColors.border),
+                          ),
+                          child: Text(
+                            widget.rawMaterials.isEmpty
+                                ? 'No raw materials defined yet. Add raw materials first, then come back to link them.'
+                                : 'No materials added yet. Click "Add Material" to specify how much of each is used per unit.',
+                            style: AppTextStyles.bodySmall
+                                .copyWith(color: AppColors.textSecondary),
+                          ),
+                        )
+                      else
+                        ..._bomRows.asMap().entries.map((e) {
+                          final i = e.key;
+                          final row = e.value;
+                          return Padding(
+                            padding: const EdgeInsets.only(bottom: 12),
+                            child: Row(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Expanded(
+                                  flex: 3,
+                                  child: DropdownButtonFormField<String>(
+                                    decoration: const InputDecoration(
+                                      labelText: 'Raw Material *',
+                                    ),
+                                    initialValue: row.rawMaterialId,
+                                    items: widget.rawMaterials
+                                        .map<DropdownMenuItem<String>>(
+                                          (rm) => DropdownMenuItem<String>(
+                                            value: rm.id as String,
+                                            child: Text(
+                                              '${rm.name} (${rm.sku})',
+                                              overflow: TextOverflow.ellipsis,
+                                            ),
+                                          ),
+                                        )
+                                        .toList(),
+                                    onChanged: (v) => setState(() {
+                                      row.rawMaterialId = v;
+                                      // Auto-fill UoM from the selected material.
+                                      final rm = widget.rawMaterials
+                                          .where((m) => m.id == v)
+                                          .firstOrNull;
+                                      if (rm != null) {
+                                        row.uom =
+                                            (rm.unitOfMeasure as String?) ??
+                                                row.uom;
+                                      }
+                                    }),
+                                    validator: (v) => (v == null || v.isEmpty)
+                                        ? 'Pick a raw material'
+                                        : null,
+                                  ),
+                                ),
+                                const SizedBox(width: 12),
+                                Expanded(
+                                  flex: 2,
+                                  child: TextFormField(
+                                    controller: row.qtyCtrl,
+                                    decoration: InputDecoration(
+                                      labelText: 'Qty per Unit *',
+                                      suffixText: row.uom,
+                                    ),
+                                    keyboardType:
+                                        const TextInputType.numberWithOptions(
+                                            decimal: true),
+                                    validator: (v) {
+                                      final n = double.tryParse(v ?? '');
+                                      if (n == null || n <= 0) {
+                                        return 'Enter qty > 0';
+                                      }
+                                      return null;
+                                    },
+                                  ),
+                                ),
+                                IconButton(
+                                  tooltip: 'Remove row',
+                                  icon: const Icon(Icons.remove_circle_outline,
+                                      color: AppColors.error),
+                                  onPressed: () => setState(() {
+                                    _bomRows[i].dispose();
+                                    _bomRows.removeAt(i);
+                                  }),
+                                ),
+                              ],
+                            ),
+                          );
+                        }),
+                      const SizedBox(height: 4),
+                      Align(
+                        alignment: Alignment.centerLeft,
+                        child: OutlinedButton.icon(
+                          onPressed: widget.rawMaterials.isEmpty
+                              ? null
+                              : () => setState(() => _bomRows.add(
+                                    _BomRowState(
+                                        uom: (widget.rawMaterials.first
+                                                .unitOfMeasure as String?) ??
+                                            'pcs'),
+                                  )),
+                          icon: const Icon(Icons.add, size: 18),
+                          label: const Text('Add Material'),
+                        ),
+                      ),
+                    ],
                   ),
-                  initialValue: _selectedWarehouseId,
-                  items: [
-                    const DropdownMenuItem<String?>(
-                      value: null,
-                      child: Text('Unassigned'),
-                    ),
-                    ...widget.warehouses.map<DropdownMenuItem<String?>>(
-                      (w) => DropdownMenuItem<String?>(
-                        value: w.id as String,
-                        child: Text('${w.name} — ${w.city}, ${w.country}'),
-                      ),
-                    ),
-                  ],
-                  onChanged: (v) => setState(() => _selectedWarehouseId = v),
-                ),
               ],
             ),
           ),
         ),
       ),
+      actionsPadding: const EdgeInsets.fromLTRB(24, 0, 24, 20),
       actions: [
         TextButton(
           onPressed: () => Navigator.pop(context),
@@ -878,6 +1194,7 @@ class _AddProductDialogState extends State<_AddProductDialog> {
           style: ElevatedButton.styleFrom(
             backgroundColor: AppColors.primary,
             foregroundColor: Colors.white,
+            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
           ),
           onPressed: _save,
           child: Text(_isEdit ? 'Save Changes' : 'Save Product'),
@@ -888,6 +1205,15 @@ class _AddProductDialogState extends State<_AddProductDialog> {
 
   Future<void> _save() async {
     if (!_formKey.currentState!.validate()) return;
+    // Enforce mutual exclusion on save: a product is either purchased from a
+    // supplier OR manufactured by a manufacturer, never both. This drives the
+    // replenishment branching downstream (PO vs ProductionOrder).
+    final supplierId = _sourceType == _ProductSourceType.purchased
+        ? _selectedSupplierId
+        : null;
+    final manufacturerId = _sourceType == _ProductSourceType.manufactured
+        ? _selectedManufacturerId
+        : null;
     final product = Product(
       id: widget.existingProduct?.id ?? '',
       sku: _skuCtrl.text.trim(),
@@ -895,18 +1221,58 @@ class _AddProductDialogState extends State<_AddProductDialog> {
       category: _categoryCtrl.text.trim(),
       unitCost: double.tryParse(_costCtrl.text) ?? 0,
       currentStock: int.tryParse(_stockCtrl.text) ?? 0,
-      supplierId: _selectedSupplierId,
-      manufacturerId: _selectedManufacturerId,
+      supplierId: supplierId,
+      manufacturerId: manufacturerId,
       warehouseId: _selectedWarehouseId,
       leadTimeDays: int.tryParse(_leadTimeCtrl.text) ?? 0,
     );
     final appState = context.read<AppState>();
     try {
+      final Product saved;
       if (_isEdit) {
         await appState.updateProduct(product);
+        saved = product;
       } else {
-        await appState.addProduct(product);
+        saved = await appState.addProduct(product);
       }
+
+      // ── BOM sync ────────────────────────────────────────────────────────
+      // A BOM only makes sense for manufactured products. For purchased
+      // products, remove any stale recipe. For manufactured products with no
+      // material rows, also remove the BOM (forecasts/replenishment will warn
+      // the user separately).
+      final existingBom = widget.existingBom;
+      if (_sourceType == _ProductSourceType.manufactured &&
+          _bomRows.isNotEmpty) {
+        final materials = _bomRows
+            .where((r) =>
+                r.rawMaterialId != null && r.rawMaterialId!.isNotEmpty)
+            .map((r) => BomMaterial(
+                  rawMaterialId: r.rawMaterialId!,
+                  quantityPerUnit:
+                      double.tryParse(r.qtyCtrl.text.trim()) ?? 0,
+                  unitOfMeasure: r.uom,
+                ))
+            .where((m) => m.quantityPerUnit > 0)
+            .toList();
+        if (materials.isNotEmpty) {
+          final bom = BillOfMaterials(
+            id: existingBom?.id ?? '',
+            finalProductId: saved.id,
+            materials: materials,
+          );
+          if (existingBom != null) {
+            await appState.updateBOM(bom);
+          } else {
+            await appState.addBOM(bom);
+          }
+        } else if (existingBom != null) {
+          await appState.deleteBOM(existingBom.id);
+        }
+      } else if (existingBom != null) {
+        await appState.deleteBOM(existingBom.id);
+      }
+
       if (!mounted) return;
       Navigator.pop(context);
       ScaffoldMessenger.of(context).showSnackBar(
@@ -931,6 +1297,9 @@ class _AddProductDialogState extends State<_AddProductDialog> {
     _costCtrl.dispose();
     _stockCtrl.dispose();
     _leadTimeCtrl.dispose();
+    for (final r in _bomRows) {
+      r.dispose();
+    }
     super.dispose();
   }
 }

@@ -133,11 +133,17 @@ class _ReplenishmentScreenState extends State<ReplenishmentScreen> {
       final adjustedRec = _adjustedQty.containsKey(r.productId)
           ? r.copyWith(suggestedOrderQty: _adjustedQty[r.productId])
           : r;
-      await state.approveRecommendation(adjustedRec);
+      if (isManufacture) {
+        await state.approveReplenishmentManufacture(adjustedRec);
+      } else {
+        await state.approveRecommendation(adjustedRec);
+      }
       final count = state.lastApprovalEmailsSent;
       final emailNote = count > 0
           ? ' — $count email${count == 1 ? '' : 's'} sent'
-          : ' (no supplier email on file)';
+          : isManufacture
+              ? ' (no factory email on file)'
+              : ' (no supplier email on file)';
       messenger.showSnackBar(SnackBar(
         content: Text('${r.productName} approved$emailNote'),
         backgroundColor: AppColors.success,
@@ -178,13 +184,18 @@ class _ReplenishmentScreenState extends State<ReplenishmentScreen> {
         final adjustedRec = _adjustedQty.containsKey(r.productId)
             ? r.copyWith(suggestedOrderQty: _adjustedQty[r.productId])
             : r;
+        final product = productMap[r.productId];
+        final isManufacture = product?.manufacturerId != null &&
+            product!.manufacturerId!.isNotEmpty;
         try {
-          await state.approveRecommendation(adjustedRec);
+          if (isManufacture) {
+            await state.approveReplenishmentManufacture(adjustedRec);
+          } else {
+            await state.approveRecommendation(adjustedRec);
+          }
         } on CloudFunctionException {
           emailsFailed++;
         }
-        final product = productMap[r.productId];
-        final isManufacture = product?.manufacturerId != null && product!.manufacturerId!.isNotEmpty;
         if (isManufacture) {
           mfgCount++;
         } else {

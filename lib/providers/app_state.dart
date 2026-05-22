@@ -431,12 +431,13 @@ class AppState extends ChangeNotifier {
 
   // ── Product CRUD ───────────────────────────────────────────────────────────
 
-  Future<void> addProduct(Product product) async {
+  Future<Product> addProduct(Product product) async {
     try {
       final saved = await _repo!.addProduct(product);
       _products.add(saved);
       _rebuildRecommendations();
       notifyListeners();
+      return saved;
     } catch (e) {
       _errorMessage = 'Failed to add product: $e';
       notifyListeners();
@@ -1026,6 +1027,12 @@ class AppState extends ChangeNotifier {
       _suppliers = results[2] as List<Supplier>;
       _demandByProduct = results[3] as Map<String, List<DomainDemandRecord>>;
 
+      // Re-key Shopify-imported demand records to the matching product.id.
+      // Cloud Functions store them under "shopify_<shopifyProductId>" but the
+      // products live under Firestore-generated IDs, so the forecast lookup
+      // misses them. Resolve the mapping client-side.
+      _remapShopifyDemand();
+
       await loadSettings();
 
       // Load Shopify connection state
@@ -1068,6 +1075,48 @@ class AppState extends ChangeNotifier {
 
   // ── Forecasting ────────────────────────────────────────────────────────────
 
+  /// Inspects whether a product has the supplier / manufacturer / lead-time /
+  /// pricing data required to take a forecast through to a real purchase or
+  /// production order. Returned object is meant to drive the UI gate on the
+  /// Forecasts screen.
+  ProductForecastReadiness productReadinessForForecast(String productId) {
+    final product = _products.where((p) => p.id == productId).firstOrNull;
+    if (product == null) {
+      return ProductForecastReadiness(
+        product: null,
+        supplier: null,
+        manufacturer: null,
+        missing: const ['product'],
+        hasDemandData: false,
+      );
+    }
+    final supplier = product.supplierId != null
+        ? _suppliers.where((s) => s.id == product.supplierId).firstOrNull
+        : null;
+    final manufacturer = product.manufacturerId != null
+        ? _manufacturers.where((m) => m.id == product.manufacturerId).firstOrNull
+        : null;
+    final hasDemandData = (_demandByProduct[productId]?.isNotEmpty ?? false);
+
+    final missing = <String>[];
+    if (supplier == null) missing.add('supplier');
+    if (manufacturer == null) missing.add('manufacturer');
+    if (product.leadTimeDays <= 0 &&
+        (supplier?.typicalLeadTimeDays ?? 0) <= 0) {
+      missing.add('leadTime');
+    }
+    if (product.unitCost <= 0) missing.add('unitCost');
+    if (!hasDemandData) missing.add('demandData');
+
+    return ProductForecastReadiness(
+      product: product,
+      supplier: supplier,
+      manufacturer: manufacturer,
+      missing: missing,
+      hasDemandData: hasDemandData,
+    );
+  }
+
   Future<void> runForecast(
     String productId,
     String algorithm,
@@ -1078,26 +1127,40 @@ class AppState extends ChangeNotifier {
     List<double> wmaWeights = const [1, 2, 3],
     int seasonLength = 12,
   }) async {
-    // Try backend first
+    // ── Resolve the actual algorithm to run ────────────────────────────────
+    // Special "Auto" mode picks the best algorithm based on the data shape.
+    final records = _demandByProduct[productId] ?? [];
+    if (records.isEmpty) {
+      throw Exception(
+          'No demand data found for this product. Add demand records first via the Sales History screen.');
+    }
+
+    String effectiveAlgorithm = algorithm;
+    if (algorithm == 'Auto') {
+      effectiveAlgorithm = _autoPickAlgorithm(records, seasonLength);
+    }
+
+    // Try backend first — but with a short timeout so we don't block the user
+    // when no backend is reachable. On any failure we fall back to local.
     try {
-      final result = await _backendApi.runForecast(
-        productId: productId,
-        method: algorithm,
-        windowSize: algorithm == 'SMA' ? smaWindow : null,
-        alpha: (algorithm == 'SES' || algorithm == 'Holt' || algorithm == 'HoltWinters') ? alpha : null,
-      );
+      final result = await _backendApi
+          .runForecast(
+            productId: productId,
+            method: effectiveAlgorithm,
+            windowSize: effectiveAlgorithm == 'SMA' ? smaWindow : null,
+            alpha: (effectiveAlgorithm == 'SES' ||
+                    effectiveAlgorithm == 'Holt' ||
+                    effectiveAlgorithm == 'HoltWinters')
+                ? alpha
+                : null,
+          )
+          .timeout(const Duration(seconds: 4));
       _currentForecast = ForecastResult.fromJson(result);
       await _persistForecastResult(_currentForecast!);
       notifyListeners();
       return;
     } catch (_) {
-      // Backend unavailable — fall back to local
-    }
-
-    final records = _demandByProduct[productId] ?? [];
-    if (records.isEmpty) {
-      throw Exception(
-          'No demand data found for this product. Add demand records first via the Demand Data screen.');
+      // Backend unavailable / slow / errored — fall back to local pure-Dart impl.
     }
 
     // Resolve lead time: product-level > supplier > 0
@@ -1118,7 +1181,7 @@ class AppState extends ChangeNotifier {
       productId: productId,
       periods: periods,
       demand: demand,
-      algorithm: algorithm,
+      algorithm: effectiveAlgorithm,
       smaWindow: smaWindow,
       alpha: alpha,
       beta: beta,
@@ -1132,6 +1195,151 @@ class AppState extends ChangeNotifier {
       await _persistForecastResult(_currentForecast!);
     }
     notifyListeners();
+  }
+
+  /// Re-maps demand records whose `productId` doesn't match any internal
+  /// product to the matching product's Firestore id. Supports records keyed by
+  /// "shopify_<shopifyId>", raw Shopify GIDs, or SKUs — anything that can be
+  /// resolved back to a product.
+  ///
+  /// This fixes the upstream mismatch where the `shopifyImportOrders` Cloud
+  /// Function writes demand records under "shopify_<shopifyProductId>" while
+  /// the products themselves live under Firestore-generated IDs.
+  void _remapShopifyDemand() {
+    if (_demandByProduct.isEmpty || _products.isEmpty) return;
+
+    final validIds = {for (final p in _products) p.id};
+
+    // Build lookup tables for resolution.
+    final byShopifyId = <String, String>{};
+    final bySku = <String, String>{};
+    for (final p in _products) {
+      final shop = p.shopifyProductId?.toString();
+      if (shop != null && shop.isNotEmpty) {
+        byShopifyId[shop] = p.id;
+      }
+      if (p.sku.isNotEmpty) {
+        bySku[p.sku.toLowerCase()] = p.id;
+      }
+    }
+
+    final remapped = <String, List<DomainDemandRecord>>{};
+    var moved = 0;
+
+    _demandByProduct.forEach((key, records) {
+      if (validIds.contains(key)) {
+        // Already keyed by a real product.id — keep as is.
+        (remapped[key] ??= []).addAll(records);
+        return;
+      }
+
+      // Strip the "shopify_" prefix if present.
+      String candidate = key;
+      if (candidate.startsWith('shopify_')) {
+        candidate = candidate.substring('shopify_'.length);
+      }
+
+      // Try Shopify ID, then SKU lookup.
+      final resolved =
+          byShopifyId[candidate] ?? bySku[candidate.toLowerCase()];
+
+      if (resolved != null) {
+        final fixed = records
+            .map((r) => DomainDemandRecord(
+                  id: r.id,
+                  productId: resolved,
+                  periodStart: r.periodStart,
+                  quantity: r.quantity,
+                  source: r.source,
+                  shopifyOrderId: r.shopifyOrderId,
+                ))
+            .toList();
+        (remapped[resolved] ??= []).addAll(fixed);
+        moved += records.length;
+      } else {
+        // Orphan — keep under original key so it still shows in Sales History,
+        // and surface the issue with a debug log.
+        (remapped[key] ??= []).addAll(records);
+      }
+    });
+
+    if (moved > 0) {
+      // ignore: avoid_print
+      print(
+          '[demand] Re-keyed $moved Shopify demand record(s) to internal product IDs.');
+    }
+
+    _demandByProduct = remapped;
+  }
+
+  /// Picks the best forecasting algorithm for [records] using simple heuristics:
+  /// - Not enough data (< 4 pts)            → SMA (most robust)
+  /// - Detected seasonality (≥ 2 cycles)    → HoltWinters
+  /// - Strong linear trend                  → Holt
+  /// - Stable / mildly noisy demand         → SES
+  /// - Otherwise (high noise, no trend)     → WMA
+  String _autoPickAlgorithm(
+      List<DomainDemandRecord> records, int seasonLength) {
+    if (records.length < 4) return 'SMA';
+
+    final sorted = [...records]
+      ..sort((a, b) => a.periodStart.compareTo(b.periodStart));
+    final demand =
+        sorted.map((r) => r.quantity.toDouble()).toList(growable: false);
+    final n = demand.length;
+
+    // 1. Seasonality: need at least 2 full cycles of length [seasonLength].
+    if (n >= seasonLength * 2) {
+      // Compute mean
+      final mean = demand.reduce((a, b) => a + b) / n;
+      // Compute season-index variance vs total variance
+      final seasonMeans = List<double>.filled(seasonLength, 0);
+      final seasonCounts = List<int>.filled(seasonLength, 0);
+      for (var i = 0; i < n; i++) {
+        seasonMeans[i % seasonLength] += demand[i];
+        seasonCounts[i % seasonLength]++;
+      }
+      double seasonalVar = 0;
+      for (var i = 0; i < seasonLength; i++) {
+        if (seasonCounts[i] == 0) continue;
+        final sm = seasonMeans[i] / seasonCounts[i];
+        seasonalVar += (sm - mean) * (sm - mean);
+      }
+      seasonalVar /= seasonLength;
+      final totalVar = demand
+              .map((d) => (d - mean) * (d - mean))
+              .fold<double>(0, (a, b) => a + b) /
+          n;
+      if (totalVar > 0 && seasonalVar / totalVar > 0.25) {
+        return 'HoltWinters';
+      }
+    }
+
+    // 2. Trend: linear regression slope significance.
+    final mean = demand.reduce((a, b) => a + b) / n;
+    final xs = List<double>.generate(n, (i) => i.toDouble());
+    final xMean = (n - 1) / 2.0;
+    double num = 0, den = 0;
+    for (var i = 0; i < n; i++) {
+      num += (xs[i] - xMean) * (demand[i] - mean);
+      den += (xs[i] - xMean) * (xs[i] - xMean);
+    }
+    final slope = den == 0 ? 0 : num / den;
+    // Slope per period vs mean — if abs(slope) > 2% of mean per period → trend
+    if (mean > 0 && (slope.abs() / mean) > 0.02) {
+      return 'Holt';
+    }
+
+    // 3. Noise level: coefficient of variation
+    final variance = demand
+            .map((d) => (d - mean) * (d - mean))
+            .fold<double>(0, (a, b) => a + b) /
+        n;
+    final stdDev = variance > 0 ? sqrt(variance) : 0.0;
+    final cv = mean > 0 ? stdDev / mean : 0.0;
+
+    if (cv < 0.35) return 'SES'; // Smooth, stable demand
+    return 'WMA'; // Volatile demand — weighted average dampens noise
   }
 
   /// Writes the latest forecast result to
@@ -1311,6 +1519,7 @@ class AppState extends ChangeNotifier {
     notifyListeners();
     try {
       _demandByProduct = await _repo!.getDemandHistory();
+      _remapShopifyDemand();
       classifyProducts();
       _rebuildRecommendations();
     } finally {
@@ -1468,6 +1677,7 @@ class AppState extends ChangeNotifier {
     // Reload demand data to pick up new records
     if (_repo != null) {
       _demandByProduct = await _repo!.getDemandHistory();
+      _remapShopifyDemand();
       _rebuildRecommendations();
     }
     // Notify about the import
@@ -2604,5 +2814,53 @@ class AppState extends ChangeNotifier {
       );
     }
     return decoded;
+  }
+}
+
+/// Result of inspecting a product for forecast prerequisites.
+class ProductForecastReadiness {
+  final Product? product;
+  final Supplier? supplier;
+  final Manufacturer? manufacturer;
+
+  /// Codes of missing prerequisites. Possible values:
+  /// 'product', 'supplier', 'manufacturer', 'leadTime', 'unitCost',
+  /// 'demandData'.
+  final List<String> missing;
+  final bool hasDemandData;
+
+  ProductForecastReadiness({
+    required this.product,
+    required this.supplier,
+    required this.manufacturer,
+    required this.missing,
+    required this.hasDemandData,
+  });
+
+  bool get isReady => missing.isEmpty;
+
+  /// Resolved lead time: product > supplier > 0.
+  int get effectiveLeadTimeDays {
+    if ((product?.leadTimeDays ?? 0) > 0) return product!.leadTimeDays;
+    return supplier?.typicalLeadTimeDays ?? 0;
+  }
+
+  String labelFor(String code) {
+    switch (code) {
+      case 'product':
+        return 'Product';
+      case 'supplier':
+        return 'Supplier link';
+      case 'manufacturer':
+        return 'Manufacturer link';
+      case 'leadTime':
+        return 'Lead time (days)';
+      case 'unitCost':
+        return 'Unit cost / pricing';
+      case 'demandData':
+        return 'Sales / demand history';
+      default:
+        return code;
+    }
   }
 }

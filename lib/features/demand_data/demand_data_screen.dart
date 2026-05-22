@@ -8,6 +8,7 @@ import 'package:ma5zony/models/demand_record.dart';
 import 'package:ma5zony/providers/app_state.dart';
 import 'package:ma5zony/utils/constants.dart';
 import 'package:ma5zony/widgets/shared_widgets.dart';
+import 'package:ma5zony/widgets/zoho_patterns.dart';
 
 class DemandDataScreen extends StatelessWidget {
   const DemandDataScreen({super.key});
@@ -21,44 +22,172 @@ class DemandDataScreen extends StatelessWidget {
     if (result == null || result.files.single.bytes == null) return;
     if (!context.mounted) return;
 
+    final state = context.read<AppState>();
+    final messenger = ScaffoldMessenger.of(context);
+
     final content = String.fromCharCodes(result.files.single.bytes!);
     final rows = const CsvDecoder().convert(content);
 
-    // Expect header: productId, periodStart (yyyy-MM-dd), quantity
-    if (rows.length < 2) return;
+    // Expect header (case-insensitive). Accepted column 0 names:
+    //   productId | sku | product | name
+    // Accepted column 1 names: periodStart | date | month
+    // Accepted column 2 names: quantity | qty | units
+    if (rows.length < 2) {
+      messenger.showSnackBar(const SnackBar(
+        content: Text('CSV is empty or missing data rows.'),
+        backgroundColor: Colors.red,
+      ));
+      return;
+    }
+
+    // Build lookup indexes for resolving the product identifier the user
+    // provided in column 0. We try (in order): exact id, exact sku, name.
+    final products = state.products;
+    final byId = {for (final p in products) p.id.toLowerCase(): p};
+    final bySku = {
+      for (final p in products)
+        if (p.sku.isNotEmpty) p.sku.toLowerCase(): p
+    };
+    final byName = {for (final p in products) p.name.toLowerCase(): p};
 
     final records = <DomainDemandRecord>[];
+    final unresolved = <String>{};
+    var skippedRows = 0;
+
     for (var i = 1; i < rows.length; i++) {
       final row = rows[i];
-      if (row.length < 3) continue;
-      final productId = row[0].toString().trim();
+      if (row.length < 3) {
+        skippedRows++;
+        continue;
+      }
+      final rawKey = row[0].toString().trim();
       final dateStr = row[1].toString().trim();
       final qty = int.tryParse(row[2].toString().trim()) ?? 0;
       final date = DateTime.tryParse(dateStr);
-      if (date == null || productId.isEmpty || qty <= 0) continue;
+      if (date == null || rawKey.isEmpty || qty <= 0) {
+        skippedRows++;
+        continue;
+      }
+
+      final key = rawKey.toLowerCase();
+      final product = byId[key] ?? bySku[key] ?? byName[key];
+      if (product == null) {
+        unresolved.add(rawKey);
+        continue;
+      }
+
       records.add(DomainDemandRecord(
         id: '',
-        productId: productId,
+        productId: product.id, // ALWAYS resolved to the Firestore product id
         periodStart: date,
         quantity: qty,
       ));
     }
 
     if (records.isEmpty) {
-      if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('No valid records found in CSV')),
-        );
-      }
+      if (!context.mounted) return;
+      await showDialog<void>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('Import failed'),
+          content: SingleChildScrollView(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Text(
+                  'No demand records were imported.',
+                  style: TextStyle(fontWeight: FontWeight.w600),
+                ),
+                const SizedBox(height: 12),
+                const Text('Expected CSV columns (header row required):'),
+                const SizedBox(height: 4),
+                const Text(
+                  '  1. Product (id, SKU, or name)\n'
+                  '  2. periodStart (yyyy-MM-dd)\n'
+                  '  3. quantity (positive integer)',
+                  style: TextStyle(fontFamily: 'monospace'),
+                ),
+                if (unresolved.isNotEmpty) ...[
+                  const SizedBox(height: 12),
+                  Text(
+                    '${unresolved.length} product identifier(s) could not be matched to any product in your catalog:',
+                  ),
+                  const SizedBox(height: 4),
+                  Container(
+                    constraints: const BoxConstraints(maxHeight: 160),
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: Colors.red.shade50,
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                    child: SingleChildScrollView(
+                      child: Text(
+                        unresolved.take(20).join(', ') +
+                            (unresolved.length > 20 ? ' …' : ''),
+                        style: const TextStyle(fontSize: 12),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  const Text(
+                    'Tip: add these products to your catalog first, or use their existing SKU / name exactly as it appears in Products.',
+                    style: TextStyle(fontSize: 12, fontStyle: FontStyle.italic),
+                  ),
+                ],
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: const Text('Close')),
+          ],
+        ),
+      );
       return;
     }
 
-    await context.read<AppState>().addDemandRecordsBatch(records);
-    if (context.mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('${records.length} record(s) imported')),
-      );
+    await state.addDemandRecordsBatch(records);
+    if (!context.mounted) return;
+
+    final parts = <String>['${records.length} record(s) imported'];
+    if (unresolved.isNotEmpty) {
+      parts.add('${unresolved.length} unmatched product(s) skipped');
     }
+    if (skippedRows > 0) parts.add('$skippedRows invalid row(s) skipped');
+
+    messenger.showSnackBar(SnackBar(
+      content: Text(parts.join(' · ')),
+      backgroundColor:
+          unresolved.isEmpty && skippedRows == 0 ? AppColors.success : null,
+      duration: const Duration(seconds: 6),
+      action: unresolved.isNotEmpty
+          ? SnackBarAction(
+              label: 'Details',
+              textColor: Colors.white,
+              onPressed: () {
+                showDialog<void>(
+                  context: context,
+                  builder: (ctx) => AlertDialog(
+                    title: const Text('Unmatched product identifiers'),
+                    content: SizedBox(
+                      width: 400,
+                      child: SingleChildScrollView(
+                        child: Text(unresolved.join('\n')),
+                      ),
+                    ),
+                    actions: [
+                      TextButton(
+                          onPressed: () => Navigator.pop(ctx),
+                          child: const Text('Close')),
+                    ],
+                  ),
+                );
+              },
+            )
+          : null,
+    ));
   }
 
   void _showAddRecordDialog(BuildContext context) {
@@ -157,7 +286,11 @@ class DemandDataScreen extends StatelessWidget {
                     OutlinedButton.icon(
                       onPressed: () => _importCsv(context),
                       icon: const Icon(Icons.file_upload),
-                      label: const Text('Import CSV'),
+                      label: const Tooltip(
+                        message:
+                            'CSV columns: product (id, SKU, or name), periodStart (yyyy-MM-dd), quantity',
+                        child: Text('Import CSV'),
+                      ),
                     ),
                     const SizedBox(width: 16),
                     ElevatedButton.icon(
@@ -475,90 +608,126 @@ class _AddDemandRecordDialogState extends State<_AddDemandRecordDialog> {
     final products = context.read<AppState>().products;
 
     return AlertDialog(
-      title: const Text('Add Demand Record'),
-      content: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 400),
+      titlePadding: const EdgeInsets.fromLTRB(24, 20, 24, 0),
+      contentPadding: const EdgeInsets.fromLTRB(24, 16, 24, 0),
+      title: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              color: AppColors.primary.withValues(alpha: 0.1),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: const Icon(Icons.show_chart,
+                size: 20, color: AppColors.primary),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('Add Demand Record', style: AppTextStyles.h3),
+                const SizedBox(height: 2),
+                Text(
+                  'Historical sales feed the forecasting engine.',
+                  style: AppTextStyles.bodySmall
+                      .copyWith(color: AppColors.textSecondary),
+                ),
+              ],
+            ),
+          ),
+          IconButton(
+            icon: const Icon(Icons.close, size: 20),
+            color: AppColors.textSecondary,
+            onPressed: () => Navigator.pop(context),
+          ),
+        ],
+      ),
+      content: SizedBox(
+        width: 460,
         child: Form(
           key: _formKey,
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Container(
-                padding: const EdgeInsets.all(10),
-                margin: const EdgeInsets.only(bottom: 16),
-                decoration: BoxDecoration(
-                  color: Colors.blue[50],
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: Colors.blue[200]!),
-                ),
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
+          child: SingleChildScrollView(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                ZohoFormSection(
+                  title: 'Record Details',
+                  subtitle:
+                      'Pick a product, units sold, and the month this represents.',
                   children: [
-                    Icon(Icons.info_outline, size: 14, color: Colors.blue[700]),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Text(
-                        'Demand records represent how many units of a product were sold or consumed in a given month. They feed the forecasting algorithms to predict future demand.',
-                        style: TextStyle(fontSize: 12, color: Colors.blue[700]),
+                    DropdownButtonFormField<String>(
+                      isExpanded: true,
+                      decoration: const InputDecoration(
+                        labelText: 'Product *',
+                      ),
+                      initialValue: _selectedProductId,
+                      items: products
+                          .map((p) => DropdownMenuItem(
+                                value: p.id,
+                                child: Text(p.name,
+                                    overflow: TextOverflow.ellipsis),
+                              ))
+                          .toList(),
+                      onChanged: (v) =>
+                          setState(() => _selectedProductId = v),
+                      validator: (v) =>
+                          v == null ? 'Select a product' : null,
+                    ),
+                    const SizedBox(height: 16),
+                    TextFormField(
+                      controller: _qtyCtrl,
+                      decoration: const InputDecoration(
+                        labelText: 'Quantity Sold *',
+                        suffixText: 'units',
+                      ),
+                      keyboardType: TextInputType.number,
+                      validator: (v) {
+                        if (v == null || v.trim().isEmpty) {
+                          return 'Quantity is required';
+                        }
+                        final val = int.tryParse(v);
+                        if (val == null || val <= 0) {
+                          return 'Enter a positive number';
+                        }
+                        return null;
+                      },
+                    ),
+                    const SizedBox(height: 16),
+                    InkWell(
+                      borderRadius: BorderRadius.circular(8),
+                      onTap: () async {
+                        final picked = await showDatePicker(
+                          context: context,
+                          initialDate: _selectedDate,
+                          firstDate: DateTime(2020),
+                          lastDate: DateTime.now(),
+                        );
+                        if (picked != null) {
+                          setState(() => _selectedDate = DateTime(
+                              picked.year, picked.month, 1));
+                        }
+                      },
+                      child: InputDecorator(
+                        decoration: const InputDecoration(
+                          labelText: 'Period (Month)',
+                          prefixIcon: Icon(Icons.calendar_today, size: 18),
+                        ),
+                        child: Text(
+                          DateFormat('MMMM yyyy').format(_selectedDate),
+                          style: AppTextStyles.body,
+                        ),
                       ),
                     ),
                   ],
                 ),
-              ),
-              DropdownButtonFormField<String>(
-                isExpanded: true,
-                decoration: const InputDecoration(
-                  labelText: 'Product',
-                  border: OutlineInputBorder(),
-                ),
-                initialValue: _selectedProductId,
-                items: products
-                    .map((p) => DropdownMenuItem(
-                          value: p.id,
-                          child: Text(p.name, overflow: TextOverflow.ellipsis),
-                        ))
-                    .toList(),
-                onChanged: (v) => setState(() => _selectedProductId = v),
-                validator: (v) => v == null ? 'Select a product' : null,
-              ),
-              const SizedBox(height: 16),
-              TextFormField(
-                controller: _qtyCtrl,
-                decoration: const InputDecoration(
-                  labelText: 'Quantity',
-                  border: OutlineInputBorder(),
-                ),
-                keyboardType: TextInputType.number,
-                validator: (v) {
-                  if (v == null || v.trim().isEmpty) return 'Quantity is required';
-                  final val = int.tryParse(v);
-                  if (val == null || val <= 0) return 'Enter a positive number';
-                  return null;
-                },
-              ),
-              const SizedBox(height: 16),
-              ListTile(
-                contentPadding: EdgeInsets.zero,
-                title: const Text('Period Start'),
-                subtitle: Text(DateFormat('MMM yyyy').format(_selectedDate)),
-                trailing: const Icon(Icons.calendar_today),
-                onTap: () async {
-                  final picked = await showDatePicker(
-                    context: context,
-                    initialDate: _selectedDate,
-                    firstDate: DateTime(2020),
-                    lastDate: DateTime.now(),
-                  );
-                  if (picked != null) {
-                    setState(() => _selectedDate = DateTime(picked.year, picked.month, 1));
-                  }
-                },
-              ),
-            ],
+              ],
+            ),
           ),
         ),
       ),
+      actionsPadding: const EdgeInsets.fromLTRB(24, 8, 24, 20),
       actions: [
         TextButton(
           onPressed: () => Navigator.pop(context),
@@ -587,7 +756,9 @@ class _AddDemandRecordDialogState extends State<_AddDemandRecordDialog> {
                     nav.pop();
                   } catch (e) {
                     messenger.showSnackBar(
-                      SnackBar(content: Text('Failed to add record: $e'), backgroundColor: Colors.red),
+                      SnackBar(
+                          content: Text('Failed to add record: $e'),
+                          backgroundColor: Colors.red),
                     );
                   }
                 },

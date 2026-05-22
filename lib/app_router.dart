@@ -267,18 +267,10 @@ GoRouter buildAppRouter(AppState appState) {
     // Setup wizard is accessible after login
     if (path == '/setup' && !loggedIn) return '/login';
 
-    // Force the setup wizard for owners that have not completed onboarding yet.
-    // Wait until the onboarding doc has been read so existing users don't bounce
-    // through /setup on every login. Once `onboardingComplete == true`, the
-    // redirect never fires again.
-    if (loggedIn &&
-        isOwner(appState.currentUser) &&
-        appState.onboardingStateLoaded &&
-        !appState.onboardingComplete &&
-        path != '/setup' &&
-        !loggingIn) {
-      return '/setup';
-    }
+    // NOTE: We no longer force owners through a standalone setup wizard route.
+    // The dashboard onboarding checklist IS the wizard — it appears on first
+    // login and guides the user through every phase. The /setup route is kept
+    // for backwards compatibility but is not forced.
 
     // Role-based route guard: block owner-only routes for Inventory Managers
     if (loggedIn) {

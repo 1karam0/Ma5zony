@@ -80,24 +80,30 @@ class SectionHeader extends StatelessWidget {
   Widget build(BuildContext context) {
     return Padding(
       padding: const EdgeInsets.only(bottom: 20.0),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.center,
+      child: Wrap(
+        spacing: 16,
+        runSpacing: 12,
+        alignment: WrapAlignment.spaceBetween,
+        crossAxisAlignment: WrapCrossAlignment.center,
         children: [
           Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             mainAxisSize: MainAxisSize.min,
             children: [
               Text(title, style: AppTextStyles.h2),
-              if (subtitle != null) ...
-                [
-                  const SizedBox(height: 2),
-                  Text(subtitle!, style: AppTextStyles.bodySmall),
-                ],
+              if (subtitle != null) ...[
+                const SizedBox(height: 2),
+                Text(subtitle!, style: AppTextStyles.bodySmall),
+              ],
             ],
           ),
-          const Spacer(),
           if (actions != null)
-            Row(mainAxisSize: MainAxisSize.min, children: actions!),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              children: actions!,
+            ),
         ],
       ),
     );

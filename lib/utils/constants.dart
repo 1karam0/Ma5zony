@@ -86,6 +86,20 @@ class AppColors {
   /// Dot indicator (status pills, nav badges) — small, high-contrast.
   static const dot = Color(0xFF202223);
 
+  // ── Zoho-inspired tokens ──────────────────────────────────────────────────
+  /// Active item background inside the sidebar (lighter than `sidebarBg`).
+  static const sidebarBgActive = Color(0xFF252542);
+  /// Card surface (alias of `surface` for new Zoho-pattern widgets).
+  static const surfaceCard = Color(0xFFFFFFFF);
+  /// Sunken surface used for inputs and contextual setup cards.
+  static const surfaceSunken = Color(0xFFF7F8FA);
+  /// Very subtle border — used in Zoho-style cards and form groups.
+  static const borderSubtle = Color(0xFFEEEFF1);
+  /// Help / placeholder text — softer than `textSubdued`.
+  static const textHelp = Color(0xFF9EA8B3);
+  /// Required field label color (Zoho pattern: red-ish label, no asterisk).
+  static const requiredLabel = Color(0xFFD9534F);
+
   /// Returns a [WidgetStateProperty] that highlights DataTable rows on hover.
   static WidgetStateProperty<Color?> get dataRowColor =>
       WidgetStateProperty.resolveWith<Color?>((states) {
@@ -269,6 +283,22 @@ class AppTextStyles {
         color: AppColors.textSubdued,
         height: 1.4,
       );
+
+  // ── Zoho-inspired tokens ──────────────────────────────────────────────────
+  /// Horizontal tab pill label (Dashboard / Getting Started / Help).
+  static TextStyle get tabLabel => GoogleFonts.inter(
+        fontSize: 13,
+        fontWeight: FontWeight.w500,
+        height: 1.3,
+      );
+
+  /// Form section heading (groups fields like "Basic Information").
+  static TextStyle get formSection => GoogleFonts.inter(
+        fontSize: 14,
+        fontWeight: FontWeight.w600,
+        color: AppColors.textPrimary,
+        height: 1.4,
+      );
 }
 
 /// Common shadow definitions.
@@ -374,3 +404,9 @@ const double kTopBarHeight = 52.0;
 const Duration kFlyoutOpenDelay = Duration(milliseconds: 120);
 /// Mouse-leave delay before flyout closes (ms).
 const Duration kFlyoutCloseDelay = Duration(milliseconds: 220);
+
+// ── Zoho-inspired tokens ────────────────────────────────────────────────────
+/// Height of the horizontal tab bar (Dashboard / Getting Started / Help).
+const double kHorizontalTabHeight = 44.0;
+/// Mobile bottom navigation bar height.
+const double kBottomNavHeight = 64.0;

@@ -6,19 +6,31 @@ import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 import 'package:ma5zony/features/forecasts/algorithm_breakdown_panel.dart';
+import 'package:ma5zony/features/products/products_screen.dart' show showProductEditDialog;
 import 'package:ma5zony/models/product.dart';
 import 'package:ma5zony/models/replenishment_recommendation.dart';
 import 'package:ma5zony/models/supplier.dart';
+import 'package:ma5zony/models/manufacturer.dart';
 import 'package:ma5zony/providers/app_state.dart';
 import 'package:ma5zony/models/forecast_result.dart';
 import 'package:ma5zony/services/settings_service.dart';
 import 'package:ma5zony/utils/constants.dart';
 import 'package:ma5zony/utils/download_helper.dart';
 import 'package:ma5zony/widgets/shared_widgets.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 // ── Algorithm metadata ──────────────────────────────────────────────────────
 
 const _algorithms = [
+  _AlgoMeta(
+    code: 'Auto',
+    label: 'Auto',
+    fullName: 'Smart Algorithm Selection',
+    icon: Icons.auto_awesome,
+    description:
+        'Let Ma5zony pick the best algorithm based on your data shape — '
+        'seasonality, trend, and noise. Recommended for most users.',
+  ),
   _AlgoMeta(
     code: 'SMA',
     label: 'SMA',
@@ -160,11 +172,20 @@ class _ForecastsScreenState extends State<ForecastsScreen> {
       );
     } catch (e) {
       if (mounted) {
+        final msg = e.toString().replaceAll('Exception: ', '');
+        final isNoData = msg.toLowerCase().contains('no demand data');
         messenger.showSnackBar(SnackBar(
-          content: Text('Forecast failed: ${e.toString().replaceAll('Exception: ', '')}'),
+          content: Text('Forecast failed: $msg'),
           backgroundColor: Colors.red[700],
           behavior: SnackBarBehavior.floating,
-          action: SnackBarAction(label: 'Dismiss', textColor: Colors.white, onPressed: () {}),
+          duration: const Duration(seconds: 8),
+          action: SnackBarAction(
+            label: isNoData ? 'Add demand data' : 'Dismiss',
+            textColor: Colors.white,
+            onPressed: () {
+              if (isNoData && mounted) context.go('/demand-data');
+            },
+          ),
         ));
       }
     } finally {
@@ -175,13 +196,40 @@ class _ForecastsScreenState extends State<ForecastsScreen> {
   @override
   Widget build(BuildContext context) {
     final state = context.watch<AppState>();
-    final products = state.products;
     final ForecastResult? forecast = state.currentForecast;
 
     if (state.isLoading) return const Center(child: CircularProgressIndicator());
 
-    // Sync product selection when products load (safe: no setState during build)
+    // Deduplicate by id to avoid DropdownButton assertion when Shopify import
+    // or state reload results in duplicate entries.
+    final seenIds = <String>{};
+    final products = state.products.where((p) => seenIds.add(p.id)).toList();
+
+    // Guard the selected id: if it no longer exists in the current list,
+    // reset to the first available product (or null) in the next frame.
+    final safeSelectedId =
+        products.any((p) => p.id == _selectedProductId) ? _selectedProductId : null;
+    if (safeSelectedId == null && _selectedProductId != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          setState(() {
+            _selectedProductId =
+                products.isNotEmpty ? products.first.id : null;
+          });
+        }
+      });
+    }
+
     final algoMeta = _algorithms.firstWhere((a) => a.code == _algorithm, orElse: () => _algorithms.first);
+
+    // Evaluate forecast prerequisites for the selected product (supplier,
+    // manufacturer, lead time, pricing, demand data). Used to gate Run Forecast
+    // and to render the readiness card in the Configuration panel.
+    final readiness = safeSelectedId == null
+        ? null
+        : state.productReadinessForForecast(safeSelectedId);
+    final canRunForecast =
+        safeSelectedId != null && (readiness?.isReady ?? false);
 
     return DefaultTabController(
       length: 2,
@@ -236,16 +284,62 @@ class _ForecastsScreenState extends State<ForecastsScreen> {
                                       ),
                                       child: DropdownButtonHideUnderline(
                                         child: DropdownButton<String>(
-                                          value: _selectedProductId,
+                                          value: safeSelectedId,
                                           isExpanded: true,
                                           isDense: true,
                                           hint: const Text('Select product', style: TextStyle(fontSize: 14)),
-                                          items: products
-                                              .map((p) => DropdownMenuItem(
-                                                    value: p.id,
-                                                    child: Text(p.name, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 14)),
-                                                  ))
-                                              .toList(),
+                                          items: products.map((p) {
+                                            final count = state
+                                                    .demandByProduct[p.id]
+                                                    ?.length ??
+                                                0;
+                                            return DropdownMenuItem(
+                                              value: p.id,
+                                              child: Row(
+                                                children: [
+                                                  Expanded(
+                                                    child: Text(p.name,
+                                                        overflow: TextOverflow
+                                                            .ellipsis,
+                                                        style: const TextStyle(
+                                                            fontSize: 14)),
+                                                  ),
+                                                  Container(
+                                                    padding: const EdgeInsets
+                                                        .symmetric(
+                                                        horizontal: 6,
+                                                        vertical: 2),
+                                                    decoration: BoxDecoration(
+                                                      color: count > 0
+                                                          ? AppColors.success
+                                                              .withValues(
+                                                                  alpha: 0.12)
+                                                          : Colors.grey
+                                                              .withValues(
+                                                                  alpha: 0.15),
+                                                      borderRadius:
+                                                          BorderRadius.circular(
+                                                              4),
+                                                    ),
+                                                    child: Text(
+                                                      count > 0
+                                                          ? '$count rec'
+                                                          : 'no data',
+                                                      style: TextStyle(
+                                                        fontSize: 10,
+                                                        fontWeight:
+                                                            FontWeight.w600,
+                                                        color: count > 0
+                                                            ? AppColors.success
+                                                            : Colors
+                                                                .grey.shade600,
+                                                      ),
+                                                    ),
+                                                  ),
+                                                ],
+                                              ),
+                                            );
+                                          }).toList(),
                                           onChanged: (v) {
                                             setState(() => _selectedProductId = v);
                                             context.read<AppState>().clearCurrentForecast();
@@ -253,7 +347,13 @@ class _ForecastsScreenState extends State<ForecastsScreen> {
                                         ),
                                       ),
                                     ),
-                                    const SizedBox(height: 24),
+                                    const SizedBox(height: 12),
+                                    if (readiness != null)
+                                      _ReadinessGate(
+                                        readiness: readiness,
+                                        windowMonths: _smaWindow.toInt(),
+                                      ),
+                                    const SizedBox(height: 12),
                                     Text('Forecasting Algorithm', style: AppTextStyles.label.copyWith(fontWeight: FontWeight.w600)),
                                     const SizedBox(height: 10),
                                     _AlgorithmSelector(
@@ -305,14 +405,18 @@ class _ForecastsScreenState extends State<ForecastsScreen> {
                                     SizedBox(
                                       width: double.infinity,
                                       child: ElevatedButton.icon(
-                                        onPressed: _running || _selectedProductId == null ? null : _runForecast,
+                                        onPressed: _running || !canRunForecast ? null : _runForecast,
                                         icon: _running
                                             ? const SizedBox(
                                                 width: 16, height: 16,
                                                 child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2),
                                               )
                                             : const Icon(Icons.play_arrow),
-                                        label: Text(_running ? 'Running…' : 'Run Forecast'),
+                                        label: Text(_running
+                                            ? 'Running…'
+                                            : (canRunForecast
+                                                ? 'Run Forecast'
+                                                : 'Complete setup to run')),
                                         style: ElevatedButton.styleFrom(
                                           padding: const EdgeInsets.symmetric(vertical: 14),
                                           backgroundColor: AppColors.primary,
@@ -369,6 +473,13 @@ class _ForecastsScreenState extends State<ForecastsScreen> {
                                         state: context.read<AppState>(),
                                       ),
                                       const SizedBox(height: 20),
+                                      if (readiness != null && readiness.isReady)
+                                        _OrderEmailActionsCard(
+                                          forecast: forecast,
+                                          readiness: readiness,
+                                        ),
+                                      if (readiness != null && readiness.isReady)
+                                        const SizedBox(height: 20),
                                       _ForecastDataTable(forecast: forecast),
                                       // RM Order CTA
                                       if (_selectedProductId != null &&
@@ -728,49 +839,55 @@ class _ForecastKpiRow extends StatelessWidget {
     final accuracy = forecast.mape != null ? (1 - forecast.mape!) * 100 : 0.0;
     final nextPeriod = forecast.nextPeriodForecast.round();
 
-    return Row(
-      children: [
-        Expanded(
-          child: KPICard(
-            title: 'Forecast Accuracy',
-            value: '${accuracy.toStringAsFixed(1)}%',
-            icon: Icons.verified,
-            color: accuracy >= 90 ? AppColors.success : (accuracy >= 75 ? AppColors.warning : AppColors.error),
-          ),
+    return LayoutBuilder(builder: (context, constraints) {
+      // Each KPI card needs ~160px to render its label and value comfortably.
+      // Pick how many fit per row, then size cards to fill width evenly.
+      final perRow = (constraints.maxWidth / 170).floor().clamp(1, 4);
+      final spacing = 12.0;
+      final cardWidth =
+          (constraints.maxWidth - (perRow - 1) * spacing) / perRow;
+      final cards = <Widget>[
+        KPICard(
+          title: 'Forecast Accuracy',
+          value: '${accuracy.toStringAsFixed(1)}%',
+          icon: Icons.verified,
+          color: accuracy >= 90
+              ? AppColors.success
+              : (accuracy >= 75 ? AppColors.warning : AppColors.error),
         ),
-        const SizedBox(width: 12),
-        Expanded(
-          child: KPICard(
-            title: 'MAPE',
-            value: mape == 0 ? '-' : '${mape.toStringAsFixed(1)}%',
-            icon: Icons.functions,
-            color: mape == 0
-                ? AppColors.textSecondary
-                : (mape < 10 ? AppColors.success : (mape < 20 ? AppColors.warning : AppColors.error)),
-          ),
+        KPICard(
+          title: 'MAPE',
+          value: mape == 0 ? '-' : '${mape.toStringAsFixed(1)}%',
+          icon: Icons.functions,
+          color: mape == 0
+              ? AppColors.textSecondary
+              : (mape < 10
+                  ? AppColors.success
+                  : (mape < 20 ? AppColors.warning : AppColors.error)),
         ),
-        const SizedBox(width: 12),
-        Expanded(
-          child: KPICard(
-            title: 'Next Period',
-            value: '$nextPeriod units',
-            icon: Icons.next_plan,
-            color: AppColors.primary,
-          ),
+        KPICard(
+          title: 'Next Period',
+          value: '$nextPeriod units',
+          icon: Icons.next_plan,
+          color: AppColors.primary,
         ),
-        if (forecast.rmse != null) ...[
-          const SizedBox(width: 12),
-          Expanded(
-            child: KPICard(
-              title: 'RMSE',
-              value: forecast.rmse!.toStringAsFixed(1),
-              icon: Icons.analytics_outlined,
-              color: AppColors.info,
-            ),
+        if (forecast.rmse != null)
+          KPICard(
+            title: 'RMSE',
+            value: forecast.rmse!.toStringAsFixed(1),
+            icon: Icons.analytics_outlined,
+            color: AppColors.info,
           ),
-        ],
-      ],
-    );
+      ];
+
+      return Wrap(
+        spacing: spacing,
+        runSpacing: spacing,
+        children: cards
+            .map((c) => SizedBox(width: cardWidth, child: c))
+            .toList(),
+      );
+    });
   }
 }
 
@@ -1658,13 +1775,18 @@ class _ReplenishmentTabState extends State<_ReplenishmentTab> {
         final adjustedRec = _adjustedQty.containsKey(r.productId)
             ? r.copyWith(suggestedOrderQty: _adjustedQty[r.productId])
             : r;
+        final product = productMap[r.productId];
+        final isManufacture = product?.manufacturerId != null &&
+            product!.manufacturerId!.isNotEmpty;
         try {
-          await state.approveRecommendation(adjustedRec);
+          if (isManufacture) {
+            await state.approveReplenishmentManufacture(adjustedRec);
+          } else {
+            await state.approveRecommendation(adjustedRec);
+          }
         } on CloudFunctionException {
           emailsFailed++;
         }
-        final product = productMap[r.productId];
-        final isManufacture = product?.manufacturerId != null && product!.manufacturerId!.isNotEmpty;
         if (isManufacture) {
           mfgCount++;
         } else {
@@ -2665,3 +2787,538 @@ class _RmOrderCta extends StatelessWidget {
     );
   }
 }
+
+// ── Forecast Readiness Gate ──────────────────────────────────────────────────
+// Shows what's missing from the selected product (supplier link, manufacturer
+// link, lead time, pricing, or demand history) and lets the user jump
+// straight to where they can fix it. When everything is in place, renders
+// a compact green "Ready" badge instead.
+
+class _ReadinessGate extends StatefulWidget {
+  final ProductForecastReadiness readiness;
+  final int windowMonths;
+  const _ReadinessGate({required this.readiness, required this.windowMonths});
+
+  @override
+  State<_ReadinessGate> createState() => _ReadinessGateState();
+}
+
+class _ReadinessGateState extends State<_ReadinessGate> {
+  bool _importing = false;
+
+  ProductForecastReadiness get readiness => widget.readiness;
+
+  Future<void> _openProductEditor() async {
+    final product = readiness.product;
+    if (product == null) return;
+    await showProductEditDialog(context, product);
+  }
+
+  Future<void> _importSalesForProduct() async {
+    final product = readiness.product;
+    if (product == null) return;
+    final state = context.read<AppState>();
+    final messenger = ScaffoldMessenger.of(context);
+
+    if (state.shopifyConnection?.isConnected != true) {
+      // No Shopify — offer to connect, or fall back to the manual demand-data screen.
+      final choice = await showDialog<String>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('Where should sales data come from?'),
+          content: Text(
+            'To automatically import the last ${widget.windowMonths} months of '
+            'real sales for "${product.name}", connect your Shopify store. '
+            'Otherwise you can enter sales manually or import a CSV.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, 'manual'),
+              child: const Text('Enter manually'),
+            ),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppColors.primary,
+                foregroundColor: Colors.white,
+              ),
+              onPressed: () => Navigator.pop(ctx, 'shopify'),
+              child: const Text('Connect Shopify'),
+            ),
+          ],
+        ),
+      );
+      if (!mounted) return;
+      if (choice == 'shopify') {
+        context.go('/integrations');
+      } else if (choice == 'manual') {
+        context.go('/demand-data');
+      }
+      return;
+    }
+
+    setState(() => _importing = true);
+    messenger.showSnackBar(SnackBar(
+      content: Text(
+          'Importing last ${widget.windowMonths} months of Shopify sales for "${product.name}"…'),
+      duration: const Duration(seconds: 60),
+    ));
+    try {
+      final importResult = await state.importShopifyOrders();
+      // Count how many records now fall within the requested window for this product.
+      final cutoff = DateTime.now()
+          .subtract(Duration(days: widget.windowMonths * 30));
+      final updated = state.productReadinessForForecast(product.id);
+      final recsForProduct = (state.demandByProduct[product.id] ?? const [])
+          .where((r) => r.periodStart.isAfter(cutoff))
+          .length;
+
+      messenger.clearSnackBars();
+      if (!mounted) return;
+
+      if (recsForProduct > 0) {
+        messenger.showSnackBar(SnackBar(
+          backgroundColor: updated.hasDemandData
+              ? AppColors.success
+              : AppColors.warning,
+          content: Text(
+              '$recsForProduct sales record(s) for "${product.name}" in the last ${widget.windowMonths} months are now available.'),
+          duration: const Duration(seconds: 6),
+        ));
+      } else {
+        // No match for this product — build a helpful diagnostic using the
+        // cloud function's unmatchedSamples list (if any).
+        String detail = 'The product name/SKU may not match any Shopify variant.';
+        final samples = importResult?['unmatchedSamples'];
+        if (samples is List && samples.isNotEmpty) {
+          final hints = samples
+              .take(3)
+              .map((s) {
+                final m = (s as Map);
+                final sku = (m['sku'] ?? '').toString();
+                final title = (m['title'] ?? m['productTitle'] ?? '').toString();
+                if (sku.isNotEmpty && title.isNotEmpty) return '"$title" (SKU $sku)';
+                if (sku.isNotEmpty) return 'SKU $sku';
+                return title;
+              })
+              .where((h) => h.isNotEmpty)
+              .toList();
+          if (hints.isNotEmpty) {
+            detail = 'Unmatched Shopify items: ${hints.join(", ")}. '
+                'Open Edit product and set the SKU to match one of these.';
+          }
+        }
+        messenger.showSnackBar(SnackBar(
+          backgroundColor: AppColors.warning,
+          content: Text(
+              'No Shopify sales found for "${product.name}" in the last ${widget.windowMonths} months. $detail'),
+          duration: const Duration(seconds: 10),
+        ));
+      }
+    } catch (e) {
+      messenger.clearSnackBars();
+      if (!mounted) return;
+      messenger.showSnackBar(SnackBar(
+        backgroundColor: AppColors.error,
+        content: Text('Shopify import failed: $e'),
+        duration: const Duration(seconds: 5),
+      ));
+    } finally {
+      if (mounted) setState(() => _importing = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (readiness.product == null) {
+      return _box(
+        bg: AppColors.error.withValues(alpha: 0.08),
+        border: AppColors.error.withValues(alpha: 0.4),
+        icon: Icons.error_outline,
+        iconColor: AppColors.error,
+        title: 'Pick a product to begin',
+        body: const Text(
+          'Forecasts need a product, its supplier, its manufacturer, lead times, '
+          'pricing, and at least some sales history.',
+          style: TextStyle(fontSize: 12, color: AppColors.textSecondary),
+        ),
+      );
+    }
+
+    if (readiness.isReady) {
+      final lt = readiness.effectiveLeadTimeDays;
+      return _box(
+        bg: AppColors.success.withValues(alpha: 0.08),
+        border: AppColors.success.withValues(alpha: 0.4),
+        icon: Icons.check_circle_outline,
+        iconColor: AppColors.success,
+        title: 'Ready to forecast',
+        body: Text(
+          'Supplier: ${readiness.supplier!.name}\n'
+          'Manufacturer: ${readiness.manufacturer!.name}\n'
+          'Lead time: $lt day${lt == 1 ? '' : 's'}  •  Unit cost: '
+          '${readiness.product!.unitCost.toStringAsFixed(2)}',
+          style: const TextStyle(fontSize: 12, color: AppColors.textSecondary),
+        ),
+      );
+    }
+
+    final needsProductEdit = readiness.missing.any((m) =>
+        m == 'supplier' ||
+        m == 'manufacturer' ||
+        m == 'leadTime' ||
+        m == 'unitCost');
+
+    return _box(
+      bg: AppColors.warning.withValues(alpha: 0.10),
+      border: AppColors.warning.withValues(alpha: 0.5),
+      icon: Icons.warning_amber_rounded,
+      iconColor: AppColors.warning,
+      title: 'Set up this product before forecasting',
+      body: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            'A forecast needs the following data so the system can recommend '
+            'order quantities and reach the right partners:',
+            style: TextStyle(fontSize: 12, color: AppColors.textSecondary),
+          ),
+          const SizedBox(height: 8),
+          ...readiness.missing.map((code) => Padding(
+                padding: const EdgeInsets.only(left: 2, top: 2),
+                child: Row(
+                  children: [
+                    const Icon(Icons.close, size: 14, color: AppColors.error),
+                    const SizedBox(width: 6),
+                    Text(readiness.labelFor(code),
+                        style: const TextStyle(
+                            fontSize: 12, color: AppColors.textPrimary)),
+                  ],
+                ),
+              )),
+          const SizedBox(height: 10),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              if (needsProductEdit)
+                OutlinedButton.icon(
+                  onPressed: _openProductEditor,
+                  icon: const Icon(Icons.edit, size: 14),
+                  label: Text(_productEditLabel()),
+                  style: OutlinedButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 10, vertical: 4),
+                    visualDensity: VisualDensity.compact,
+                  ),
+                ),
+              if (readiness.missing.contains('demandData'))
+                OutlinedButton.icon(
+                  onPressed: _importing ? null : _importSalesForProduct,
+                  icon: _importing
+                      ? const SizedBox(
+                          width: 12,
+                          height: 12,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.cloud_download_outlined, size: 14),
+                  label: Text(_importing
+                      ? 'Importing…'
+                      : 'Import last ${widget.windowMonths} months of sales'),
+                  style: OutlinedButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 10, vertical: 4),
+                    visualDensity: VisualDensity.compact,
+                  ),
+                ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  String _productEditLabel() {
+    // Surface exactly which field the editor is for, so the user knows it
+    // takes them to the right section of the product form.
+    final fixes = <String>[];
+    if (readiness.missing.contains('supplier')) fixes.add('supplier');
+    if (readiness.missing.contains('manufacturer')) fixes.add('manufacturer');
+    if (readiness.missing.contains('leadTime')) fixes.add('lead time');
+    if (readiness.missing.contains('unitCost')) fixes.add('unit cost');
+    if (fixes.isEmpty) return 'Edit product';
+    if (fixes.length == 1) return 'Link ${fixes.first} on product';
+    return 'Edit product (set ${fixes.join(', ')})';
+  }
+
+  Widget _box({
+    required Color bg,
+    required Color border,
+    required IconData icon,
+    required Color iconColor,
+    required String title,
+    required Widget body,
+  }) {
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: bg,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: border),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(icon, size: 16, color: iconColor),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Text(title,
+                    style: TextStyle(
+                        fontWeight: FontWeight.w700,
+                        fontSize: 13,
+                        color: iconColor)),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          body,
+        ],
+      ),
+    );
+  }
+}
+
+// ── Order Email Actions ──────────────────────────────────────────────────────
+// Shown after a successful forecast. Surfaces the recommended order quantity
+// (forecast scaled to lead time) and two big buttons that compose pre-filled
+// emails to the supplier and the manufacturer via mailto:.
+
+class _OrderEmailActionsCard extends StatelessWidget {
+  final ForecastResult forecast;
+  final ProductForecastReadiness readiness;
+
+  const _OrderEmailActionsCard({
+    required this.forecast,
+    required this.readiness,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final product = readiness.product!;
+    final supplier = readiness.supplier!;
+    final manufacturer = readiness.manufacturer!;
+
+    // Recommended quantity = next-period forecast scaled to the resolved
+    // lead time (assume monthly periods → 30 days). Rounded up to whole units.
+    final lt = readiness.effectiveLeadTimeDays;
+    final next = forecast.nextPeriodForecast;
+    final scaled = lt > 0 ? next * (lt / 30.0) : next;
+    final recommendedQty = scaled <= 0 ? 0 : scaled.ceil();
+    final totalCost = recommendedQty * product.unitCost;
+
+    return Container(
+      padding: const EdgeInsets.all(18),
+      decoration: BoxDecoration(
+        color: AppColors.primary.withValues(alpha: 0.05),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: AppColors.primary.withValues(alpha: 0.3)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.mark_email_unread_outlined,
+                  color: AppColors.primary, size: 20),
+              const SizedBox(width: 10),
+              Text(
+                'Notify supplier & manufacturer',
+                style: const TextStyle(
+                    fontWeight: FontWeight.w700,
+                    fontSize: 15,
+                    color: AppColors.primary),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Text(
+            'Based on your forecast of ${next.toStringAsFixed(1)} '
+            'units/period and a lead time of $lt days, you need to order '
+            'about $recommendedQty unit${recommendedQty == 1 ? '' : 's'} of '
+            '${product.name} (~${totalCost.toStringAsFixed(2)} at '
+            '${product.unitCost.toStringAsFixed(2)}/unit).',
+            style: const TextStyle(
+                fontSize: 13, color: AppColors.textSecondary),
+          ),
+          const SizedBox(height: 14),
+          LayoutBuilder(builder: (ctx, constraints) {
+            final stacked = constraints.maxWidth < 460;
+            final supBtn = _emailButton(
+              label: 'Email supplier',
+              subtitle: supplier.name,
+              icon: Icons.local_shipping_outlined,
+              enabled: supplier.contactEmail.isNotEmpty,
+              onPressed: () => _sendSupplierEmail(
+                  context, product, supplier, recommendedQty, totalCost, lt),
+            );
+            final mfgBtn = _emailButton(
+              label: 'Email manufacturer',
+              subtitle: manufacturer.name,
+              icon: Icons.precision_manufacturing_outlined,
+              enabled: manufacturer.contactEmail.isNotEmpty,
+              onPressed: () => _sendManufacturerEmail(
+                  context, product, manufacturer, recommendedQty, lt),
+            );
+            if (stacked) {
+              return Column(children: [
+                supBtn,
+                const SizedBox(height: 8),
+                mfgBtn,
+              ]);
+            }
+            return Row(children: [
+              Expanded(child: supBtn),
+              const SizedBox(width: 12),
+              Expanded(child: mfgBtn),
+            ]);
+          }),
+        ],
+      ),
+    );
+  }
+
+  Widget _emailButton({
+    required String label,
+    required String subtitle,
+    required IconData icon,
+    required bool enabled,
+    required VoidCallback onPressed,
+  }) {
+    return Tooltip(
+      message: enabled ? '' : 'No contact email on file',
+      child: ElevatedButton(
+        onPressed: enabled ? onPressed : null,
+        style: ElevatedButton.styleFrom(
+          backgroundColor: AppColors.primary,
+          foregroundColor: Colors.white,
+          padding:
+              const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+          shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(8)),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 18),
+            const SizedBox(width: 10),
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(label,
+                    style: const TextStyle(
+                        fontSize: 13, fontWeight: FontWeight.w700)),
+                Text(subtitle,
+                    style: const TextStyle(
+                        fontSize: 11, fontWeight: FontWeight.w400)),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _sendSupplierEmail(
+    BuildContext context,
+    Product product,
+    Supplier supplier,
+    int qty,
+    double totalCost,
+    int leadDays,
+  ) async {
+    final subject = 'Purchase request: $qty × ${product.name} (SKU ${product.sku})';
+    final body = [
+      'Hello ${supplier.name},',
+      '',
+      'Based on our latest demand forecast, we would like to place an order:',
+      '',
+      'Product : ${product.name}',
+      'SKU     : ${product.sku}',
+      'Quantity: $qty units',
+      'Unit cost: ${product.unitCost.toStringAsFixed(2)}',
+      'Estimated total: ${totalCost.toStringAsFixed(2)}',
+      'Requested lead time: $leadDays days',
+      '',
+      'Please confirm availability, pricing, and the earliest delivery date.',
+      '',
+      'Thank you,',
+      'Ma5zony',
+    ].join('\n');
+    await _launchMail(context, supplier.contactEmail, subject, body);
+  }
+
+  Future<void> _sendManufacturerEmail(
+    BuildContext context,
+    Product product,
+    Manufacturer manufacturer,
+    int qty,
+    int leadDays,
+  ) async {
+    final subject = 'Production request: $qty × ${product.name} (SKU ${product.sku})';
+    final body = [
+      'Hello ${manufacturer.name},',
+      '',
+      'Based on our latest demand forecast, we need to schedule production:',
+      '',
+      'Product : ${product.name}',
+      'SKU     : ${product.sku}',
+      'Quantity: $qty units',
+      'Target lead time: $leadDays days',
+      'Production capacity (your records): ${manufacturer.productionCapacity} units / cycle',
+      'Typical production time: ${manufacturer.typicalProductionDays} days',
+      '',
+      'Please confirm whether this volume is feasible within the lead time '
+          'and share any constraints on raw materials.',
+      '',
+      'Thank you,',
+      'Ma5zony',
+    ].join('\n');
+    await _launchMail(context, manufacturer.contactEmail, subject, body);
+  }
+
+  Future<void> _launchMail(BuildContext context, String to, String subject,
+      String body) async {
+    final uri = Uri(
+      scheme: 'mailto',
+      path: to,
+      query: 'subject=${Uri.encodeComponent(subject)}'
+          '&body=${Uri.encodeComponent(body)}',
+    );
+    try {
+      final ok = await launchUrl(uri);
+      if (!ok && context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('Could not open email client. Recipient: $to'),
+          backgroundColor: Colors.red[700],
+        ));
+      } else if (ok && context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('Opening email to $to…'),
+          backgroundColor: AppColors.success,
+          behavior: SnackBarBehavior.floating,
+          duration: const Duration(seconds: 3),
+        ));
+      }
+    } catch (e) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('Failed to launch email: $e'),
+          backgroundColor: Colors.red[700],
+        ));
+      }
+    }
+  }
+}
+

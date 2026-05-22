@@ -129,6 +129,11 @@ class _IntegrationsScreenState extends State<IntegrationsScreen> {
                               ),
                             ),
                           ),
+                          const SizedBox(height: 8),
+                          SizedBox(
+                            width: 380,
+                            child: _ShopifyUrlHelp(),
+                          ),
                           const SizedBox(height: 16),
                         ],
                         Row(
@@ -492,6 +497,121 @@ class _CapabilityItem extends StatelessWidget {
           const Icon(Icons.check_circle, color: AppColors.success, size: 16),
           const SizedBox(width: 8),
           Text(label, style: AppTextStyles.body),
+        ],
+      ),
+    );
+  }
+}
+
+// ─── Shopify URL Help ─────────────────────────────────────────────────────────
+
+class _ShopifyUrlHelp extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    return Theme(
+      data: Theme.of(context).copyWith(
+        dividerColor: Colors.transparent,
+        listTileTheme: const ListTileThemeData(
+          contentPadding: EdgeInsets.symmetric(horizontal: 12),
+          dense: true,
+        ),
+      ),
+      child: Container(
+        decoration: BoxDecoration(
+          color: AppColors.primaryLight,
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(
+              color: AppColors.primary.withValues(alpha: 0.25)),
+        ),
+        child: ExpansionTile(
+          tilePadding:
+              const EdgeInsets.symmetric(horizontal: 12, vertical: 0),
+          childrenPadding:
+              const EdgeInsets.fromLTRB(16, 0, 16, 12),
+          leading: const Icon(Icons.help_outline,
+              size: 16, color: AppColors.primary),
+          title: const Text(
+            'How do I find my Shopify store URL?',
+            style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+                color: AppColors.primary),
+          ),
+          children: const [
+            _HelpStep(
+              n: '1',
+              text:
+                  'Log in to your Shopify Admin at shopify.com/admin.',
+            ),
+            _HelpStep(
+              n: '2',
+              text:
+                  'Look at the URL in your browser. It looks like '
+                  '"https://admin.shopify.com/store/your-store-name".',
+            ),
+            _HelpStep(
+              n: '3',
+              text:
+                  'Your store domain is "your-store-name.myshopify.com". '
+                  'Replace "your-store-name" with the value after /store/.',
+            ),
+            _HelpStep(
+              n: '4',
+              text:
+                  'Alternatively, in Shopify Admin go to Settings → Domains. '
+                  'Your permanent .myshopify.com domain is listed at the top.',
+            ),
+            _HelpStep(
+              n: '5',
+              text:
+                  'Paste only the domain (e.g. "my-store.myshopify.com"), '
+                  'without "https://" or trailing slashes.',
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _HelpStep extends StatelessWidget {
+  final String n;
+  final String text;
+  const _HelpStep({required this.n, required this.text});
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(top: 8),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            width: 18,
+            height: 18,
+            decoration: BoxDecoration(
+              color: AppColors.primary,
+              borderRadius: BorderRadius.circular(9),
+            ),
+            child: Center(
+              child: Text(
+                n,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 11,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              text,
+              style: const TextStyle(
+                  fontSize: 12, color: AppColors.textPrimary, height: 1.4),
+            ),
+          ),
         ],
       ),
     );

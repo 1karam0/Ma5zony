@@ -4,9 +4,11 @@ import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 import 'package:ma5zony/models/production_order.dart';
+import 'package:ma5zony/models/purchase_order.dart';
 import 'package:ma5zony/providers/app_state.dart';
 import 'package:ma5zony/utils/constants.dart';
 import 'package:ma5zony/widgets/shared_widgets.dart';
+import 'package:ma5zony/widgets/zoho_patterns.dart';
 
 /// Dashboard shown only to users with the **SME Owner** role.
 ///
@@ -23,6 +25,22 @@ class OwnerDashboardScreen extends StatefulWidget {
 class _OwnerDashboardScreenState extends State<OwnerDashboardScreen> {
   bool _showBanner = true;
   bool _showChecklist = true;
+  int _selectedTab = 0; // 0=Dashboard, 1=Getting Started, 2=Help
+
+  /// Remaining onboarding tasks count (drives the tab badge).
+  int _remainingTasks(AppState state) {
+    int remaining = 0;
+    if (state.products.isEmpty) remaining++;
+    if (state.suppliers.isEmpty) remaining++;
+    if (state.warehouses.isEmpty) remaining++;
+    if (state.demandByProduct.isEmpty) remaining++;
+    if (state.currentForecast == null) remaining++;
+    if (state.settings.orderingCost == 250.0 &&
+        state.settings.holdingRate == 0.20) {
+      remaining++;
+    }
+    return remaining;
+  }
 
   // ── Helpers ──────────────────────────────────────────────────────────────
 
@@ -146,7 +164,38 @@ class _OwnerDashboardScreenState extends State<OwnerDashboardScreen> {
       return const Center(child: CircularProgressIndicator());
     }
 
-    final cogs = _monthlyCOGS(state);
+    final remaining = _remainingTasks(state);
+
+    return Column(
+      children: [
+        HorizontalTabBar(
+          selectedIndex: _selectedTab,
+          onChanged: (i) => setState(() => _selectedTab = i),
+          tabs: [
+            const ZohoTab(label: 'Dashboard', icon: Icons.dashboard_outlined),
+            ZohoTab(
+              label: 'Getting Started',
+              icon: Icons.rocket_launch_outlined,
+              badge: remaining > 0 ? remaining : null,
+            ),
+            const ZohoTab(label: 'Help & Support', icon: Icons.help_outline),
+          ],
+        ),
+        Expanded(
+          child: IndexedStack(
+            index: _selectedTab,
+            children: [
+              _buildDashboardTab(context, state),
+              _buildGettingStartedTab(context, state, remaining),
+              const _OwnerHelpTab(),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildDashboardTab(BuildContext context, AppState state) {    final cogs = _monthlyCOGS(state);
     final holdingCost = _monthlyHoldingCost(state);
     final openOrderCost = _openOrderCost(state);
     final topProducts = _topExpenseProducts(state);
@@ -190,8 +239,12 @@ class _OwnerDashboardScreenState extends State<OwnerDashboardScreen> {
           // ── Secondary: open recommendations ──────────────────────────
           if (state.openRecommendations > 0) _buildOpenRecsCard(state),
 
-          // ── Getting Started checklist ────────────────────────────────
-          if (_showChecklist) _buildOnboardingChecklist(state),
+          // ── Getting Started nudge banner (full checklist lives in the
+          //    "Getting Started" tab now) ─────────────────────────────────
+          if (_showChecklist) _buildOnboardingNudge(state),
+
+          // ── Pending Actions (Zoho-style consolidated to-do) ──────────
+          _buildPendingActions(context, state),
 
           // ── Hero metric card ─────────────────────────────────────────
           _buildHeroCard(state, cogs, holdingCost, openOrderCost),
@@ -1214,6 +1267,176 @@ class _OwnerDashboardScreenState extends State<OwnerDashboardScreen> {
       ),
     );
   }
+
+  // ── Pending Actions card ───────────────────────────────────────────────
+
+  Widget _buildPendingActions(BuildContext context, AppState state) {
+    final lowStockCount = state.criticalStockProducts.length;
+    final draftPOs = state.purchaseOrders
+        .where((po) => po.status == OrderStatus.draft)
+        .length;
+    final openRecs = state.openRecommendations;
+    final draftProductions = state.productionOrders
+        .where((p) => p.status == ProductionOrderStatus.draft)
+        .length;
+    final pendingMaterialOrders = state.rawMaterialOrders
+        .where((o) => o.status != 'completed' && o.status != 'cancelled')
+        .length;
+
+    final actions = <PendingAction>[];
+    if (lowStockCount > 0) {
+      actions.add(PendingAction(
+        icon: Icons.inventory_2_outlined,
+        iconColor: AppColors.error,
+        label: 'Products at or below reorder point',
+        count: '$lowStockCount',
+        onTap: () => context.go('/products'),
+      ));
+    }
+    if (openRecs > 0) {
+      actions.add(PendingAction(
+        icon: Icons.recommend_outlined,
+        iconColor: AppColors.warning,
+        label: 'Replenishment recommendations awaiting review',
+        count: '$openRecs',
+        onTap: () => context.go('/replenishment'),
+      ));
+    }
+    if (draftPOs > 0) {
+      actions.add(PendingAction(
+        icon: Icons.description_outlined,
+        iconColor: AppColors.info,
+        label: 'Draft purchase orders to send',
+        count: '$draftPOs',
+        onTap: () => context.go('/orders'),
+      ));
+    }
+    if (draftProductions > 0) {
+      actions.add(PendingAction(
+        icon: Icons.factory_outlined,
+        iconColor: AppColors.primary,
+        label: 'Production orders in draft',
+        count: '$draftProductions',
+        onTap: () => context.go('/production-orders'),
+      ));
+    }
+    if (pendingMaterialOrders > 0) {
+      actions.add(PendingAction(
+        icon: Icons.local_shipping_outlined,
+        iconColor: AppColors.info,
+        label: 'Raw material orders in progress',
+        count: '$pendingMaterialOrders',
+        onTap: () => context.go('/raw-materials'),
+      ));
+    }
+
+    if (actions.isEmpty) return const SizedBox.shrink();
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 16),
+      child: PendingActionsCard(actions: actions),
+    );
+  }
+
+  // ── Getting Started tab ────────────────────────────────────────────────
+
+  Widget _buildOnboardingNudge(AppState state) {
+    final remaining = _remainingTasks(state);
+    if (remaining == 0) return const SizedBox.shrink();
+    return Container(
+      margin: const EdgeInsets.only(bottom: 16),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      decoration: BoxDecoration(
+        color: AppColors.primary.withValues(alpha: 0.06),
+        border: Border.all(color: AppColors.primary.withValues(alpha: 0.2)),
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.rocket_launch_outlined,
+              size: 18, color: AppColors.primary),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              '$remaining setup task${remaining == 1 ? '' : 's'} remaining to fully activate Ma5zony.',
+              style: AppTextStyles.body.copyWith(color: AppColors.primary),
+            ),
+          ),
+          TextButton(
+            onPressed: () => setState(() => _selectedTab = 1),
+            child: const Text('Open'),
+          ),
+          IconButton(
+            icon: const Icon(Icons.close, size: 16),
+            color: AppColors.textSecondary,
+            onPressed: () => setState(() => _showChecklist = false),
+            padding: EdgeInsets.zero,
+            constraints: const BoxConstraints(),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildGettingStartedTab(
+      BuildContext context, AppState state, int remaining) {
+    final user = state.currentUser;
+    final completed = 6 - remaining;
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(24),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          GettingStartedHeroCard(
+            userName: user?.name.split(' ').first ?? 'Owner',
+            emoji: '👋',
+            subtitle:
+                'Finish a few quick steps to get the most out of Ma5zony.',
+            doneCount: completed,
+            totalCount: 6,
+          ),
+          const SizedBox(height: 24),
+          // Surface the existing checklist (keeps prior logic intact)
+          _buildOnboardingChecklist(state),
+          const SizedBox(height: 8),
+          Text('Set up your business', style: AppTextStyles.h3),
+          const SizedBox(height: 12),
+          SetupActionCard(
+            icon: Icons.shopping_bag_outlined,
+            iconColor: const Color(0xFF95BF47),
+            title: 'Connect your Shopify store',
+            subtitle:
+                'Sync products, inventory and orders automatically with Ma5zony.',
+            ctaLabel: state.shopifyConnection?.isConnected == true
+                ? 'Connected'
+                : 'Connect',
+            onTap: () => context.go('/integrations'),
+          ),
+          const SizedBox(height: 12),
+          SetupActionCard(
+            icon: Icons.group_outlined,
+            iconColor: AppColors.primary,
+            title: 'Invite your team',
+            subtitle:
+                'Add managers, manufacturers and suppliers so they can collaborate.',
+            ctaLabel: 'Manage',
+            onTap: () => context.go('/settings'),
+          ),
+          const SizedBox(height: 12),
+          SetupActionCard(
+            icon: Icons.settings_outlined,
+            iconColor: AppColors.warning,
+            title: 'Configure workspace settings',
+            subtitle:
+                'Set EOQ, holding cost, currency and other business preferences.',
+            ctaLabel: 'Configure',
+            onTap: () => context.go('/settings'),
+          ),
+          const SizedBox(height: 24),
+          HelpSupportCard(onTap: () => setState(() => _selectedTab = 2)),
+        ],
+      ),
+    );
+  }
 }
 
 // ── Data classes ────────────────────────────────────────────────────────────
@@ -1258,4 +1481,126 @@ class _ChecklistStep {
     required this.route,
     required this.isDone,
   });
+}
+
+// ── Help & Support tab ──────────────────────────────────────────────────────
+
+class _OwnerHelpTab extends StatelessWidget {
+  const _OwnerHelpTab();
+
+  @override
+  Widget build(BuildContext context) {
+    final topics = const [
+      _HelpTopic(Icons.inventory_2_outlined, 'Products & Inventory',
+          'Manage SKUs, stock levels and warehouses.'),
+      _HelpTopic(Icons.account_tree_outlined, 'Bill of Materials',
+          'Define BOMs and link raw materials to finished goods.'),
+      _HelpTopic(Icons.show_chart, 'Demand Forecasting',
+          'Run SMA / SES forecasts on your sales history.'),
+      _HelpTopic(Icons.shopping_cart_outlined, 'Purchase Orders',
+          'Approve replenishments and track POs to suppliers.'),
+      _HelpTopic(Icons.shopping_bag_outlined, 'Shopify Integration',
+          'Connect your store, sync products and import orders.'),
+      _HelpTopic(Icons.factory_outlined, 'Manufacturing',
+          'Production orders, manufacturers and raw material flow.'),
+    ];
+
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(24),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('Help & Support', style: AppTextStyles.h2),
+          const SizedBox(height: 4),
+          Text(
+            'Browse guides, contact support or learn how to get the most out of Ma5zony.',
+            style: AppTextStyles.body.copyWith(color: AppColors.textSecondary),
+          ),
+          const SizedBox(height: 20),
+          HelpSupportCard(onTap: () {}),
+          const SizedBox(height: 24),
+          Text('Browse topics', style: AppTextStyles.h3),
+          const SizedBox(height: 12),
+          LayoutBuilder(
+            builder: (context, constraints) {
+              final w = constraints.maxWidth;
+              final cols = w > 1000 ? 3 : (w > 600 ? 2 : 1);
+              final gap = 12.0;
+              final cardW = (w - gap * (cols - 1)) / cols;
+              return Wrap(
+                spacing: gap,
+                runSpacing: gap,
+                children: topics
+                    .map((t) => SizedBox(
+                          width: cardW,
+                          child: _HelpTopicCard(topic: t),
+                        ))
+                    .toList(),
+              );
+            },
+          ),
+          const SizedBox(height: 32),
+          Center(
+            child: Text(
+              'Ma5zony • v1.0',
+              style: AppTextStyles.bodySmall
+                  .copyWith(color: AppColors.textSecondary),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _HelpTopic {
+  final IconData icon;
+  final String title;
+  final String subtitle;
+  const _HelpTopic(this.icon, this.title, this.subtitle);
+}
+
+class _HelpTopicCard extends StatelessWidget {
+  final _HelpTopic topic;
+  const _HelpTopicCard({required this.topic});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: AppColors.surfaceCard,
+        border: Border.all(color: AppColors.borderSubtle),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              color: AppColors.primary.withValues(alpha: 0.08),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Icon(topic.icon, size: 20, color: AppColors.primary),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(topic.title,
+                    style: AppTextStyles.body
+                        .copyWith(fontWeight: FontWeight.w600)),
+                const SizedBox(height: 4),
+                Text(topic.subtitle,
+                    style: AppTextStyles.bodySmall
+                        .copyWith(color: AppColors.textSecondary)),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 }

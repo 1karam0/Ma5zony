@@ -4,6 +4,7 @@ import 'package:ma5zony/models/manufacturer.dart';
 import 'package:ma5zony/providers/app_state.dart';
 import 'package:ma5zony/utils/constants.dart';
 import 'package:ma5zony/widgets/shared_widgets.dart';
+import 'package:ma5zony/widgets/zoho_patterns.dart';
 
 class ManufacturersScreen extends StatefulWidget {
   const ManufacturersScreen({super.key});
@@ -256,89 +257,178 @@ class _ManufacturerFormDialogState extends State<_ManufacturerFormDialog> {
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
-      title: Text(_isEdit ? 'Edit Manufacturer' : 'Add Manufacturer'),
+      titlePadding: const EdgeInsets.fromLTRB(24, 20, 24, 0),
+      contentPadding: const EdgeInsets.fromLTRB(24, 16, 24, 0),
+      title: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              color: AppColors.primary.withValues(alpha: 0.1),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: const Icon(Icons.precision_manufacturing_outlined,
+                size: 20, color: AppColors.primary),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(_isEdit ? 'Edit Manufacturer' : 'New Manufacturer',
+                    style: AppTextStyles.h3),
+                const SizedBox(height: 2),
+                Text(
+                  _isEdit
+                      ? 'Update production capacity and contact details.'
+                      : 'Add a production partner to assign jobs to.',
+                  style: AppTextStyles.bodySmall
+                      .copyWith(color: AppColors.textSecondary),
+                ),
+              ],
+            ),
+          ),
+          IconButton(
+            icon: const Icon(Icons.close, size: 20),
+            color: AppColors.textSecondary,
+            onPressed: _saving ? null : () => Navigator.pop(context),
+          ),
+        ],
+      ),
       content: SizedBox(
-        width: 400,
+        width: 680,
         child: Form(
           key: _formKey,
           child: SingleChildScrollView(
             child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               mainAxisSize: MainAxisSize.min,
               children: [
-                TextFormField(
-                  controller: _nameCtrl,
-                  decoration: const InputDecoration(labelText: 'Name'),
-                  validator: (v) =>
-                      v == null || v.isEmpty ? 'Required' : null,
+                ZohoFormSection(
+                  title: 'Contact Details',
+                  subtitle: 'How your team reaches this manufacturer.',
+                  children: [
+                    TextFormField(
+                      controller: _nameCtrl,
+                      decoration: const InputDecoration(labelText: 'Name *'),
+                      validator: (v) =>
+                          v == null || v.isEmpty ? 'Required' : null,
+                    ),
+                    const SizedBox(height: 16),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: TextFormField(
+                            controller: _emailCtrl,
+                            decoration: const InputDecoration(
+                                labelText: 'Contact Email *'),
+                            keyboardType: TextInputType.emailAddress,
+                            validator: (v) =>
+                                v == null || v.isEmpty ? 'Required' : null,
+                          ),
+                        ),
+                        const SizedBox(width: 16),
+                        Expanded(
+                          child: TextFormField(
+                            controller: _phoneCtrl,
+                            decoration:
+                                const InputDecoration(labelText: 'Phone'),
+                            keyboardType: TextInputType.phone,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
                 ),
-                const SizedBox(height: 12),
-                TextFormField(
-                  controller: _emailCtrl,
-                  decoration:
-                      const InputDecoration(labelText: 'Contact Email'),
-                  keyboardType: TextInputType.emailAddress,
-                  validator: (v) =>
-                      v == null || v.isEmpty ? 'Required' : null,
+                ZohoFormSection(
+                  title: 'Production',
+                  subtitle:
+                      'Capacity caps batch sizes; lead time drives planning.',
+                  children: [
+                    Row(
+                      children: [
+                        Expanded(
+                          child: TextFormField(
+                            controller: _capacityCtrl,
+                            decoration: const InputDecoration(
+                              labelText: 'Production Capacity *',
+                              suffixText: 'units',
+                            ),
+                            keyboardType: TextInputType.number,
+                            validator: (v) {
+                              if (v == null || v.isEmpty) return 'Required';
+                              if (int.tryParse(v) == null) {
+                                return 'Invalid number';
+                              }
+                              return null;
+                            },
+                          ),
+                        ),
+                        const SizedBox(width: 16),
+                        Expanded(
+                          child: TextFormField(
+                            controller: _leadTimeCtrl,
+                            decoration: const InputDecoration(
+                              labelText: 'Typical Production Time *',
+                              suffixText: 'days',
+                            ),
+                            keyboardType: TextInputType.number,
+                            validator: (v) {
+                              if (v == null || v.isEmpty) return 'Required';
+                              if (int.tryParse(v) == null) {
+                                return 'Invalid number';
+                              }
+                              return null;
+                            },
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
                 ),
-                const SizedBox(height: 12),
-                TextFormField(
-                  controller: _phoneCtrl,
-                  decoration: const InputDecoration(labelText: 'Phone'),
-                  keyboardType: TextInputType.phone,
-                ),
-                const SizedBox(height: 12),
-                TextFormField(
-                  controller: _capacityCtrl,
-                  decoration: const InputDecoration(
-                      labelText: 'Production Capacity (units)'),
-                  keyboardType: TextInputType.number,
-                  validator: (v) {
-                    if (v == null || v.isEmpty) return 'Required';
-                    if (int.tryParse(v) == null) return 'Invalid number';
-                    return null;
-                  },
-                ),
-                const SizedBox(height: 12),
-                TextFormField(
-                  controller: _leadTimeCtrl,
-                  decoration: const InputDecoration(
-                      labelText: 'Typical Production Days'),
-                  keyboardType: TextInputType.number,
-                  validator: (v) {
-                    if (v == null || v.isEmpty) return 'Required';
-                    if (int.tryParse(v) == null) return 'Invalid number';
-                    return null;
-                  },
-                ),
-                const SizedBox(height: 12),
-                TextFormField(
-                  controller: _addressCtrl,
-                  decoration: const InputDecoration(
-                    labelText: 'Address (optional)',
-                    hintText: 'e.g. 10 Factory St, Industrial Zone',
-                    prefixIcon: Icon(Icons.location_on_outlined),
-                  ),
-                  maxLines: 2,
+                ZohoFormSection(
+                  title: 'Location',
+                  subtitle: 'Optional — useful for logistics planning.',
+                  collapsible: true,
+                  initiallyExpanded: false,
+                  children: [
+                    TextFormField(
+                      controller: _addressCtrl,
+                      decoration: const InputDecoration(
+                        labelText: 'Address',
+                        hintText: 'e.g. 10 Factory St, Industrial Zone',
+                        prefixIcon: Icon(Icons.location_on_outlined),
+                      ),
+                      maxLines: 2,
+                    ),
+                  ],
                 ),
               ],
             ),
           ),
         ),
       ),
+      actionsPadding: const EdgeInsets.fromLTRB(24, 8, 24, 20),
       actions: [
         TextButton(
           onPressed: _saving ? null : () => Navigator.pop(context),
           child: const Text('Cancel'),
         ),
         ElevatedButton(
+          style: ElevatedButton.styleFrom(
+            backgroundColor: AppColors.primary,
+            foregroundColor: Colors.white,
+          ),
           onPressed: _saving ? null : _save,
           child: _saving
               ? const SizedBox(
                   width: 18,
                   height: 18,
-                  child: CircularProgressIndicator(strokeWidth: 2),
+                  child: CircularProgressIndicator(
+                      strokeWidth: 2, color: Colors.white),
                 )
-              : Text(_isEdit ? 'Update' : 'Add'),
+              : Text(_isEdit ? 'Save Changes' : 'Add Manufacturer'),
         ),
       ],
     );

@@ -18,11 +18,15 @@ class ForecastingService {
   // ══════════════════════════════════════════════════════════════════════════
 
   /// Returns the last SMA value over the provided [windowSize].
-  /// Returns 0 if there is not enough data.
+  /// When there is less data than [windowSize], averages all the data
+  /// available instead of returning 0 — gives a usable estimate for
+  /// short demand histories (e.g. 1–2 months of Shopify imports).
   double simpleMovingAverage(List<double> demand, int windowSize) {
-    if (demand.length < windowSize || windowSize <= 0) return 0;
-    final window = demand.sublist(demand.length - windowSize);
-    return window.reduce((a, b) => a + b) / windowSize;
+    if (demand.isEmpty || windowSize <= 0) return 0;
+    final effectiveWindow =
+        demand.length < windowSize ? demand.length : windowSize;
+    final window = demand.sublist(demand.length - effectiveWindow);
+    return window.reduce((a, b) => a + b) / effectiveWindow;
   }
 
   /// Returns the full SMA series.

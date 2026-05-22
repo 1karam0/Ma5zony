@@ -10,6 +10,8 @@ import 'package:ma5zony/models/production_order.dart';
 import 'package:ma5zony/providers/app_state.dart';
 import 'package:ma5zony/utils/constants.dart';
 import 'package:ma5zony/widgets/command_palette.dart';
+import 'package:ma5zony/widgets/onboarding_phase_bar.dart';
+import 'package:ma5zony/widgets/zoho_patterns.dart';
 
 // ── Nav data ──────────────────────────────────────────────────────────────────
 
@@ -18,10 +20,16 @@ class _NavGroup {
   final String label;
   final IconData icon;
   final List<NavRouteEntry> entries;
+
+  /// Optional uppercase section header rendered above the group when it
+  /// differs from the previously-rendered section (Zoho pattern).
+  final String? section;
+
   const _NavGroup({
     required this.label,
     required this.icon,
     required this.entries,
+    this.section,
   });
 }
 
@@ -38,6 +46,7 @@ const _kGroupDashboard = _NavGroup(
 const _kGroupProducts = _NavGroup(
   label: 'Products',
   icon: Icons.inventory_2_outlined,
+  section: 'INVENTORY',
   entries: [
     NavRouteEntry(icon: Icons.inventory_2_outlined, label: 'Products', path: '/products'),
   ],
@@ -47,6 +56,7 @@ const _kGroupProducts = _NavGroup(
 const _kGroupSupplyChain = _NavGroup(
   label: 'Supply Chain Setup',
   icon: Icons.account_tree_outlined,
+  section: 'INVENTORY',
   entries: [
     NavRouteEntry(icon: Icons.local_shipping_outlined, label: 'Suppliers', path: '/suppliers'),
     NavRouteEntry(icon: Icons.category_outlined, label: 'Raw Materials', path: '/raw-materials'),
@@ -60,6 +70,7 @@ const _kGroupSupplyChain = _NavGroup(
 const _kGroupDemandOrders = _NavGroup(
   label: 'Demand & Orders',
   icon: Icons.trending_up_outlined,
+  section: 'OPERATIONS',
   entries: [
     NavRouteEntry(icon: Icons.query_stats, label: 'Forecasts', path: '/forecasts'),
     NavRouteEntry(icon: Icons.show_chart, label: 'Sales History', path: '/demand-data'),
@@ -71,15 +82,25 @@ const _kGroupDemandOrders = _NavGroup(
   ],
 );
 
-const _kGroupFinanceSystem = _NavGroup(
-  label: 'Finance & Settings',
+// Finance group: everything related to money flow
+const _kGroupFinance = _NavGroup(
+  label: 'Finance',
   icon: Icons.account_balance_wallet_outlined,
+  section: 'FINANCE',
   entries: [
     NavRouteEntry(icon: Icons.account_balance_wallet_outlined, label: 'Cash Flow', path: '/cash-flow'),
     NavRouteEntry(icon: Icons.bar_chart_outlined, label: 'Financial Analytics', path: '/financial-analytics'),
+  ],
+);
+
+// Settings group: integrations + app configuration
+const _kGroupSettings = _NavGroup(
+  label: 'Settings',
+  icon: Icons.tune,
+  section: 'SYSTEM',
+  entries: [
     NavRouteEntry(icon: Icons.cable_outlined, label: 'Integrations', path: '/integrations'),
     NavRouteEntry(icon: Icons.tune, label: 'Settings', path: '/settings'),
-    NavRouteEntry(icon: Icons.rocket_launch_outlined, label: 'Setup Wizard', path: '/setup'),
   ],
 );
 
@@ -107,16 +128,16 @@ const _kGroupRawMaterials = _NavGroup(
 /// Returns nav groups visible to [user] based on their role.
 List<_NavGroup> _visibleGroupsForUser(AppUser? user) {
   if (user == null) {
-    return [_kGroupDashboard, _kGroupProducts, _kGroupSupplyChain, _kGroupDemandOrders, _kGroupFinanceSystem];
+    return [_kGroupDashboard, _kGroupProducts, _kGroupSupplyChain, _kGroupDemandOrders, _kGroupFinance, _kGroupSettings];
   }
   return switch (user.role) {
     AppUser.roleSmeOwner => [
         _kGroupDashboard, _kGroupProducts, _kGroupSupplyChain,
-        _kGroupDemandOrders, _kGroupFinanceSystem,
+        _kGroupDemandOrders, _kGroupFinance, _kGroupSettings,
       ],
     AppUser.roleInventoryManager => [
         _kGroupDashboard, _kGroupProducts, _kGroupSupplyChain,
-        _kGroupDemandOrders, _kGroupFinanceSystem,
+        _kGroupDemandOrders, _kGroupFinance, _kGroupSettings,
       ],
     AppUser.roleManufacturer => [
         _kGroupDashboard, _kGroupManufacturerFocused,
@@ -124,7 +145,7 @@ List<_NavGroup> _visibleGroupsForUser(AppUser? user) {
     AppUser.roleRawMaterialFactory => [
         _kGroupDashboard, _kGroupRawMaterials,
       ],
-    _ => [_kGroupDashboard, _kGroupProducts, _kGroupSupplyChain, _kGroupDemandOrders, _kGroupFinanceSystem],
+    _ => [_kGroupDashboard, _kGroupProducts, _kGroupSupplyChain, _kGroupDemandOrders, _kGroupFinance, _kGroupSettings],
   };
 }
 
@@ -178,6 +199,8 @@ class MainLayout extends StatefulWidget {
 
 class _MainLayoutState extends State<MainLayout> {
   String? _lastError;
+  final GlobalKey<ScaffoldState> _mobileScaffoldKey =
+      GlobalKey<ScaffoldState>();
 
   @override
   void initState() {
@@ -261,6 +284,10 @@ class _MainLayoutState extends State<MainLayout> {
             child: Column(
               children: [
                 _TopBar(isMobile: false, onOpenPalette: _openCommandPalette),
+                OnboardingPhaseBar(
+                  state: state,
+                  currentRoute: GoRouterState.of(context).uri.toString(),
+                ),
                 Expanded(child: widget.child),
               ],
             ),
@@ -274,8 +301,28 @@ class _MainLayoutState extends State<MainLayout> {
     final user = state.currentUser;
     final groups = _visibleGroupsForUser(user);
     final badges = _buildBadges(state);
+    final loc = GoRouterState.of(context).uri.toString();
+
+    // Zoho-style bottom nav — 5 most-used destinations + More (drawer).
+    const bottomTabs = <(String, String, IconData)>[
+      ('/dashboard', 'Home', Icons.dashboard_outlined),
+      ('/products', 'Products', Icons.inventory_2_outlined),
+      ('/orders', 'Orders', Icons.receipt_long_outlined),
+      ('/forecasts', 'Forecasts', Icons.query_stats),
+      ('__more__', 'More', Icons.menu),
+    ];
+
+    int currentIndex = 0;
+    for (int i = 0; i < bottomTabs.length - 1; i++) {
+      final path = bottomTabs[i].$1;
+      if (loc == path || (path != '/dashboard' && loc.startsWith(path))) {
+        currentIndex = i;
+        break;
+      }
+    }
 
     return Scaffold(
+      key: _mobileScaffoldKey,
       drawer: Drawer(
         width: 260,
         child: _Sidebar(
@@ -293,8 +340,49 @@ class _MainLayoutState extends State<MainLayout> {
       body: Column(
         children: [
           _TopBar(isMobile: true, onOpenPalette: _openCommandPalette),
+          OnboardingPhaseBar(
+            state: state,
+            currentRoute: loc,
+          ),
           Expanded(child: widget.child),
         ],
+      ),
+      bottomNavigationBar: SafeArea(
+        top: false,
+        child: Container(
+          decoration: const BoxDecoration(
+            color: AppColors.surfaceCard,
+            border: Border(top: BorderSide(color: AppColors.borderSubtle)),
+          ),
+          child: BottomNavigationBar(
+            currentIndex: currentIndex,
+            type: BottomNavigationBarType.fixed,
+            backgroundColor: AppColors.surfaceCard,
+            selectedItemColor: AppColors.primary,
+            unselectedItemColor: AppColors.textSecondary,
+            selectedLabelStyle: const TextStyle(
+                fontSize: 11, fontWeight: FontWeight.w600),
+            unselectedLabelStyle: const TextStyle(
+                fontSize: 11, fontWeight: FontWeight.w500),
+            showUnselectedLabels: true,
+            elevation: 0,
+            onTap: (i) {
+              final tab = bottomTabs[i];
+              if (tab.$1 == '__more__') {
+                _mobileScaffoldKey.currentState?.openDrawer();
+              } else {
+                context.go(tab.$1);
+              }
+            },
+            items: [
+              for (final t in bottomTabs)
+                BottomNavigationBarItem(
+                  icon: Icon(t.$3, size: 22),
+                  label: t.$2,
+                ),
+            ],
+          ),
+        ),
       ),
     );
   }
@@ -413,12 +501,43 @@ class _SidebarState extends State<_Sidebar> {
             ),
           ),
 
+          // Org context pill (Zoho pattern)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 4, 12, 8),
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child: OrgContextPill(
+                orgName: widget.user?.name.split(' ').first.isNotEmpty == true
+                    ? '${widget.user!.name.split(' ').first}\'s Workspace'
+                    : 'My Workspace',
+                onTap: () => context.go('/settings'),
+              ),
+            ),
+          ),
+
           // Nav groups
           Expanded(
             child: ListView(
               padding: const EdgeInsets.symmetric(vertical: 6),
               children: [
-                for (int i = 0; i < widget.groups.length; i++)
+                for (int i = 0; i < widget.groups.length; i++) ...[
+                  // Render uppercase section header when section changes
+                  if (widget.groups[i].section != null &&
+                      (i == 0 ||
+                          widget.groups[i - 1].section !=
+                              widget.groups[i].section))
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 14, 16, 4),
+                      child: Text(
+                        widget.groups[i].section!,
+                        style: TextStyle(
+                          fontSize: 10,
+                          fontWeight: FontWeight.w700,
+                          letterSpacing: 1.1,
+                          color: Colors.white.withValues(alpha: 0.45),
+                        ),
+                      ),
+                    ),
                   _SidebarGroup(
                     group: widget.groups[i],
                     badges: widget.badges,
@@ -429,6 +548,7 @@ class _SidebarState extends State<_Sidebar> {
                       widget.onNavTap?.call();
                     },
                   ),
+                ],
               ],
             ),
           ),

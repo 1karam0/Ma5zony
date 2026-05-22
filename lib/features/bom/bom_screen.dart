@@ -4,6 +4,7 @@ import 'package:ma5zony/models/bill_of_materials.dart';
 import 'package:ma5zony/providers/app_state.dart';
 import 'package:ma5zony/utils/constants.dart';
 import 'package:ma5zony/widgets/shared_widgets.dart';
+import 'package:ma5zony/widgets/zoho_patterns.dart';
 
 const _kUomOptions = ['units', 'g', 'kg', 'm', 'cm', 'L', 'mL', 'pcs'];
 
@@ -323,120 +324,185 @@ class _BomFormDialogState extends State<_BomFormDialog> {
     final products = widget.state.products;
     final rawMaterials = widget.state.rawMaterials;
     return AlertDialog(
-      title: Text(_isEdit ? 'Edit BOM' : 'Create BOM'),
+      titlePadding: const EdgeInsets.fromLTRB(24, 20, 24, 0),
+      contentPadding: const EdgeInsets.fromLTRB(24, 16, 24, 0),
+      title: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              color: AppColors.primary.withValues(alpha: 0.1),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: const Icon(Icons.account_tree_outlined,
+                size: 20, color: AppColors.primary),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(_isEdit ? 'Edit BOM' : 'Create BOM',
+                    style: AppTextStyles.h3),
+                const SizedBox(height: 2),
+                Text(
+                  'Define which raw materials are consumed to build one unit of this product.',
+                  style: AppTextStyles.bodySmall
+                      .copyWith(color: AppColors.textSecondary),
+                ),
+              ],
+            ),
+          ),
+          IconButton(
+            icon: const Icon(Icons.close, size: 20),
+            color: AppColors.textSecondary,
+            onPressed: _saving ? null : () => Navigator.pop(context),
+          ),
+        ],
+      ),
       content: SizedBox(
-        width: 560,
+        width: 600,
         child: Form(
           key: _formKey,
           child: SingleChildScrollView(
             child: Column(
-              mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                DropdownButtonFormField<String>(
-                  initialValue: _productId,
-                  decoration:
-                      const InputDecoration(labelText: 'Final Product'),
-                  items: products
-                      .map((p) =>
-                          DropdownMenuItem(value: p.id, child: Text(p.name)))
-                      .toList(),
-                  onChanged: (v) => setState(() => _productId = v),
-                  validator: (v) =>
-                      v == null || v.isEmpty ? 'Select a product' : null,
-                ),
-                const SizedBox(height: 16),
-                Text('Materials', style: AppTextStyles.h3),
-                const SizedBox(height: 8),
-                ..._lines.asMap().entries.map((entry) {
-                  final i = entry.key;
-                  final line = entry.value;
-                  return Padding(
-                    padding: const EdgeInsets.only(bottom: 8),
-                    child: Row(
-                      children: [
-                        Expanded(
-                          flex: 3,
-                          child: DropdownButtonFormField<String>(
-                            initialValue: line.materialId,
-                            decoration: const InputDecoration(
-                                labelText: 'Material', isDense: true),
-                            items: rawMaterials
-                                .map((m) => DropdownMenuItem(
-                                    value: m.id, child: Text(m.name)))
-                                .toList(),
-                            onChanged: (v) =>
-                                setState(() => line.materialId = v),
-                            validator: (v) =>
-                                v == null ? 'Required' : null,
-                          ),
-                        ),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          flex: 2,
-                          child: TextFormField(
-                            controller: line.qtyCtrl,
-                            decoration: const InputDecoration(
-                                labelText: 'Qty/Unit', isDense: true),
-                            keyboardType: TextInputType.number,
-                            validator: (v) {
-                              if (v == null || v.isEmpty) return 'Required';
-                              if (double.tryParse(v) == null) {
-                                return 'Invalid';
-                              }
-                              return null;
-                            },
-                          ),
-                        ),
-                        const SizedBox(width: 8),
-                        SizedBox(
-                          width: 90,
-                          child: DropdownButtonFormField<String>(
-                            value: line.uom,
-                            decoration: const InputDecoration(
-                                labelText: 'UoM', isDense: true),
-                            items: _kUomOptions
-                                .map((u) =>
-                                    DropdownMenuItem(value: u, child: Text(u)))
-                                .toList(),
-                            onChanged: (v) =>
-                                setState(() => line.uom = v ?? 'units'),
-                          ),
-                        ),
-                        IconButton(
-                          icon: const Icon(Icons.remove_circle,
-                              color: AppColors.error),
-                          onPressed: () => setState(() => _lines.removeAt(i)),
-                        ),
-                      ],
+                ZohoFormSection(
+                  title: 'Final Product',
+                  subtitle: 'Pick the manufactured product this recipe builds.',
+                  children: [
+                    DropdownButtonFormField<String>(
+                      initialValue: _productId,
+                      decoration: const InputDecoration(
+                          labelText: 'Final Product *'),
+                      items: products
+                          .map((p) => DropdownMenuItem(
+                              value: p.id, child: Text(p.name)))
+                          .toList(),
+                      onChanged: (v) => setState(() => _productId = v),
+                      validator: (v) =>
+                          v == null || v.isEmpty ? 'Select a product' : null,
                     ),
-                  );
-                }),
-                TextButton.icon(
-                  icon: const Icon(Icons.add),
-                  label: const Text('Add Material Line'),
-                  onPressed: () => setState(() => _lines.add(_MaterialLine(
-                      qtyCtrl: TextEditingController(text: '1')))),
+                  ],
+                ),
+                ZohoFormSection(
+                  title: 'Materials',
+                  subtitle:
+                      'Quantity per unit + unit of measure. Used to generate raw-material orders.',
+                  children: [
+                    ..._lines.asMap().entries.map((entry) {
+                      final i = entry.key;
+                      final line = entry.value;
+                      return Padding(
+                        padding: const EdgeInsets.only(bottom: 8),
+                        child: Row(
+                          children: [
+                            Expanded(
+                              flex: 3,
+                              child: DropdownButtonFormField<String>(
+                                initialValue: line.materialId,
+                                decoration: const InputDecoration(
+                                    labelText: 'Material', isDense: true),
+                                items: rawMaterials
+                                    .map((m) => DropdownMenuItem(
+                                        value: m.id, child: Text(m.name)))
+                                    .toList(),
+                                onChanged: (v) =>
+                                    setState(() => line.materialId = v),
+                                validator: (v) =>
+                                    v == null ? 'Required' : null,
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              flex: 2,
+                              child: TextFormField(
+                                controller: line.qtyCtrl,
+                                decoration: const InputDecoration(
+                                    labelText: 'Qty/Unit', isDense: true),
+                                keyboardType: TextInputType.number,
+                                validator: (v) {
+                                  if (v == null || v.isEmpty) return 'Required';
+                                  if (double.tryParse(v) == null) {
+                                    return 'Invalid';
+                                  }
+                                  return null;
+                                },
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            SizedBox(
+                              width: 90,
+                              child: DropdownButtonFormField<String>(
+                                initialValue: line.uom,
+                                decoration: const InputDecoration(
+                                    labelText: 'UoM', isDense: true),
+                                items: _kUomOptions
+                                    .map((u) => DropdownMenuItem(
+                                        value: u, child: Text(u)))
+                                    .toList(),
+                                onChanged: (v) =>
+                                    setState(() => line.uom = v ?? 'units'),
+                              ),
+                            ),
+                            IconButton(
+                              tooltip: 'Remove material',
+                              icon: const Icon(Icons.remove_circle_outline,
+                                  color: AppColors.error),
+                              onPressed: () =>
+                                  setState(() => _lines.removeAt(i)),
+                            ),
+                          ],
+                        ),
+                      );
+                    }),
+                    if (_lines.isEmpty)
+                      Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 8),
+                        child: Text(
+                          'No materials yet. Add one below.',
+                          style: AppTextStyles.bodySmall
+                              .copyWith(color: AppColors.textSecondary),
+                        ),
+                      ),
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: TextButton.icon(
+                        icon: const Icon(Icons.add, size: 18),
+                        label: const Text('Add Material Line'),
+                        onPressed: () => setState(() => _lines.add(_MaterialLine(
+                            qtyCtrl: TextEditingController(text: '1')))),
+                      ),
+                    ),
+                  ],
                 ),
               ],
             ),
           ),
         ),
       ),
+      actionsPadding: const EdgeInsets.fromLTRB(24, 8, 24, 20),
       actions: [
         TextButton(
           onPressed: _saving ? null : () => Navigator.pop(context),
           child: const Text('Cancel'),
         ),
         ElevatedButton(
+          style: ElevatedButton.styleFrom(
+            backgroundColor: AppColors.primary,
+            foregroundColor: Colors.white,
+          ),
           onPressed: _saving ? null : _save,
           child: _saving
               ? const SizedBox(
                   width: 18,
                   height: 18,
-                  child: CircularProgressIndicator(strokeWidth: 2),
+                  child: CircularProgressIndicator(
+                      strokeWidth: 2, color: Colors.white),
                 )
-              : Text(_isEdit ? 'Update' : 'Create'),
+              : Text(_isEdit ? 'Update BOM' : 'Create BOM'),
         ),
       ],
     );

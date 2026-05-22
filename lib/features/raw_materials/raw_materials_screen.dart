@@ -4,6 +4,7 @@ import 'package:ma5zony/models/raw_material.dart';
 import 'package:ma5zony/providers/app_state.dart';
 import 'package:ma5zony/utils/constants.dart';
 import 'package:ma5zony/widgets/shared_widgets.dart';
+import 'package:ma5zony/widgets/zoho_patterns.dart';
 
 const _kUomOptions = ['units', 'g', 'kg', 'm', 'cm', 'L', 'mL', 'pcs'];
 
@@ -378,116 +379,216 @@ class _RawMaterialFormDialogState extends State<_RawMaterialFormDialog> {
   Widget build(BuildContext context) {
     final suppliers = widget.state.suppliers;
     return AlertDialog(
-      title: Text(_isEdit ? 'Edit Material' : 'Add Material'),
+      titlePadding: const EdgeInsets.fromLTRB(24, 20, 24, 0),
+      contentPadding: const EdgeInsets.fromLTRB(24, 16, 24, 0),
+      title: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              color: AppColors.primary.withValues(alpha: 0.1),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: const Icon(Icons.science_outlined,
+                size: 20, color: AppColors.primary),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(_isEdit ? 'Edit Material' : 'New Raw Material',
+                    style: AppTextStyles.h3),
+                const SizedBox(height: 2),
+                Text(
+                  _isEdit
+                      ? 'Update unit cost, stock and supplier for this input.'
+                      : 'Track an input you purchase and consume in production.',
+                  style: AppTextStyles.bodySmall
+                      .copyWith(color: AppColors.textSecondary),
+                ),
+              ],
+            ),
+          ),
+          IconButton(
+            icon: const Icon(Icons.close, size: 20),
+            color: AppColors.textSecondary,
+            onPressed: _saving ? null : () => Navigator.pop(context),
+          ),
+        ],
+      ),
       content: SizedBox(
-        width: 420,
+        width: 680,
         child: Form(
           key: _formKey,
           child: SingleChildScrollView(
             child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               mainAxisSize: MainAxisSize.min,
               children: [
-                TextFormField(
-                  controller: _nameCtrl,
-                  decoration: const InputDecoration(labelText: 'Name'),
-                  validator: (v) =>
-                      v == null || v.isEmpty ? 'Required' : null,
-                ),
-                const SizedBox(height: 12),
-                TextFormField(
-                  controller: _skuCtrl,
-                  decoration: const InputDecoration(labelText: 'SKU'),
-                  validator: (v) =>
-                      v == null || v.isEmpty ? 'Required' : null,
-                ),
-                const SizedBox(height: 12),
-                DropdownButtonFormField<String>(
-                  value: _uom,
-                  decoration: const InputDecoration(labelText: 'Unit of Measure'),
-                  items: _kUomOptions
-                      .map((u) => DropdownMenuItem(value: u, child: Text(u)))
-                      .toList(),
-                  onChanged: (v) => setState(() => _uom = v ?? 'units'),
-                ),
-                const SizedBox(height: 12),
-                TextFormField(
-                  controller: _unitCostCtrl,
-                  decoration: const InputDecoration(labelText: 'Unit Cost (EGP)'),
-                  keyboardType: TextInputType.number,
-                  validator: (v) {
-                    if (v == null || v.isEmpty) return 'Required';
-                    if (double.tryParse(v) == null) return 'Invalid number';
-                    return null;
-                  },
-                ),
-                const SizedBox(height: 12),
-                Row(
+                ZohoFormSection(
+                  title: 'Basic Information',
+                  subtitle: 'Identify this raw material in your catalog.',
                   children: [
-                    Expanded(
-                      child: TextFormField(
-                        controller: _stockCtrl,
-                        decoration:
-                            const InputDecoration(labelText: 'Current Stock'),
-                        keyboardType: TextInputType.number,
-                      ),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: TextFormField(
+                            controller: _skuCtrl,
+                            decoration:
+                                const InputDecoration(labelText: 'SKU *'),
+                            validator: (v) =>
+                                v == null || v.isEmpty ? 'Required' : null,
+                          ),
+                        ),
+                        const SizedBox(width: 16),
+                        Expanded(
+                          flex: 2,
+                          child: TextFormField(
+                            controller: _nameCtrl,
+                            decoration:
+                                const InputDecoration(labelText: 'Name *'),
+                            validator: (v) =>
+                                v == null || v.isEmpty ? 'Required' : null,
+                          ),
+                        ),
+                      ],
                     ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: TextFormField(
-                        controller: _safetyCtrl,
-                        decoration:
-                            const InputDecoration(labelText: 'Safety Stock'),
-                        keyboardType: TextInputType.number,
-                      ),
+                    const SizedBox(height: 16),
+                    DropdownButtonFormField<String>(
+                      value: _uom,
+                      decoration: const InputDecoration(
+                          labelText: 'Unit of Measure *'),
+                      items: _kUomOptions
+                          .map((u) =>
+                              DropdownMenuItem(value: u, child: Text(u)))
+                          .toList(),
+                      onChanged: (v) => setState(() => _uom = v ?? 'units'),
                     ),
                   ],
                 ),
-                const SizedBox(height: 12),
-                TextFormField(
-                  controller: _leadTimeCtrl,
-                  decoration: const InputDecoration(
-                    labelText: 'Lead Time (days)',
-                    hintText: 'Days to receive from supplier',
-                  ),
-                  keyboardType: TextInputType.number,
-                  validator: (v) {
-                    if (v == null || v.isEmpty) return null;
-                    if (int.tryParse(v) == null) return 'Enter a whole number';
-                    return null;
-                  },
+                ZohoFormSection(
+                  title: 'Pricing & Inventory',
+                  subtitle:
+                      'Unit cost feeds BOM cost. Safety stock triggers reorders.',
+                  children: [
+                    Row(
+                      children: [
+                        Expanded(
+                          child: TextFormField(
+                            controller: _unitCostCtrl,
+                            decoration: const InputDecoration(
+                              labelText: 'Unit Cost *',
+                              prefixText: 'EGP ',
+                            ),
+                            keyboardType: TextInputType.number,
+                            validator: (v) {
+                              if (v == null || v.isEmpty) return 'Required';
+                              if (double.tryParse(v) == null) {
+                                return 'Invalid number';
+                              }
+                              return null;
+                            },
+                          ),
+                        ),
+                        const SizedBox(width: 16),
+                        Expanded(
+                          child: TextFormField(
+                            controller: _stockCtrl,
+                            decoration: const InputDecoration(
+                              labelText: 'Current Stock',
+                            ),
+                            keyboardType: TextInputType.number,
+                          ),
+                        ),
+                        const SizedBox(width: 16),
+                        Expanded(
+                          child: TextFormField(
+                            controller: _safetyCtrl,
+                            decoration: const InputDecoration(
+                              labelText: 'Safety Stock',
+                            ),
+                            keyboardType: TextInputType.number,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
                 ),
-                const SizedBox(height: 12),
-                DropdownButtonFormField<String>(
-                  value: _supplierId,
-                  decoration: const InputDecoration(labelText: 'Supplier'),
-                  hint: const Text('Select supplier'),
-                  items: suppliers
-                      .map((s) =>
-                          DropdownMenuItem(value: s.id, child: Text(s.name)))
-                      .toList(),
-                  onChanged: (v) => setState(() => _supplierId = v),
-                  validator: (v) =>
-                      (v == null || v.isEmpty) ? 'Select a supplier' : null,
+                ZohoFormSection(
+                  title: 'Supply Chain',
+                  subtitle:
+                      'Who delivers this material and how long shipping takes.',
+                  children: [
+                    Row(
+                      children: [
+                        Expanded(
+                          flex: 2,
+                          child: DropdownButtonFormField<String>(
+                            value: _supplierId,
+                            decoration: const InputDecoration(
+                                labelText: 'Supplier *'),
+                            hint: const Text('Select supplier'),
+                            items: suppliers
+                                .map((s) => DropdownMenuItem(
+                                    value: s.id, child: Text(s.name)))
+                                .toList(),
+                            onChanged: (v) =>
+                                setState(() => _supplierId = v),
+                            validator: (v) => (v == null || v.isEmpty)
+                                ? 'Select a supplier'
+                                : null,
+                          ),
+                        ),
+                        const SizedBox(width: 16),
+                        Expanded(
+                          child: TextFormField(
+                            controller: _leadTimeCtrl,
+                            decoration: const InputDecoration(
+                              labelText: 'Lead Time',
+                              hintText: 'Days to receive',
+                              suffixText: 'days',
+                            ),
+                            keyboardType: TextInputType.number,
+                            validator: (v) {
+                              if (v == null || v.isEmpty) return null;
+                              if (int.tryParse(v) == null) {
+                                return 'Whole number';
+                              }
+                              return null;
+                            },
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
                 ),
               ],
             ),
           ),
         ),
       ),
+      actionsPadding: const EdgeInsets.fromLTRB(24, 8, 24, 20),
       actions: [
         TextButton(
           onPressed: _saving ? null : () => Navigator.pop(context),
           child: const Text('Cancel'),
         ),
         ElevatedButton(
+          style: ElevatedButton.styleFrom(
+            backgroundColor: AppColors.primary,
+            foregroundColor: Colors.white,
+          ),
           onPressed: _saving ? null : _save,
           child: _saving
               ? const SizedBox(
                   width: 18,
                   height: 18,
-                  child: CircularProgressIndicator(strokeWidth: 2),
+                  child: CircularProgressIndicator(
+                      strokeWidth: 2, color: Colors.white),
                 )
-              : Text(_isEdit ? 'Update' : 'Add'),
+              : Text(_isEdit ? 'Save Changes' : 'Add Material'),
         ),
       ],
     );

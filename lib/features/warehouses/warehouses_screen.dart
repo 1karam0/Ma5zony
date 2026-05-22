@@ -435,7 +435,42 @@ class _AssignProductsDialogState extends State<_AssignProductsDialog> {
     final warehousesById = {for (final w in state.warehouses) w.id: w};
 
     return AlertDialog(
-      title: Text('Manage Products — ${widget.warehouse.name}'),
+      titlePadding: const EdgeInsets.fromLTRB(24, 20, 24, 0),
+      contentPadding: const EdgeInsets.fromLTRB(24, 16, 24, 0),
+      title: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              color: AppColors.primary.withValues(alpha: 0.1),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: const Icon(Icons.inventory_2_outlined,
+                size: 20, color: AppColors.primary),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('Manage Products', style: AppTextStyles.h3),
+                const SizedBox(height: 2),
+                Text(
+                  widget.warehouse.name,
+                  style: AppTextStyles.bodySmall
+                      .copyWith(color: AppColors.textSecondary),
+                ),
+              ],
+            ),
+          ),
+          IconButton(
+            icon: const Icon(Icons.close, size: 20),
+            color: AppColors.textSecondary,
+            onPressed: _saving ? null : () => Navigator.pop(context),
+          ),
+        ],
+      ),
       content: SizedBox(
         width: 560,
         height: 520,

@@ -13,6 +13,7 @@ class Product {
   final double? averageDailySales;
   final int? minimumStock;
   final String? shopifyVariantId;
+  final String? shopifyProductId;
 
   Product({
     required this.id,
@@ -29,6 +30,7 @@ class Product {
     this.averageDailySales,
     this.minimumStock,
     this.shopifyVariantId,
+    this.shopifyProductId,
   });
 
   /// Resolves a value from multiple possible field name aliases.
@@ -76,6 +78,9 @@ class Product {
           (data['averageDailySales'] as num?)?.toDouble(),
       minimumStock: (data['minimumStock'] as num?)?.toInt(),
       shopifyVariantId: data['shopifyVariantId'] as String?,
+      shopifyProductId: _resolve<String>(
+              data, ['shopifyProductId', 'shopify_product_id'])
+          ?.toString(),
     );
   }
 
@@ -102,6 +107,7 @@ class Product {
       if (averageDailySales != null) 'averageDailySales': averageDailySales,
       if (minimumStock != null) 'minimumStock': minimumStock,
       if (shopifyVariantId != null) 'shopifyVariantId': shopifyVariantId,
+      if (shopifyProductId != null) 'shopifyProductId': shopifyProductId,
     };
   }
 }

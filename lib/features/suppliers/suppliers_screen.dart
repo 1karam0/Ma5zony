@@ -1,9 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:url_launcher/url_launcher.dart';
 import 'package:ma5zony/providers/app_state.dart';
 import 'package:ma5zony/models/supplier.dart';
 import 'package:ma5zony/utils/constants.dart';
 import 'package:ma5zony/widgets/shared_widgets.dart';
+import 'package:ma5zony/widgets/zoho_patterns.dart';
 
 class SuppliersScreen extends StatelessWidget {
   const SuppliersScreen({super.key});
@@ -438,6 +440,9 @@ class _SupplierFormDialogState extends State<_SupplierFormDialog> {
   late final TextEditingController _leadTimeCtrl;
   late final TextEditingController _ratingCtrl;
   late final TextEditingController _addressCtrl;
+  late final TextEditingController _mapsUrlCtrl;
+  double? _latitude;
+  double? _longitude;
 
   @override
   void initState() {
@@ -455,6 +460,13 @@ class _SupplierFormDialogState extends State<_SupplierFormDialog> {
           : '',
     );
     _addressCtrl = TextEditingController(text: s?.address ?? '');
+    _latitude = s?.latitude;
+    _longitude = s?.longitude;
+    _mapsUrlCtrl = TextEditingController(
+      text: (s?.latitude != null && s?.longitude != null)
+          ? 'https://www.google.com/maps?q=${s!.latitude},${s.longitude}'
+          : '',
+    );
   }
 
   @override
@@ -465,7 +477,62 @@ class _SupplierFormDialogState extends State<_SupplierFormDialog> {
     _leadTimeCtrl.dispose();
     _ratingCtrl.dispose();
     _addressCtrl.dispose();
+    _mapsUrlCtrl.dispose();
     super.dispose();
+  }
+
+  /// Extracts (lat, lng) from a Google Maps URL.
+  /// Supports common formats: ?q=lat,lng | @lat,lng,zoom | !3dlat!4dlng
+  (double, double)? _parseGoogleMapsLatLng(String url) {
+    if (url.trim().isEmpty) return null;
+    // Pattern 1: @lat,lng — most common in browser share links
+    final atMatch = RegExp(r'@(-?\d+\.\d+),(-?\d+\.\d+)').firstMatch(url);
+    if (atMatch != null) {
+      final lat = double.tryParse(atMatch.group(1)!);
+      final lng = double.tryParse(atMatch.group(2)!);
+      if (lat != null && lng != null) return (lat, lng);
+    }
+    // Pattern 2: ?q=lat,lng or &q=lat,lng
+    final qMatch = RegExp(r'[?&]q=(-?\d+\.\d+),(-?\d+\.\d+)').firstMatch(url);
+    if (qMatch != null) {
+      final lat = double.tryParse(qMatch.group(1)!);
+      final lng = double.tryParse(qMatch.group(2)!);
+      if (lat != null && lng != null) return (lat, lng);
+    }
+    // Pattern 3: !3dlat!4dlng (encoded share URLs)
+    final bangMatch =
+        RegExp(r'!3d(-?\d+\.\d+)!4d(-?\d+\.\d+)').firstMatch(url);
+    if (bangMatch != null) {
+      final lat = double.tryParse(bangMatch.group(1)!);
+      final lng = double.tryParse(bangMatch.group(2)!);
+      if (lat != null && lng != null) return (lat, lng);
+    }
+    return null;
+  }
+
+  void _onMapsUrlChanged(String url) {
+    final coords = _parseGoogleMapsLatLng(url);
+    if (coords != null) {
+      setState(() {
+        _latitude = coords.$1;
+        _longitude = coords.$2;
+      });
+    }
+  }
+
+  Future<void> _openInMaps() async {
+    String? url;
+    if (_latitude != null && _longitude != null) {
+      url = 'https://www.google.com/maps?q=$_latitude,$_longitude';
+    } else if (_addressCtrl.text.trim().isNotEmpty) {
+      final encoded = Uri.encodeComponent(_addressCtrl.text.trim());
+      url = 'https://www.google.com/maps/search/?api=1&query=$encoded';
+    }
+    if (url == null) return;
+    final uri = Uri.parse(url);
+    if (await canLaunchUrl(uri)) {
+      await launchUrl(uri, mode: LaunchMode.externalApplication);
+    }
   }
 
   Future<void> _save() async {
@@ -483,6 +550,8 @@ class _SupplierFormDialogState extends State<_SupplierFormDialog> {
       address: _addressCtrl.text.trim().isEmpty
           ? null
           : _addressCtrl.text.trim(),
+      latitude: _latitude,
+      longitude: _longitude,
     );
     final navigator = Navigator.of(context);
     final messenger = ScaffoldMessenger.of(context);
@@ -511,91 +580,202 @@ class _SupplierFormDialogState extends State<_SupplierFormDialog> {
   Widget build(BuildContext context) {
     final isEdit = widget.supplier != null;
     return AlertDialog(
-      title: Text(isEdit ? 'Edit Supplier' : 'Add New Supplier'),
+      titlePadding: const EdgeInsets.fromLTRB(24, 20, 24, 0),
+      contentPadding: const EdgeInsets.fromLTRB(24, 16, 24, 0),
+      title: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              color: AppColors.primary.withValues(alpha: 0.1),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: const Icon(Icons.local_shipping_outlined,
+                size: 20, color: AppColors.primary),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(isEdit ? 'Edit Supplier' : 'New Supplier',
+                    style: AppTextStyles.h3),
+                const SizedBox(height: 2),
+                Text(
+                  isEdit
+                      ? 'Update supplier contact, lead time and location.'
+                      : 'Add a vendor that delivers products or raw materials.',
+                  style: AppTextStyles.bodySmall
+                      .copyWith(color: AppColors.textSecondary),
+                ),
+              ],
+            ),
+          ),
+          IconButton(
+            icon: const Icon(Icons.close, size: 20),
+            color: AppColors.textSecondary,
+            onPressed: () => Navigator.pop(context),
+          ),
+        ],
+      ),
       content: SizedBox(
-        width: 420,
+        width: 680,
         child: Form(
           key: _formKey,
           child: SingleChildScrollView(
             child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                TextFormField(
-                  controller: _nameCtrl,
-                  decoration: const InputDecoration(labelText: 'Supplier Name'),
-                  validator: (v) => v == null || v.trim().isEmpty ? 'Name is required' : null,
-                ),
-                const SizedBox(height: 16),
-                Row(
+                // ── Section 1: Contact Details ───────────────────────────
+                ZohoFormSection(
+                  title: 'Contact Details',
+                  subtitle: 'How your team reaches this supplier.',
                   children: [
-                    Expanded(
-                      child: TextFormField(
-                        controller: _emailCtrl,
-                        decoration: const InputDecoration(
-                          labelText: 'Contact Email',
-                        ),
-                        validator: (v) {
-                          if (v == null || v.trim().isEmpty) return 'Email is required';
-                          final emailRegex = RegExp(r'^[^@]+@[^@]+\.[^@]+$');
-                          if (!emailRegex.hasMatch(v.trim())) return 'Enter a valid email';
-                          return null;
-                        },
-                      ),
+                    TextFormField(
+                      controller: _nameCtrl,
+                      decoration: const InputDecoration(
+                          labelText: 'Supplier Name *'),
+                      validator: (v) => v == null || v.trim().isEmpty
+                          ? 'Name is required'
+                          : null,
                     ),
-                    const SizedBox(width: 16),
-                    Expanded(
-                      child: TextFormField(
-                        controller: _phoneCtrl,
-                        decoration: const InputDecoration(labelText: 'Phone'),
-                      ),
+                    const SizedBox(height: 16),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: TextFormField(
+                            controller: _emailCtrl,
+                            decoration: const InputDecoration(
+                              labelText: 'Contact Email *',
+                            ),
+                            validator: (v) {
+                              if (v == null || v.trim().isEmpty) {
+                                return 'Email is required';
+                              }
+                              final emailRegex =
+                                  RegExp(r'^[^@]+@[^@]+\.[^@]+$');
+                              if (!emailRegex.hasMatch(v.trim())) {
+                                return 'Enter a valid email';
+                              }
+                              return null;
+                            },
+                          ),
+                        ),
+                        const SizedBox(width: 16),
+                        Expanded(
+                          child: TextFormField(
+                            controller: _phoneCtrl,
+                            decoration:
+                                const InputDecoration(labelText: 'Phone'),
+                          ),
+                        ),
+                      ],
                     ),
                   ],
                 ),
-                const SizedBox(height: 16),
-                TextFormField(
-                  controller: _leadTimeCtrl,
-                  decoration: const InputDecoration(
-                    labelText: 'Lead Time (days)',
-                  ),
-                  keyboardType: TextInputType.number,
-                  validator: (v) {
-                    if (v == null || v.trim().isEmpty) return 'Lead time is required';
-                    final val = int.tryParse(v);
-                    if (val == null || val < 1) return 'Enter a positive number';
-                    return null;
-                  },
+
+                // ── Section 2: Performance ───────────────────────────────
+                ZohoFormSection(
+                  title: 'Performance',
+                  subtitle:
+                      'Lead time drives reorder point. Rating ranks suppliers when ordering.',
+                  children: [
+                    Row(
+                      children: [
+                        Expanded(
+                          child: TextFormField(
+                            controller: _leadTimeCtrl,
+                            decoration: const InputDecoration(
+                              labelText: 'Lead Time *',
+                              suffixText: 'days',
+                            ),
+                            keyboardType: TextInputType.number,
+                            validator: (v) {
+                              if (v == null || v.trim().isEmpty) {
+                                return 'Lead time is required';
+                              }
+                              final val = int.tryParse(v);
+                              if (val == null || val < 1) {
+                                return 'Enter a positive number';
+                              }
+                              return null;
+                            },
+                          ),
+                        ),
+                        const SizedBox(width: 16),
+                        Expanded(
+                          child: TextFormField(
+                            controller: _ratingCtrl,
+                            decoration: const InputDecoration(
+                              labelText: 'Performance Rating (optional)',
+                              hintText: 'e.g. 4.5',
+                              suffixText: '/ 5',
+                            ),
+                            keyboardType:
+                                const TextInputType.numberWithOptions(
+                                    decimal: true),
+                            validator: (v) {
+                              if (v == null || v.trim().isEmpty) return null;
+                              final val = double.tryParse(v.trim());
+                              if (val == null || val < 0 || val > 5) {
+                                return 'Enter a value between 0 and 5';
+                              }
+                              return null;
+                            },
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
                 ),
-                const SizedBox(height: 16),
-                TextFormField(
-                  controller: _ratingCtrl,
-                  decoration: const InputDecoration(
-                    labelText: 'Performance Rating (0–5, optional)',
-                    hintText: 'e.g. 4.5',
-                  ),
-                  keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                  validator: (v) {
-                    if (v == null || v.trim().isEmpty) return null;
-                    final val = double.tryParse(v.trim());
-                    if (val == null || val < 0 || val > 5) {
-                      return 'Enter a value between 0 and 5';
-                    }
-                    return null;
-                  },
-                ),
-                const SizedBox(height: 16),
-                TextFormField(
-                  controller: _addressCtrl,
-                  decoration: const InputDecoration(
-                    labelText: 'Address (optional)',
-                    hintText: 'e.g. 15 Industrial Zone, Cairo',
-                    prefixIcon: Icon(Icons.location_on_outlined),
-                  ),
-                  maxLines: 2,
+
+                // ── Section 3: Location (collapsible) ────────────────────
+                ZohoFormSection(
+                  title: 'Location',
+                  subtitle:
+                      'Optional — pin a Maps location for logistics & ETA.',
+                  collapsible: true,
+                  initiallyExpanded: false,
+                  children: [
+                    TextFormField(
+                      controller: _addressCtrl,
+                      decoration: const InputDecoration(
+                        labelText: 'Address',
+                        hintText: 'e.g. 15 Industrial Zone, Cairo',
+                        prefixIcon: Icon(Icons.location_on_outlined),
+                      ),
+                      maxLines: 2,
+                    ),
+                    const SizedBox(height: 12),
+                    TextFormField(
+                      controller: _mapsUrlCtrl,
+                      decoration: InputDecoration(
+                        labelText: 'Google Maps link',
+                        hintText: 'Paste link from Google Maps → Share',
+                        prefixIcon: const Icon(Icons.map_outlined),
+                        helperText: (_latitude != null && _longitude != null)
+                            ? 'Location pinned: '
+                                '${_latitude!.toStringAsFixed(5)}, '
+                                '${_longitude!.toStringAsFixed(5)}'
+                            : 'Paste a Maps URL to pin exact coordinates',
+                        helperMaxLines: 2,
+                        suffixIcon: IconButton(
+                          tooltip: 'Open in Google Maps',
+                          icon: const Icon(Icons.open_in_new, size: 18),
+                          onPressed: _openInMaps,
+                        ),
+                      ),
+                      onChanged: _onMapsUrlChanged,
+                    ),
+                  ],
                 ),
               ],
             ),
           ),
         ),
       ),
+      actionsPadding: const EdgeInsets.fromLTRB(24, 8, 24, 20),
       actions: [
         TextButton(
           onPressed: () => Navigator.pop(context),
