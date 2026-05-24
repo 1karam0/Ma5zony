@@ -52,7 +52,7 @@ class _CreateOrderScreenState extends State<CreateOrderScreen> {
   Future<void> _saveDraft() async {
     if (_draftOrder.items.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Add at least one item to the order.')),
+        const SnackBar(content: Text('Add at least one item to the order.'), duration: Duration(seconds: 3)),
       );
       return;
     }
@@ -74,13 +74,14 @@ class _CreateOrderScreenState extends State<CreateOrderScreen> {
         messenger.showSnackBar(
           const SnackBar(
             content: Text('Draft saved. You can edit it later from the Orders page.'),
+            duration: Duration(seconds: 3),
           ),
         );
         context.go('/orders');
       }
     } catch (e) {
       messenger.showSnackBar(
-        SnackBar(content: Text('Failed to save draft: $e'), backgroundColor: Colors.red),
+        SnackBar(duration: const Duration(seconds: 3), content: Text('Failed to save draft: $e'), backgroundColor: Colors.red),
       );
     } finally {
       if (mounted) setState(() => _savingDraft = false);
@@ -90,7 +91,7 @@ class _CreateOrderScreenState extends State<CreateOrderScreen> {
   Future<void> _confirmOrder() async {
     if (_draftOrder.items.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Add at least one item to the order.')),
+        const SnackBar(content: Text('Add at least one item to the order.'), duration: Duration(seconds: 3)),
       );
       return;
     }

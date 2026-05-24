@@ -58,6 +58,11 @@ class PurchaseOrder {
   final String createdByName;
   final List<PurchaseOrderItem> items;
   String? notes;
+  /// Human-readable order number, e.g. "PO-2025-0001". Set when the order is
+  /// first created; null for orders created before this feature was added.
+  final String? poNumber;
+  /// Primary supplier ID for this PO (used by Firestore security rules).
+  final String? supplierId;
 
   PurchaseOrder({
     required this.id,
@@ -67,6 +72,8 @@ class PurchaseOrder {
     required this.createdByName,
     required this.items,
     this.notes,
+    this.poNumber,
+    this.supplierId,
   });
 
   double get totalEstimatedCost =>
@@ -104,6 +111,8 @@ class PurchaseOrder {
       createdByName: data['createdByName'] as String,
       items: itemsList,
       notes: data['notes'] as String?,
+      poNumber: data['poNumber'] as String?,
+      supplierId: data['supplierId'] as String?,
     );
   }
 
@@ -114,5 +123,7 @@ class PurchaseOrder {
         'createdByName': createdByName,
         'items': items.map((i) => i.toJson()).toList(),
         'notes': notes,
+        if (poNumber != null) 'poNumber': poNumber,
+        if (supplierId != null) 'supplierId': supplierId,
       };
 }

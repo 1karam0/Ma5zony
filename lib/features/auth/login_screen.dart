@@ -201,7 +201,7 @@ class _LoginScreenState extends State<LoginScreen> {
       context.go('/dashboard');
     } else {
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(appState.authError ?? 'Login failed')),
+        SnackBar(duration: const Duration(seconds: 3), content: Text(appState.authError ?? 'Login failed')),
       );
     }
   }
@@ -210,7 +210,7 @@ class _LoginScreenState extends State<LoginScreen> {
     final email = _emailController.text.trim();
     if (email.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Enter your email first')),
+        const SnackBar(content: Text('Enter your email first'), duration: Duration(seconds: 3)),
       );
       return;
     }
@@ -219,7 +219,7 @@ class _LoginScreenState extends State<LoginScreen> {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-              content: Text('Password reset email sent. Check your inbox.')),
+              content: Text('Password reset email sent. Check your inbox.'), duration: Duration(seconds: 3)),
         );
       }
     } on Exception {
@@ -227,7 +227,7 @@ class _LoginScreenState extends State<LoginScreen> {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
               content: Text(
-                  'Could not send reset email. Check the address and try again.')),
+                  'Could not send reset email. Check the address and try again.'), duration: Duration(seconds: 3)),
         );
       }
     }

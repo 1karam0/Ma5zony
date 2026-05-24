@@ -276,6 +276,12 @@ exports.shopifyOAuthCallback = onRequest(
       .doc("pending_oauth")
       .delete();
 
+    // Best-effort: subscribe to orders/create so new sales auto-sync into
+    // Firestore as demand records. Failure here is non-fatal — the user can
+    // still trigger a manual sync from Integrations.
+    try { await registerOrdersWebhook(uid, shop, access_token); }
+    catch (e) { console.warn("OAuth: webhook registration failed:", e.message); }
+
     res.send(
       "<html><body><h2>Store connected!</h2><p>You can close this window and return to Ma5zony.</p></body></html>"
     );
@@ -306,10 +312,12 @@ exports.shopifyImportProducts = onRequest(
 
     const { shopDomain, accessToken } = connDoc.data();
 
-    // GraphQL query with cursor-based pagination
+    // GraphQL query with cursor-based pagination.
+    // `query: "status:active"` filters out archived/draft products so only
+    // currently-sellable items are imported into Ma5zony.
     const PRODUCTS_QUERY = `
       query FetchProducts($cursor: String) {
-        products(first: 100, after: $cursor) {
+        products(first: 100, after: $cursor, query: "status:active") {
           pageInfo { hasNextPage endCursor }
           edges {
             node {
@@ -369,7 +377,8 @@ exports.shopifyImportProducts = onRequest(
                 ? `${sp.title} — ${variant.title || ""}`
                 : sp.title,
               category: sp.productType || "Uncategorised",
-              unitCost: parseFloat(variant.price) || 0,
+              // unitCost is NOT imported from Shopify — selling price ≠ cost.
+              // Users must set the cost manually in the product editor.
               currentStock: variant.inventoryQuantity ?? 0,
               supplierId: null,
               isActive: sp.status === "ACTIVE",
@@ -389,7 +398,31 @@ exports.shopifyImportProducts = onRequest(
       }
 
       await batch.commit();
-      res.json({ result: { count: imported.length, products: imported } });
+
+      // ── Deactivation sweep ──────────────────────────────────────────────────
+      // Any product that was previously imported from Shopify but is NOT in the
+      // current active-only result set has since been archived or deleted in
+      // Shopify. Mark those Firestore docs as isActive: false so they are hidden
+      // from forecasts, low-stock alerts, and replenishment recommendations.
+      const importedDocIds = new Set(imported.map((p) => p.id));
+      const existingSnap = await db
+        .collection("users")
+        .doc(uid)
+        .collection("products")
+        .where("shopifyProductId", "!=", null)
+        .get();
+
+      const deactivateBatch = db.batch();
+      let deactivated = 0;
+      for (const doc of existingSnap.docs) {
+        if (!importedDocIds.has(doc.id)) {
+          deactivateBatch.update(doc.ref, { isActive: false });
+          deactivated++;
+        }
+      }
+      if (deactivated > 0) await deactivateBatch.commit();
+
+      res.json({ result: { count: imported.length, deactivated, products: imported } });
     } catch (err) {
       console.error("shopifyImportProducts error:", err);
       res.status(502).json({ error: err.message || "Shopify API error fetching products." });
@@ -421,9 +454,11 @@ exports.shopifySyncStock = onRequest(
 
     const { shopDomain, accessToken } = connDoc.data();
 
+    // `query: "status:active"` matches the product import filter so that
+    // draft and archived products are never touched by inventory syncs.
     const SYNC_QUERY = `
       query SyncInventory($cursor: String) {
-        products(first: 100, after: $cursor) {
+        products(first: 100, after: $cursor, query: "status:active") {
           pageInfo { hasNextPage endCursor }
           edges {
             node {
@@ -1604,3 +1639,224 @@ exports.onManufacturerOrderUpdate = onDocumentUpdated(
     }
   }
 );
+
+// ── Shopify Orders Webhook (auto-sync) ───────────────────────────────────────
+//
+// Receives `orders/create` events from Shopify and writes a demand record
+// (monthly bucket) for each matching product into the owning user's
+// Firestore. Eliminates the need to click "Sync Order History" after each
+// sale.
+//
+// Deployment:
+//   1. Set `SHOPIFY_WEBHOOK_BASE_URL` env var to the deployed URL prefix
+//      (e.g. https://us-central1-ma5zony.cloudfunctions.net) OR leave unset
+//      and the OAuth callback will skip registration with a console warning.
+//   2. firebase deploy --only functions
+//   3. Reconnect existing Shopify stores (or call shopifyRegisterWebhooks
+//      once per user) so the webhook subscription gets created.
+
+/** Build the resolveProductId function for a single user. */
+async function buildProductResolver(uid) {
+  const productsSnap = await db
+    .collection("users").doc(uid).collection("products").get();
+
+  const byVariantId = {};
+  const bySku = {};
+  const bySkuNorm = {};
+  const byName = {};
+  const byProductId = {};
+  const normalise = (s) =>
+    String(s || "").toLowerCase().replace(/[^a-z0-9]+/g, "");
+
+  for (const doc of productsSnap.docs) {
+    const d = doc.data();
+    if (d.shopifyVariantId) byVariantId[String(d.shopifyVariantId)] = doc.id;
+    if (d.sku) {
+      const sku = String(d.sku);
+      bySku[sku.toLowerCase()] = doc.id;
+      const n = normalise(sku);
+      if (n.length >= 3) bySkuNorm[n] = doc.id;
+    }
+    if (d.name) {
+      const n = normalise(d.name);
+      if (n.length >= 3) byName[n] = doc.id;
+    }
+    if (d.shopifyProductId) byProductId[String(d.shopifyProductId)] = doc.id;
+  }
+
+  return function resolve(line) {
+    const { shopifyProductId, shopifyVariantId, variantSku, lineSku,
+            productTitle, variantTitle, lineTitle } = line;
+    if (shopifyVariantId && byVariantId[shopifyVariantId])
+      return byVariantId[shopifyVariantId];
+    const skuCandidates = [variantSku, lineSku].filter(Boolean);
+    for (const s of skuCandidates) {
+      const lc = String(s).toLowerCase();
+      if (bySku[lc]) return bySku[lc];
+    }
+    for (const s of skuCandidates) {
+      const n = normalise(s);
+      if (n.length >= 3 && bySkuNorm[n]) return bySkuNorm[n];
+    }
+    const nameCandidates = [
+      lineTitle,
+      productTitle && variantTitle ? `${productTitle} ${variantTitle}` : null,
+      productTitle,
+    ].filter(Boolean);
+    for (const t of nameCandidates) {
+      const n = normalise(t);
+      if (n.length >= 3 && byName[n]) return byName[n];
+    }
+    if (shopifyProductId && byProductId[shopifyProductId])
+      return byProductId[shopifyProductId];
+    return `shopify_${shopifyProductId || "unknown"}`;
+  };
+}
+
+/** Register the orders/create webhook for the given user's Shopify store. */
+async function registerOrdersWebhook(uid, shopDomain, accessToken) {
+  const base = process.env.SHOPIFY_WEBHOOK_BASE_URL;
+  if (!base) {
+    console.warn(
+      "registerOrdersWebhook: SHOPIFY_WEBHOOK_BASE_URL not set; " +
+      "auto-sync via webhook is disabled. Set this env var and redeploy."
+    );
+    return;
+  }
+  const callbackUrl = `${base.replace(/\/$/, "")}/shopifyOrdersWebhook`;
+  const mutation = `
+    mutation webhookSubscriptionCreate(
+      $topic: WebhookSubscriptionTopic!,
+      $webhookSubscription: WebhookSubscriptionInput!
+    ) {
+      webhookSubscriptionCreate(topic: $topic, webhookSubscription: $webhookSubscription) {
+        webhookSubscription { id }
+        userErrors { field message }
+      }
+    }`;
+  try {
+    const data = await shopifyGraphQL(shopDomain, accessToken, mutation, {
+      topic: "ORDERS_CREATE",
+      webhookSubscription: { callbackUrl, format: "JSON" },
+    });
+    const errors = data.webhookSubscriptionCreate.userErrors;
+    if (errors && errors.length > 0) {
+      // "already exists" is acceptable
+      const msg = errors[0].message || "";
+      if (!/already/i.test(msg)) {
+        console.warn(`registerOrdersWebhook: ${msg} for ${shopDomain}`);
+      }
+    } else {
+      console.log(`registerOrdersWebhook: subscribed ${shopDomain} → ${callbackUrl}`);
+    }
+    await db.collection("users").doc(uid).collection("shopify")
+      .doc("connection").set(
+        { webhookCallbackUrl: callbackUrl, webhookRegisteredAt: admin.firestore.FieldValue.serverTimestamp() },
+        { merge: true }
+      );
+  } catch (err) {
+    console.error("registerOrdersWebhook failed:", err.message);
+  }
+}
+
+/**
+ * HTTPS webhook endpoint hit by Shopify for orders/create events.
+ * Shopify signs the raw body with SHOPIFY_API_SECRET; we verify HMAC
+ * before trusting any data.
+ */
+exports.shopifyOrdersWebhook = onRequest(
+  { secrets: [SHOPIFY_API_SECRET] },
+  async (req, res) => {
+    if (req.method !== "POST") { res.status(405).send("POST only"); return; }
+
+    // Firebase Functions v2 exposes the raw body for HMAC verification.
+    const rawBody = req.rawBody;
+    const hmacHeader = req.get("X-Shopify-Hmac-Sha256");
+    const shopDomain = req.get("X-Shopify-Shop-Domain");
+    if (!rawBody || !hmacHeader || !shopDomain) {
+      res.status(400).send("Missing required headers");
+      return;
+    }
+
+    const computed = crypto
+      .createHmac("sha256", SHOPIFY_API_SECRET.value())
+      .update(rawBody)
+      .digest("base64");
+    if (
+      computed.length !== hmacHeader.length ||
+      !crypto.timingSafeEqual(Buffer.from(computed), Buffer.from(hmacHeader))
+    ) {
+      res.status(401).send("HMAC verification failed");
+      return;
+    }
+
+    // Find the user that owns this shop. We use a collectionGroup query
+    // because shopify connections are nested under each user.
+    const connSnap = await db
+      .collectionGroup("shopify")
+      .where("shopDomain", "==", shopDomain)
+      .where("isConnected", "==", true)
+      .limit(1)
+      .get();
+    if (connSnap.empty) {
+      // Acknowledge so Shopify doesn't retry forever, but log it.
+      console.warn(`shopifyOrdersWebhook: no user for shop ${shopDomain}`);
+      res.status(200).send("no-op");
+      return;
+    }
+    const connDoc = connSnap.docs[0];
+    // Path is users/{uid}/shopify/connection
+    const uid = connDoc.ref.parent.parent.id;
+
+    let order;
+    try { order = JSON.parse(rawBody.toString("utf8")); }
+    catch (e) { res.status(400).send("Invalid JSON"); return; }
+
+    const lineItems = Array.isArray(order.line_items) ? order.line_items : [];
+    if (lineItems.length === 0) { res.status(200).send("no-lines"); return; }
+
+    const orderDate = order.created_at ? new Date(order.created_at) : new Date();
+    const year = orderDate.getUTCFullYear();
+    const month = String(orderDate.getUTCMonth() + 1).padStart(2, "0");
+    const yearMonth = `${year}-${month}`;
+    const periodStart = new Date(Date.UTC(year, orderDate.getUTCMonth(), 1)).toISOString();
+
+    const resolve = await buildProductResolver(uid);
+
+    // Aggregate quantities per product within this single order.
+    const perProduct = {};
+    for (const item of lineItems) {
+      const line = {
+        shopifyProductId: item.product_id ? String(item.product_id) : null,
+        shopifyVariantId: item.variant_id ? String(item.variant_id) : null,
+        variantSku: item.sku || null,
+        lineSku: item.sku || null,
+        productTitle: item.title || item.name || null,
+        variantTitle: item.variant_title || null,
+        lineTitle: item.name || item.title || null,
+      };
+      const pid = resolve(line);
+      perProduct[pid] = (perProduct[pid] || 0) + (item.quantity || 0);
+    }
+
+    // Atomically increment the monthly demand bucket per product.
+    const writes = [];
+    for (const [productId, qty] of Object.entries(perProduct)) {
+      if (qty <= 0) continue;
+      const safeId = productId.replace(/[^a-zA-Z0-9_-]/g, "_");
+      const docId = `shopify_${safeId}_${yearMonth}`;
+      const ref = db.collection("users").doc(uid)
+        .collection("demandRecords").doc(docId);
+      writes.push(ref.set({
+        productId,
+        periodStart,
+        quantity: admin.firestore.FieldValue.increment(qty),
+        source: "shopify",
+        updatedAt: new Date().toISOString(),
+      }, { merge: true }));
+    }
+    await Promise.all(writes);
+    res.status(200).send("ok");
+  }
+);
+

@@ -445,12 +445,12 @@ class _ActionButtonsState extends State<_ActionButtons> {
                 ? ' — stock updated'
                 : '';
         messenger.showSnackBar(
-          SnackBar(content: Text('Status updated to ${_statusLabel(nextStatus)}$extra')),
+          SnackBar(duration: const Duration(seconds: 3), content: Text('Status updated to ${_statusLabel(nextStatus)}$extra')),
         );
       }
     } catch (e) {
       if (mounted) {
-        messenger.showSnackBar(SnackBar(content: Text('Error: $e')));
+        messenger.showSnackBar(SnackBar(duration: const Duration(seconds: 3), content: Text('Error: $e')));
       }
     } finally {
       if (mounted) setState(() => _advancing = false);

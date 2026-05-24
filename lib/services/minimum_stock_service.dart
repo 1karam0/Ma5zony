@@ -39,7 +39,16 @@ class MinimumStockResult {
 }
 
 class MinimumStockService {
+  /// Stock that doesn't last at least this many days at the product's
+  /// historical sales velocity is treated as "low stock". A short, fixed
+  /// horizon (one week) gives users actionable warnings even before any
+  /// supplier / manufacturer / lead-time information is configured.
+  static const int kLowStockCoverageDays = 7;
+
   /// Computes minimum stock requirements for a single product.
+  ///
+  /// Returns `null` only when the product has no sales history AND is in
+  /// stock — i.e. there is nothing to flag and nothing to compute.
   MinimumStockResult? computeForProduct({
     required Product product,
     required List<DomainDemandRecord> demandRecords,
@@ -49,7 +58,27 @@ class MinimumStockService {
     required List<Manufacturer> manufacturers,
     UserSettings? settings,
   }) {
-    if (demandRecords.isEmpty) return null;
+    // ── Empty-history case ─────────────────────────────────────────────
+    // With no demand records we cannot compute velocity, but a product
+    // that's at zero stock should still surface as urgent so it shows up
+    // in dashboard warnings.
+    if (demandRecords.isEmpty) {
+      if (product.currentStock > 0) return null;
+      return MinimumStockResult(
+        productId: product.id,
+        productName: product.name,
+        sku: product.sku,
+        averageDailySales: 0,
+        rmLeadTimeDays: 0,
+        manufacturingDays: 0,
+        totalLeadTimeDays: 0,
+        safetyStock: 0,
+        minimumStock: 0,
+        daysOfStockLeft: 0,
+        isUrgent: true,
+        currentStock: product.currentStock,
+      );
+    }
 
     // ── Average daily sales ─────────────────────────────────────────────
     final sorted = List<DomainDemandRecord>.from(demandRecords)
@@ -104,7 +133,13 @@ class MinimumStockService {
 
     // ── Days of stock left ──────────────────────────────────────────────
     final daysOfStockLeft = product.currentStock / averageDailySales;
-    final isUrgent = product.currentStock < minimumStock;
+    // "Low stock" rule: not enough on hand to cover the next
+    // `kLowStockCoverageDays` days at the product's recent sales velocity.
+    // We deliberately use a short, fixed horizon (rather than the full
+    // replenishment ROP) so the warning is meaningful even before lead
+    // times / safety stock are dialed in.
+    final isUrgent = product.currentStock <= 0 ||
+        daysOfStockLeft < kLowStockCoverageDays;
 
     return MinimumStockResult(
       productId: product.id,

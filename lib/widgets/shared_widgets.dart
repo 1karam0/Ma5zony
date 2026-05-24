@@ -123,6 +123,7 @@ class KPICard extends StatelessWidget {
   final double? trend;
   /// If true, ▲ trend = green. If false, ▲ trend = red (e.g. for costs).
   final bool trendIsGood;
+  final VoidCallback? onTap;
 
   const KPICard({
     super.key,
@@ -134,6 +135,7 @@ class KPICard extends StatelessWidget {
     this.isAlert = false,
     this.trend,
     this.trendIsGood = true,
+    this.onTap,
   });
 
   @override
@@ -144,7 +146,10 @@ class KPICard extends StatelessWidget {
         borderRadius: BorderRadius.circular(12),
         side: BorderSide(color: AppColors.border),
       ),
-      child: Padding(
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        onTap: onTap,
+        child: Padding(
         padding: const EdgeInsets.all(16.0),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -206,6 +211,7 @@ class KPICard extends StatelessWidget {
             ),
           ],
         ),
+      ),
       ),
     );
   }

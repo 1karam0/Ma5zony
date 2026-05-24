@@ -25,6 +25,12 @@ abstract class InventoryRepository {
   /// each list sorted ascending by [DomainDemandRecord.periodStart].
   Future<Map<String, List<DomainDemandRecord>>> getDemandHistory();
 
+  /// Real-time stream of demand history. Emits a new map whenever the
+  /// underlying `demandRecords` collection changes (manual edits, Shopify
+  /// webhook writes, etc). Optional — implementations may return an empty
+  /// stream if real-time updates are not supported.
+  Stream<Map<String, List<DomainDemandRecord>>> watchDemandHistory();
+
   // ── Products CRUD ────────────────────────────────────────────────────────
   Future<Product> addProduct(Product product);
   Future<void> updateProduct(Product product);

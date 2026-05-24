@@ -36,6 +36,7 @@ class DemandDataScreen extends StatelessWidget {
       messenger.showSnackBar(const SnackBar(
         content: Text('CSV is empty or missing data rows.'),
         backgroundColor: Colors.red,
+        duration: Duration(seconds: 3),
       ));
       return;
     }

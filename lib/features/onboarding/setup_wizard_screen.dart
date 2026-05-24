@@ -117,7 +117,7 @@ class _SetupWizardScreenState extends State<SetupWizardScreen> {
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Connection failed: $e'),
+          SnackBar(duration: const Duration(seconds: 3), content: Text('Connection failed: $e'),
               backgroundColor: AppColors.error));
       }
     } finally {
@@ -255,6 +255,9 @@ class _SetupWizardScreenState extends State<SetupWizardScreen> {
             typicalLeadTimeDays: s.typicalLeadTimeDays,
             performanceRating: s.performanceRating,
             address: addr.isEmpty ? null : addr,
+            latitude: s.latitude,
+            longitude: s.longitude,
+            suppliedRawMaterialIds: s.suppliedRawMaterialIds,
           ));
         }
       }
@@ -282,11 +285,11 @@ class _SetupWizardScreenState extends State<SetupWizardScreen> {
   Widget build(BuildContext context) {
     final steps = [
       'Connect Shopify',
-      'Sync Products & Orders',
-      'Add Raw Materials',
-      'Link to Products (BOM)',
-      'Set Up Warehouse',
-      'Add Locations',
+      'Import Products & Sales History',
+      'Optional · Add Raw Materials',
+      'Optional · Link Materials to Products (BOM)',
+      'Optional · Set Up Warehouse',
+      'Optional · Add Locations',
     ];
 
     return Scaffold(
@@ -321,10 +324,14 @@ class _SetupWizardScreenState extends State<SetupWizardScreen> {
                       fontWeight: FontWeight.w700,
                       color: AppColors.textPrimary)),
               const Spacer(),
-              TextButton(
+              TextButton.icon(
                 onPressed: _finish,
-                child: Text('Skip setup',
-                    style: TextStyle(color: AppColors.textSecondary)),
+                icon: Icon(Icons.skip_next, size: 16,
+                    color: AppColors.textSecondary),
+                label: Text(
+                  _currentStep >= 2 ? 'Finish later' : 'Skip setup',
+                  style: TextStyle(color: AppColors.textSecondary),
+                ),
               ),
             ],
           ),
@@ -349,7 +356,11 @@ class _SetupWizardScreenState extends State<SetupWizardScreen> {
       child: Center(
         child: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 700),
-          child: switch (_currentStep) {
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              if (_currentStep >= 2) _ReadyToGoBanner(onFinish: _finish),
+              switch (_currentStep) {
             0 => _Step1Shopify(
                 domainCtrl: _domainCtrl,
                 connecting: _shopifyConnecting,
@@ -399,6 +410,8 @@ class _SetupWizardScreenState extends State<SetupWizardScreen> {
               ),
             _ => const SizedBox(),
           },
+            ],
+          ),
         ),
       ),
     );
@@ -416,6 +429,14 @@ class _SetupWizardScreenState extends State<SetupWizardScreen> {
               child: const Text('Back'),
             ),
           const Spacer(),
+          if (_currentStep >= 1) ...[
+            TextButton.icon(
+              onPressed: _loading ? null : _finish,
+              icon: const Icon(Icons.dashboard_outlined, size: 18),
+              label: const Text("I'm done — Go to dashboard"),
+            ),
+            const SizedBox(width: 12),
+          ],
           if (_currentStep < 5)
             FilledButton(
               onPressed: _loading ? null : _handleNext,
@@ -1100,6 +1121,56 @@ class _BomRowWidgetState extends State<_BomRowWidget> {
 }
 
 // ── Shared UI helpers ─────────────────────────────────────────────────────────
+
+class _ReadyToGoBanner extends StatelessWidget {
+  final VoidCallback onFinish;
+  const _ReadyToGoBanner({required this.onFinish});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 24),
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: AppColors.successBg,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: AppColors.success.withValues(alpha: 0.4)),
+      ),
+      child: Row(
+        children: [
+          Icon(Icons.check_circle, color: AppColors.success, size: 28),
+          const SizedBox(width: 14),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text("You're ready to use Ma5zony",
+                    style: TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w700,
+                        color: AppColors.textPrimary)),
+                const SizedBox(height: 2),
+                Text(
+                  'Shopify is connected and your products are imported. '
+                  'The remaining steps are optional — you can complete '
+                  'them now or anytime later from Settings.',
+                  style: TextStyle(
+                      fontSize: 13, color: AppColors.textSecondary),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 12),
+          FilledButton.icon(
+            onPressed: onFinish,
+            icon: const Icon(Icons.arrow_forward, size: 18),
+            label: const Text('Go to dashboard'),
+          ),
+        ],
+      ),
+    );
+  }
+}
 
 class _WizardCard extends StatelessWidget {
   final String title;

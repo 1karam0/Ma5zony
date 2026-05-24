@@ -278,6 +278,7 @@ class _OwnerDashboardScreenState extends State<OwnerDashboardScreen> {
                       title: 'Total Units in Stock',
                       value: '${_totalUnits(state)}',
                       icon: Icons.inventory_2,
+                      onTap: () => context.go('/products'),
                     ),
                     KPICard(
                       title: 'Items Below ROP',
@@ -285,12 +286,14 @@ class _OwnerDashboardScreenState extends State<OwnerDashboardScreen> {
                       icon: Icons.warning_amber,
                       isAlert: state.lowStockItems > 0,
                       color: AppColors.warning,
+                      onTap: () => context.go('/replenishment'),
                     ),
                     KPICard(
                       title: 'Open Recommendations',
                       value: '${state.openRecommendations}',
                       icon: Icons.assignment_late,
                       color: AppColors.primary,
+                      onTap: () => context.go('/replenishment'),
                     ),
                     KPICard(
                       title: 'Forecast Accuracy',
@@ -299,6 +302,7 @@ class _OwnerDashboardScreenState extends State<OwnerDashboardScreen> {
                           : 'N/A',
                       icon: Icons.auto_graph,
                       color: AppColors.success,
+                      onTap: () => context.go('/forecasts'),
                     ),
                   ]),
                 ],
@@ -316,12 +320,14 @@ class _OwnerDashboardScreenState extends State<OwnerDashboardScreen> {
                       icon: Icons.local_shipping,
                       isAlert: pendingMaterialOrders > 0,
                       color: AppColors.warning,
+                      onTap: () => context.go('/orders/raw-materials'),
                     ),
                     KPICard(
                       title: 'Active Production Orders',
                       value: '$activeProductionOrders',
                       icon: Icons.precision_manufacturing,
                       color: AppColors.accent,
+                      onTap: () => context.go('/production-orders'),
                     ),
                     KPICard(
                       title: 'Budget Remaining',
@@ -409,52 +415,40 @@ class _OwnerDashboardScreenState extends State<OwnerDashboardScreen> {
           const SizedBox(height: 24),
 
           // ── Top Expense Products Table ───────────────────────────────
-          Card(
-            elevation: 2,
-            shape:
-                RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-            child: Padding(
-              padding: const EdgeInsets.all(20),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text('Top Expense Products', style: AppTextStyles.h3),
-                  const SizedBox(height: 16),
-                  SizedBox(
-                    width: double.infinity,
-                    child: DataTable(
-                      columns: const [
-                        DataColumn(label: Text('Product')),
-                        DataColumn(label: Text('Monthly Forecast')),
-                        DataColumn(label: Text('Unit Cost')),
-                        DataColumn(label: Text('Monthly Spend')),
-                        DataColumn(label: Text('% of Total')),
-                      ],
-                      rows: topProducts.take(10).map((p) {
-                        final pct = totalSpend > 0
-                            ? (p.monthlySpend / totalSpend * 100)
-                            : 0.0;
-                        return DataRow(cells: [
-                          DataCell(Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              Text(p.name,
-                                  style: AppTextStyles.body
-                                      .copyWith(fontWeight: FontWeight.w600)),
-                              Text(p.sku, style: AppTextStyles.label),
-                            ],
-                          )),
-                          DataCell(Text('${p.monthlyForecast}')),
-                          DataCell(Text('EGP ${p.unitCost.toStringAsFixed(2)}')),
-                          DataCell(Text(
-                              'EGP ${p.monthlySpend.toStringAsFixed(0)}')),
-                          DataCell(Text('${pct.toStringAsFixed(1)}%')),
-                        ]);
-                      }).toList(),
-                    ),
-                  ),
+          _ExpandableAnalyticsCard(
+            title: 'Top Expense Products',
+            child: SizedBox(
+              width: double.infinity,
+              child: DataTable(
+                columns: const [
+                  DataColumn(label: Text('Product')),
+                  DataColumn(label: Text('Monthly Forecast')),
+                  DataColumn(label: Text('Unit Cost')),
+                  DataColumn(label: Text('Monthly Spend')),
+                  DataColumn(label: Text('% of Total')),
                 ],
+                rows: topProducts.take(10).map((p) {
+                  final pct = totalSpend > 0
+                      ? (p.monthlySpend / totalSpend * 100)
+                      : 0.0;
+                  return DataRow(cells: [
+                    DataCell(Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Text(p.name,
+                            style: AppTextStyles.body
+                                .copyWith(fontWeight: FontWeight.w600)),
+                        Text(p.sku, style: AppTextStyles.label),
+                      ],
+                    )),
+                    DataCell(Text('${p.monthlyForecast}')),
+                    DataCell(Text('EGP ${p.unitCost.toStringAsFixed(2)}')),
+                    DataCell(Text(
+                        'EGP ${p.monthlySpend.toStringAsFixed(0)}')),
+                    DataCell(Text('${pct.toStringAsFixed(1)}%')),
+                  ]);
+                }).toList(),
               ),
             ),
           ),
@@ -462,40 +456,28 @@ class _OwnerDashboardScreenState extends State<OwnerDashboardScreen> {
           const SizedBox(height: 24),
 
           // ── Supplier Cost Breakdown ──────────────────────────────────
-          Card(
-            elevation: 2,
-            shape:
-                RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-            child: Padding(
-              padding: const EdgeInsets.all(20),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text('Supplier Cost Breakdown', style: AppTextStyles.h3),
-                  const SizedBox(height: 16),
-                  HorizontallyScrollableTable(
-                    child: DataTable(
-                      columns: const [
-                        DataColumn(label: Text('Supplier')),
-                        DataColumn(label: Text('# Products')),
-                        DataColumn(label: Text('Avg Lead Time')),
-                        DataColumn(label: Text('Monthly Spend')),
-                      ],
-                      rows: supplierCosts.map((s) {
-                        return DataRow(cells: [
-                          DataCell(Text(s.name,
-                              style: AppTextStyles.body
-                                  .copyWith(fontWeight: FontWeight.w600))),
-                          DataCell(Text('${s.productCount}')),
-                          DataCell(Text(
-                              '${s.avgLeadTime.toStringAsFixed(0)} days')),
-                          DataCell(Text(
-                              'EGP ${s.totalMonthlySpend.toStringAsFixed(0)}')),
-                        ]);
-                      }).toList(),
-                    ),
-                  ),
+          _ExpandableAnalyticsCard(
+            title: 'Supplier Cost Breakdown',
+            child: HorizontallyScrollableTable(
+              child: DataTable(
+                columns: const [
+                  DataColumn(label: Text('Supplier')),
+                  DataColumn(label: Text('# Products')),
+                  DataColumn(label: Text('Avg Lead Time')),
+                  DataColumn(label: Text('Monthly Spend')),
                 ],
+                rows: supplierCosts.map((s) {
+                  return DataRow(cells: [
+                    DataCell(Text(s.name,
+                        style: AppTextStyles.body
+                            .copyWith(fontWeight: FontWeight.w600))),
+                    DataCell(Text('${s.productCount}')),
+                    DataCell(Text(
+                        '${s.avgLeadTime.toStringAsFixed(0)} days')),
+                    DataCell(Text(
+                        'EGP ${s.totalMonthlySpend.toStringAsFixed(0)}')),
+                  ]);
+                }).toList(),
               ),
             ),
           ),
@@ -1288,7 +1270,7 @@ class _OwnerDashboardScreenState extends State<OwnerDashboardScreen> {
       actions.add(PendingAction(
         icon: Icons.inventory_2_outlined,
         iconColor: AppColors.error,
-        label: 'Products at or below reorder point',
+        label: 'Products with less than 7 days of stock',
         count: '$lowStockCount',
         onTap: () => context.go('/products'),
       ));
@@ -1484,6 +1466,58 @@ class _ChecklistStep {
 }
 
 // ── Help & Support tab ──────────────────────────────────────────────────────
+
+/// A collapsible Card widget for heavy analytics sections on the dashboard.
+/// Starts collapsed so it doesn't dominate the initial view.
+class _ExpandableAnalyticsCard extends StatefulWidget {
+  final String title;
+  final Widget child;
+  const _ExpandableAnalyticsCard({required this.title, required this.child});
+
+  @override
+  State<_ExpandableAnalyticsCard> createState() =>
+      _ExpandableAnalyticsCardState();
+}
+
+class _ExpandableAnalyticsCardState extends State<_ExpandableAnalyticsCard> {
+  bool _expanded = false;
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      elevation: 2,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      clipBehavior: Clip.antiAlias,
+      child: Column(
+        children: [
+          InkWell(
+            onTap: () => setState(() => _expanded = !_expanded),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+              child: Row(
+                children: [
+                  Text(widget.title, style: AppTextStyles.h3),
+                  const Spacer(),
+                  Icon(
+                    _expanded
+                        ? Icons.keyboard_arrow_up
+                        : Icons.keyboard_arrow_down,
+                    color: AppColors.textSubdued,
+                  ),
+                ],
+              ),
+            ),
+          ),
+          if (_expanded)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
+              child: widget.child,
+            ),
+        ],
+      ),
+    );
+  }
+}
 
 class _OwnerHelpTab extends StatelessWidget {
   const _OwnerHelpTab();

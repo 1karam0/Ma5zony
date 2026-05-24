@@ -33,6 +33,8 @@ import 'package:ma5zony/features/legal/legal_screens.dart';
 import 'package:ma5zony/features/onboarding/setup_wizard_screen.dart';
 import 'package:ma5zony/features/orders/raw_material_orders_screen.dart';
 import 'package:ma5zony/features/orders/create_raw_material_order_screen.dart';
+import 'package:ma5zony/features/replenishment/replenishment_screen.dart';
+import 'package:ma5zony/features/inbox/inbox_screen.dart';
 import 'package:ma5zony/utils/role_guard.dart';
 
 // Private navigators
@@ -103,6 +105,11 @@ GoRouter buildAppRouter(AppState appState) {
           },
         ),
         GoRoute(
+          path: '/inbox',
+          pageBuilder: (context, state) =>
+              const NoTransitionPage(child: InboxScreen()),
+        ),
+        GoRoute(
           path: '/products',
           pageBuilder: (context, state) =>
               const NoTransitionPage(child: ProductsScreen()),
@@ -143,7 +150,8 @@ GoRouter buildAppRouter(AppState appState) {
         ),
         GoRoute(
           path: '/replenishment',
-          redirect: (_, _) => '/forecasts',
+          pageBuilder: (context, state) =>
+              const NoTransitionPage(child: ReplenishmentScreen()),
         ),
         GoRoute(
           path: '/integrations',

@@ -39,6 +39,7 @@ const _kGroupDashboard = _NavGroup(
   icon: Icons.space_dashboard_outlined,
   entries: [
     NavRouteEntry(icon: Icons.space_dashboard_outlined, label: 'Dashboard', path: '/dashboard'),
+    NavRouteEntry(icon: Icons.inbox_outlined, label: 'Action Center', path: '/inbox'),
   ],
 );
 
@@ -73,11 +74,11 @@ const _kGroupDemandOrders = _NavGroup(
   section: 'OPERATIONS',
   entries: [
     NavRouteEntry(icon: Icons.query_stats, label: 'Forecasts', path: '/forecasts'),
-    NavRouteEntry(icon: Icons.show_chart, label: 'Sales History', path: '/demand-data'),
+    NavRouteEntry(icon: Icons.show_chart, label: 'Demand Data', path: '/demand-data'),
     NavRouteEntry(icon: Icons.receipt_long_outlined, label: 'Purchase Orders', path: '/orders'),
     NavRouteEntry(icon: Icons.inventory_outlined, label: 'Material Orders', path: '/orders/raw-materials'),
     NavRouteEntry(icon: Icons.precision_manufacturing_outlined, label: 'Production Orders', path: '/production-orders'),
-    NavRouteEntry(icon: Icons.auto_awesome_motion_outlined, label: 'Reorder Alerts', path: '/replenishment'),
+    NavRouteEntry(icon: Icons.auto_awesome_motion_outlined, label: 'Replenishment', path: '/replenishment'),
     NavRouteEntry(icon: Icons.grid_view_outlined, label: 'Product Analysis', path: '/classification'),
   ],
 );
@@ -110,7 +111,7 @@ const _kGroupManufacturerFocused = _NavGroup(
   icon: Icons.factory_outlined,
   entries: [
     NavRouteEntry(icon: Icons.precision_manufacturing_outlined, label: 'Production Orders', path: '/production-orders'),
-    NavRouteEntry(icon: Icons.auto_awesome_motion_outlined, label: 'Reorder Alerts', path: '/replenishment'),
+    NavRouteEntry(icon: Icons.auto_awesome_motion_outlined, label: 'Replenishment', path: '/replenishment'),
     NavRouteEntry(icon: Icons.account_tree_outlined, label: 'Bill of Materials', path: '/bom'),
   ],
 );
@@ -166,9 +167,10 @@ const List<(String, String)> _kRouteTitles = [
   ('/products', 'Products'),
   ('/suppliers', 'Suppliers'),
   ('/warehouses', 'Warehouses'),
-  ('/demand-data', 'Sales History'),
+  ('/demand-data', 'Demand Data'),
   ('/classification', 'ABC-XYZ Classification'),
-  ('/replenishment', 'Reorder Alerts'),
+  ('/replenishment', 'Replenishment'),
+  ('/inbox', 'Action Center'),
   ('/integrations', 'Integrations'),
   ('/settings', 'Settings'),
   ('/financial-analytics', 'Financial Analytics'),
@@ -242,16 +244,17 @@ class _MainLayoutState extends State<MainLayout> {
       _lastError = error;
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text(error),
-          backgroundColor: Colors.red[700],
-          behavior: SnackBarBehavior.floating,
-          action: SnackBarAction(
-            label: 'Dismiss',
-            textColor: Colors.white,
-            onPressed: () => state.clearError(),
-          ),
-        ));
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(
+              content: Text(error),
+              backgroundColor: Colors.red[700],
+              behavior: SnackBarBehavior.floating,
+              duration: const Duration(seconds: 3),
+            ))
+            .closed
+            .then((_) {
+          if (mounted) state.clearError();
+        });
       });
     }
   }
@@ -387,26 +390,43 @@ class _MainLayoutState extends State<MainLayout> {
     );
   }
 
-  Map<String, int> _buildBadges(AppState state) => {
-        '/dashboard': state.hasUrgentStockAlerts ? state.criticalStockProducts.length : 0,
-        '/replenishment': state.openRecommendations,
-        '/orders': state.purchaseOrders
-            .where((o) =>
-                o.status.name == 'pending' || o.status.name == 'confirmed')
-            .length,
-        '/recommendations': state.mfgRecommendations
+  Map<String, int> _buildBadges(AppState state) {
+    final totalInboxCount = (state.hasUrgentStockAlerts
+            ? state.criticalStockProducts.length
+            : 0) +
+        state.openRecommendations +
+        state.purchaseOrders
+            .where((o) => o.status.name == 'draft')
+            .length +
+        state.mfgRecommendations
             .where((r) => r.status == RecommendationStatus.pending)
-            .length,
-        '/production-orders': state.productionOrders
-            .where((o) =>
-                o.status == ProductionOrderStatus.draft ||
-                o.status == ProductionOrderStatus.approved ||
-                o.status == ProductionOrderStatus.inProduction)
-            .length,
-        '/orders/raw-materials': state.rmPurchaseOrders
-            .where((o) => o.status == 'draft')
-            .length,
-      };
+            .length +
+        state.supplierOrders
+            .where((o) => o.status == 'acknowledged' && o.response != null)
+            .length;
+
+    return {
+      '/inbox': totalInboxCount,
+      '/dashboard': state.hasUrgentStockAlerts ? state.criticalStockProducts.length : 0,
+      '/replenishment': state.openRecommendations,
+      '/orders': state.purchaseOrders
+          .where((o) =>
+              o.status.name == 'pending' || o.status.name == 'confirmed')
+          .length,
+      '/recommendations': state.mfgRecommendations
+          .where((r) => r.status == RecommendationStatus.pending)
+          .length,
+      '/production-orders': state.productionOrders
+          .where((o) =>
+              o.status == ProductionOrderStatus.draft ||
+              o.status == ProductionOrderStatus.approved ||
+              o.status == ProductionOrderStatus.inProduction)
+          .length,
+      '/orders/raw-materials': state.rmPurchaseOrders
+          .where((o) => o.status == 'draft')
+          .length,
+    };
+  }
 }
 
 // ── Sidebar (permanent, always expanded) ─────────────────────────────────────

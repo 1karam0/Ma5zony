@@ -14,6 +14,12 @@ class Product {
   final int? minimumStock;
   final String? shopifyVariantId;
   final String? shopifyProductId;
+  /// Selling price charged to the customer (pulled from Shopify if available,
+  /// or entered manually). Used for margin calculations.
+  final double? sellingPrice;
+  /// Extra per-unit production fee charged by the manufacturer on top of
+  /// raw-material costs (only meaningful for manufactured products).
+  final double? productionFee;
 
   Product({
     required this.id,
@@ -31,6 +37,8 @@ class Product {
     this.minimumStock,
     this.shopifyVariantId,
     this.shopifyProductId,
+    this.sellingPrice,
+    this.productionFee,
   });
 
   /// Resolves a value from multiple possible field name aliases.
@@ -53,9 +61,8 @@ class Product {
     final category =
         _resolve<String>(data, ['category', 'product_type', 'type']) ??
             'Uncategorised';
-    // Unit cost: app uses 'unitCost'; Shopify uses 'price' or 'unit_cost'
-    final unitCostRaw =
-        _resolve<dynamic>(data, ['unitCost', 'unit_cost', 'price']);
+    // Unit cost: must be set manually — never fall back to the Shopify selling price
+    final unitCostRaw = _resolve<dynamic>(data, ['unitCost', 'unit_cost']);
     final unitCost = (unitCostRaw as num?)?.toDouble() ?? 0.0;
     // Stock: app uses 'currentStock'; Shopify uses 'inventory_quantity'
     final stockRaw =
@@ -81,6 +88,12 @@ class Product {
       shopifyProductId: _resolve<String>(
               data, ['shopifyProductId', 'shopify_product_id'])
           ?.toString(),
+      // Selling price: app uses 'sellingPrice'; Shopify may carry it under
+      // 'price' (we prefer 'sellingPrice' to avoid confusion with unitCost).
+      sellingPrice: (data['sellingPrice'] as num?)?.toDouble() ??
+          (_resolve<dynamic>(data, ['shopify_price', 'compareAtPrice']) as num?)
+              ?.toDouble(),
+      productionFee: (data['productionFee'] as num?)?.toDouble(),
     );
   }
 
@@ -108,6 +121,8 @@ class Product {
       if (minimumStock != null) 'minimumStock': minimumStock,
       if (shopifyVariantId != null) 'shopifyVariantId': shopifyVariantId,
       if (shopifyProductId != null) 'shopifyProductId': shopifyProductId,
+      if (sellingPrice != null) 'sellingPrice': sellingPrice,
+      if (productionFee != null) 'productionFee': productionFee,
     };
   }
 }

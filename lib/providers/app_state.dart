@@ -83,6 +83,8 @@ class AppState extends ChangeNotifier {
   FirebaseShopifyService? _shopifyService;
   NotificationService? _notificationService;
   StreamSubscription<List<AppNotification>>? _notifSub;
+  StreamSubscription<Map<String, List<DomainDemandRecord>>>? _demandSub;
+  Timer? _shopifyAutoSyncTimer;
   late final ForecastingService _forecastingService;
   late final InventoryPolicyService _policyService;
   late final ReplenishmentService _replenishmentService;
@@ -116,6 +118,8 @@ class AppState extends ChangeNotifier {
   @override
   void dispose() {
     _notifSub?.cancel();
+    _demandSub?.cancel();
+    _shopifyAutoSyncTimer?.cancel();
     super.dispose();
   }
 
@@ -191,6 +195,10 @@ class AppState extends ChangeNotifier {
   void _clearDomainState() {
     _notifSub?.cancel();
     _notifSub = null;
+    _demandSub?.cancel();
+    _demandSub = null;
+    _shopifyAutoSyncTimer?.cancel();
+    _shopifyAutoSyncTimer = null;
     _products = [];
     _warehouses = [];
     _suppliers = [];
@@ -863,7 +871,9 @@ class AppState extends ChangeNotifier {
         );
         final results = (result['results'] as List<dynamic>?) ?? [];
         emailsSent += results.where((r) => (r as Map)['status'] == 'sent').length;
-      } catch (_) {}
+      } catch (e) {
+        debugPrint('[approveReplenishmentManufacture] factory email failed: $e');
+      }
     }
 
     // Transition to materialsOrdered.
@@ -882,7 +892,9 @@ class AppState extends ChangeNotifier {
       );
       final mfrResults = (mfrResult['results'] as List<dynamic>?) ?? [];
       emailsSent += mfrResults.where((r) => (r as Map)['status'] == 'sent').length;
-    } catch (_) {}
+    } catch (e) {
+      debugPrint('[approveReplenishmentManufacture] manufacturer email failed: $e');
+    }
 
     // Record approval.
     final approvalRef = FirebaseFirestore.instance
@@ -901,6 +913,85 @@ class AppState extends ChangeNotifier {
 
     _approvedRecommendations.add(rec.productId);
     _lastApprovalEmailsSent = emailsSent;
+    notifyListeners();
+    return order;
+  }
+
+  /// Saves a replenishment recommendation as a *draft* PurchaseOrder.
+  /// No emails are sent and no approval record is created. The PO appears on
+  /// /orders and can be confirmed + sent from the order detail screen.
+  Future<PurchaseOrder?> saveDraftPOFromRecommendation(
+      ReplenishmentRecommendation rec) async {
+    if (_repo == null || _currentUser == null) return null;
+
+    final product = _products.where((p) => p.id == rec.productId).firstOrNull;
+    final supplierId = product?.supplierId;
+    final supplier = supplierId != null
+        ? _suppliers.where((s) => s.id == supplierId).firstOrNull
+        : null;
+
+    final item = PurchaseOrderItem(
+      productId: rec.productId,
+      productName: rec.productName,
+      sku: rec.sku,
+      quantity: rec.suggestedOrderQty,
+      unitCost: product?.unitCost ?? 0,
+      supplierId: supplierId,
+      supplierName: supplier?.name,
+      supplierEmail: supplier?.contactEmail,
+    );
+
+    final poNum = await _nextPoNumber();
+    final draft = PurchaseOrder(
+      id: '',
+      status: OrderStatus.draft,
+      createdAt: DateTime.now(),
+      createdByUid: _currentUser!.uid,
+      createdByName: _currentUser!.name,
+      items: [item],
+      poNumber: poNum,
+      supplierId: supplierId,
+    );
+
+    final saved = await _repo!.addPurchaseOrder(draft);
+    _purchaseOrders.insert(0, saved);
+    notifyListeners();
+    return saved;
+  }
+
+  /// Saves a manufacturing replenishment recommendation as a *draft*
+  /// ProductionOrder. No RM orders are created and no emails are sent.
+  Future<ProductionOrder?> saveDraftProductionOrderFromRecommendation(
+      ReplenishmentRecommendation rec) async {
+    if (_repo == null ||
+        _currentUser == null ||
+        _manufacturingService == null) {
+      return null;
+    }
+
+    final product = _products.where((p) => p.id == rec.productId).firstOrNull;
+    final manufacturerId = product?.manufacturerId ?? '';
+    if (manufacturerId.isEmpty) return null;
+
+    final bom =
+        _boms.where((b) => b.finalProductId == rec.productId).firstOrNull;
+    final estimatedCost = bom == null
+        ? 0.0
+        : bom.materials.fold<double>(0.0, (acc, mat) {
+            final rm = _rawMaterials
+                .where((r) => r.id == mat.rawMaterialId)
+                .firstOrNull;
+            return acc +
+                (rm?.unitCost ?? 0) * mat.quantityPerUnit * rec.suggestedOrderQty;
+          });
+
+    final order = await _manufacturingService!.createProductionOrder(
+      finalProductId: rec.productId,
+      quantity: rec.suggestedOrderQty,
+      manufacturerId: manufacturerId,
+      estimatedCost: estimatedCost,
+    );
+    _productionOrders.insert(0, order);
     notifyListeners();
     return order;
   }
@@ -1038,6 +1129,10 @@ class AppState extends ChangeNotifier {
       // Load Shopify connection state
       await _loadShopifyConnection();
 
+      // Start real-time demand listener and background Shopify sync so
+      // forecasts always reflect the latest sales without manual imports.
+      _startDemandListener();
+      _startShopifyAutoSync();
       // Load approvals
       if (_currentUser != null) {
         final approvalSnap = await FirebaseFirestore.instance
@@ -1099,8 +1194,16 @@ class AppState extends ChangeNotifier {
     final hasDemandData = (_demandByProduct[productId]?.isNotEmpty ?? false);
 
     final missing = <String>[];
-    if (supplier == null) missing.add('supplier');
-    if (manufacturer == null) missing.add('manufacturer');
+    // A purchased product needs a supplier; a manufactured product needs a
+    // manufacturer. Requiring both for every product is wrong — a product
+    // linked only to a supplier should never be flagged for "missing manufacturer".
+    final isManufactured = product.manufacturerId != null &&
+        product.manufacturerId!.isNotEmpty;
+    if (isManufactured) {
+      if (manufacturer == null) missing.add('manufacturer');
+    } else {
+      if (supplier == null) missing.add('supplier');
+    }
     if (product.leadTimeDays <= 0 &&
         (supplier?.typicalLeadTimeDays ?? 0) <= 0) {
       missing.add('leadTime');
@@ -1532,8 +1635,9 @@ class AppState extends ChangeNotifier {
 
   void _rebuildRecommendations() {
     final supplierMap = {for (final s in _suppliers) s.id: s};
+    final activeProducts = _products.where((p) => p.isActive).toList();
     _recommendations = _replenishmentService.buildRecommendations(
-      products: _products,
+      products: activeProducts,
       demandByProduct: _demandByProduct,
       suppliers: supplierMap,
       settings: _settings,
@@ -1541,7 +1645,7 @@ class AppState extends ChangeNotifier {
     // Keep ABC-XYZ classification in sync with the latest demand + product set
     // so the matrix is always available without needing a manual refresh.
     _abcXyzMatrix = _abcXyzService.buildMatrix(
-      products: _products,
+      products: activeProducts,
       demandByProduct: _demandByProduct,
     );
     computeMinimumStockLevels();
@@ -1549,7 +1653,7 @@ class AppState extends ChangeNotifier {
 
   void computeMinimumStockLevels() {
     _minimumStockResults = _minimumStockService.computeAll(
-      products: _products,
+      products: _products.where((p) => p.isActive).toList(),
       demandByProduct: _demandByProduct,
       boms: _boms,
       rawMaterials: _rawMaterials,
@@ -1574,10 +1678,14 @@ class AppState extends ChangeNotifier {
     _shopifyConnection = await _shopifyService!.connectStore(
       shopDomain: shopDomain,
     );
+    // Start background auto-sync once the store is connected.
+    _startShopifyAutoSync();
     notifyListeners();
   }
 
   Future<void> disconnectShopify() async {
+    _shopifyAutoSyncTimer?.cancel();
+    _shopifyAutoSyncTimer = null;
     if (_shopifyService == null) {
       _shopifyConnection = null;
       notifyListeners();
@@ -1695,6 +1803,56 @@ class AppState extends ChangeNotifier {
     _shopifyConnection = await _shopifyService!.getCurrentConnection();
   }
 
+  /// Subscribes to the `demandRecords` Firestore collection so the app
+  /// reacts instantly when new sales arrive (e.g. via the Shopify
+  /// `orders/create` webhook) or when records are added/edited elsewhere.
+  void _startDemandListener() {
+    if (_repo == null) return;
+    _demandSub?.cancel();
+    _demandSub = _repo!.watchDemandHistory().listen(
+      (snapshot) {
+        _demandByProduct = snapshot;
+        _remapShopifyDemand();
+        _rebuildRecommendations();
+        notifyListeners();
+      },
+      onError: (e) {
+        // Silent — listener errors are non-fatal; manual reload still works.
+        debugPrint('[demand] watch error: $e');
+      },
+    );
+  }
+
+  /// Silently pulls the latest Shopify orders right after login and then
+  /// every 10 minutes while the app is running, so demand data stays
+  /// up to date even when webhooks are not configured. UI snackbars are
+  /// only shown for the explicit "Import Shopify Orders" button path.
+  void _startShopifyAutoSync() {
+    _shopifyAutoSyncTimer?.cancel();
+    if (_shopifyService == null || _shopifyConnection?.isConnected != true) {
+      return;
+    }
+    // Kick off an immediate background sync (don't block UI).
+    unawaited(_silentShopifySync());
+    _shopifyAutoSyncTimer = Timer.periodic(
+      const Duration(minutes: 10),
+      (_) => unawaited(_silentShopifySync()),
+    );
+  }
+
+  Future<void> _silentShopifySync() async {
+    if (_shopifyService == null || _shopifyConnection?.isConnected != true) {
+      return;
+    }
+    try {
+      await _shopifyService!.importOrderHistory();
+      // No need to reload demand here — the Firestore listener will pick
+      // up any new records and refresh the UI automatically.
+    } catch (e) {
+      debugPrint('[shopify] auto-sync failed: $e');
+    }
+  }
+
   // ── Purchase Order Management ──────────────────────────────────────────────
 
   FirestoreInventoryRepository? get _firestoreRepo =>
@@ -1743,6 +1901,7 @@ class AppState extends ChangeNotifier {
       createdByUid: _currentUser?.uid ?? '',
       createdByName: _currentUser?.name ?? '',
       items: items,
+      // poNumber is assigned in saveDraftOrder or confirmPurchaseOrder
     );
   }
 
@@ -1751,6 +1910,23 @@ class AppState extends ChangeNotifier {
     if (_repo == null) return null;
     try {
       order.status = OrderStatus.draft;
+      if (order.poNumber == null) {
+        // Assign a sequential PO number if not already set
+        final po = PurchaseOrder(
+          id: order.id,
+          status: order.status,
+          createdAt: order.createdAt,
+          createdByUid: order.createdByUid,
+          createdByName: order.createdByName,
+          items: order.items,
+          notes: order.notes,
+          poNumber: await _nextPoNumber(),
+        );
+        final saved = await _repo!.addPurchaseOrder(po);
+        _purchaseOrders.insert(0, saved);
+        notifyListeners();
+        return saved;
+      }
       final saved = await _repo!.addPurchaseOrder(order);
       _purchaseOrders.insert(0, saved);
       notifyListeners();
@@ -1768,7 +1944,24 @@ class AppState extends ChangeNotifier {
 
     try {
       order.status = OrderStatus.confirmed;
-      final saved = await _repo!.addPurchaseOrder(order);
+      // Assign PO number now if it wasn't set when drafted
+      final PurchaseOrder toSave;
+      if (order.poNumber == null) {
+        final poNum = await _nextPoNumber();
+        toSave = PurchaseOrder(
+          id: order.id,
+          status: order.status,
+          createdAt: order.createdAt,
+          createdByUid: order.createdByUid,
+          createdByName: order.createdByName,
+          items: order.items,
+          notes: order.notes,
+          poNumber: poNum,
+        );
+      } else {
+        toSave = order;
+      }
+      final saved = await _repo!.addPurchaseOrder(toSave);
 
       // Split into supplier orders grouped by supplier
       final bySupplier = saved.itemsBySupplier;
@@ -1935,6 +2128,29 @@ class AppState extends ChangeNotifier {
         'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
     final rng = Random.secure();
     return List.generate(32, (_) => chars[rng.nextInt(chars.length)]).join();
+  }
+
+  /// Generate the next sequential PO number in format "PO-YYYY-NNNN".
+  /// Uses a Firestore counter document under `users/{uid}/settings/poCounter`
+  /// with an atomic increment to avoid duplicate numbers.
+  Future<String> _nextPoNumber() async {
+    if (_currentUser == null) {
+      return 'PO-${DateTime.now().year}-${DateTime.now().millisecondsSinceEpoch % 10000}';
+    }
+    final year = DateTime.now().year;
+    final counterRef = FirebaseFirestore.instance
+        .collection('users')
+        .doc(_currentUser!.uid)
+        .collection('settings')
+        .doc('poCounter');
+
+    final snap = await counterRef.get();
+    final data = snap.data() ?? {};
+    final lastYear = data['year'] as int? ?? 0;
+    final lastSeq = (lastYear == year ? (data['seq'] as int? ?? 0) : 0);
+    final nextSeq = lastSeq + 1;
+    await counterRef.set({'year': year, 'seq': nextSeq});
+    return 'PO-$year-${nextSeq.toString().padLeft(4, '0')}';
   }
 
   // ── Supply-Chain Data Loading ──────────────────────────────────────────────
@@ -2838,6 +3054,25 @@ class ProductForecastReadiness {
   });
 
   bool get isReady => missing.isEmpty;
+
+  /// Can run the forecast computation (demand data + cost + lead time).
+  bool get canCompute =>
+      !missing.contains('demandData') &&
+      !missing.contains('unitCost') &&
+      !missing.contains('leadTime');
+
+  /// Can dispatch the order (all missing items must be supplier/manufacturer only).
+  bool get canDispatch =>
+      canCompute &&
+      missing.every((m) => m == 'supplier' || m == 'manufacturer');
+
+  /// Items blocking compute (demand data, cost, lead time).
+  List<String> get missingForCompute =>
+      missing.where((m) => m == 'demandData' || m == 'unitCost' || m == 'leadTime').toList();
+
+  /// Items blocking dispatch (supplier/manufacturer contact info).
+  List<String> get missingForDispatch =>
+      missing.where((m) => m == 'supplier' || m == 'manufacturer').toList();
 
   /// Resolved lead time: product > supplier > 0.
   int get effectiveLeadTimeDays {

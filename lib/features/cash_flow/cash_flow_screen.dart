@@ -202,7 +202,7 @@ class _CashFlowScreenState extends State<CashFlowScreen> {
                   onImported: () {
                     if (mounted) {
                       ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(content: Text('Cash flow data imported')),
+                        const SnackBar(content: Text('Cash flow data imported'), duration: Duration(seconds: 3)),
                       );
                     }
                   },
@@ -237,11 +237,11 @@ class _CashFlowScreenState extends State<CashFlowScreen> {
     try {
       await state.importCashFlowFromExcel(bytes);
       messenger.showSnackBar(
-        const SnackBar(content: Text('Excel data imported successfully')),
+        const SnackBar(content: Text('Excel data imported successfully'), duration: Duration(seconds: 3)),
       );
     } catch (e) {
       messenger.showSnackBar(
-        SnackBar(content: Text('Import error: $e')),
+        SnackBar(duration: const Duration(seconds: 3), content: Text('Import error: $e')),
       );
     } finally {
       if (mounted) setState(() => _importing = false);
@@ -431,7 +431,7 @@ class _ManualCashFlowDialogState extends State<_ManualCashFlowDialog> {
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error: $e')),
+          SnackBar(duration: const Duration(seconds: 3), content: Text('Error: $e')),
         );
       }
     } finally {

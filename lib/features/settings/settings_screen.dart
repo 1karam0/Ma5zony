@@ -125,7 +125,7 @@ class _GlobalParametersTabState extends State<_GlobalParametersTab> {
                     ),
                     const SizedBox(height: 6),
                     Text(
-                      'These values control Safety Stock (Z-score) and EOQ calculations across all products.',
+                      'These values control safety stock and order quantity calculations across all products.',
                       style: AppTextStyles.bodySmall.copyWith(color: AppColors.textSecondary),
                     ),
                     const SizedBox(height: 20),
@@ -135,7 +135,7 @@ class _GlobalParametersTabState extends State<_GlobalParametersTab> {
                         labelText: 'Service Level Target (%)',
                         border: OutlineInputBorder(),
                         hintText: '95',
-                        helperText: '90% → Z=1.28  |  95% → Z=1.65  |  99% → Z=2.33',
+                        helperText: 'Higher % = more safety stock buffer. Recommended: 95%.',
                         prefixIcon: Icon(Icons.verified_outlined),
                       ),
                       keyboardType: TextInputType.number,
@@ -174,7 +174,7 @@ class _GlobalParametersTabState extends State<_GlobalParametersTab> {
 
             const SizedBox(height: 20),
 
-            // ── EOQ Parameters ─────────────────────────────────────────
+            // ── Order Cost Settings ─────────────────────────────────────
             Card(
               elevation: 2,
               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
@@ -187,23 +187,22 @@ class _GlobalParametersTabState extends State<_GlobalParametersTab> {
                       children: [
                         const Icon(Icons.calculate, color: AppColors.warning, size: 20),
                         const SizedBox(width: 8),
-                        Text('EOQ Parameters', style: AppTextStyles.h3),
+                        Text('Order Cost Settings', style: AppTextStyles.h3),
                       ],
                     ),
                     const SizedBox(height: 6),
                     Text(
-                      'Used in the EOQ formula: EOQ = √(2 × D × S / H). '
-                      'Ordering cost (S) and holding rate apply to all products unless overridden.',
+                      'Used to calculate the recommended order quantity for each product.',
                       style: AppTextStyles.bodySmall.copyWith(color: AppColors.textSecondary),
                     ),
                     const SizedBox(height: 20),
                     TextFormField(
                       controller: _orderingCostCtrl,
                       decoration: const InputDecoration(
-                        labelText: 'Ordering Cost per Order (\$)',
+                        labelText: 'Ordering Cost per Order',
                         border: OutlineInputBorder(),
                         hintText: '250',
-                        helperText: 'Fixed cost each time you place a purchase order (S in EOQ).',
+                        helperText: 'Fixed cost each time you place a purchase order.',
                         prefixIcon: Icon(Icons.receipt_outlined),
                         prefixText: 'EGP ',
                       ),
@@ -216,7 +215,7 @@ class _GlobalParametersTabState extends State<_GlobalParametersTab> {
                         labelText: 'Annual Holding Rate (% of unit cost)',
                         border: OutlineInputBorder(),
                         hintText: '20',
-                        helperText: 'Annual cost to hold 1 unit = unit cost × rate (H in EOQ). Typically 20–30%.',
+                        helperText: 'Annual cost to store one unit. Typically 20–30%.',
                         prefixIcon: Icon(Icons.warehouse_outlined),
                         suffixText: '%',
                       ),
@@ -245,7 +244,7 @@ class _GlobalParametersTabState extends State<_GlobalParametersTab> {
                   await appState.saveSettings(updated);
                   if (context.mounted) {
                     ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text('Settings saved')),
+                      const SnackBar(content: Text('Settings saved'), duration: Duration(seconds: 3)),
                     );
                   }
                 },
@@ -347,6 +346,7 @@ class _ForecastingDefaultsTabState extends State<_ForecastingDefaultsTab> {
                         ScaffoldMessenger.of(context).showSnackBar(
                           const SnackBar(
                             content: Text('Forecasting defaults saved'),
+                            duration: Duration(seconds: 3),
                           ),
                         );
                       }
@@ -397,18 +397,19 @@ class _UserManagementTabState extends State<_UserManagementTab> {
     if (result == 'added') {
       _emailController.clear();
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Team member added successfully.')),
+        const SnackBar(content: Text('Team member added successfully.'), duration: Duration(seconds: 3)),
       );
     } else if (result == 'invited') {
       _emailController.clear();
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text('Invitation email sent. They will receive a link to join.'),
+          duration: Duration(seconds: 3),
         ),
       );
     } else {
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(result)),
+        SnackBar(duration: const Duration(seconds: 3), content: Text(result)),
       );
     }
   }
@@ -850,7 +851,7 @@ class _DeleteAccountButtonState extends State<_DeleteAccountButton> {
     } on BackendException catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(e.message)),
+        SnackBar(duration: const Duration(seconds: 3), content: Text(e.message)),
       );
     } finally {
       if (mounted) setState(() => _deleting = false);

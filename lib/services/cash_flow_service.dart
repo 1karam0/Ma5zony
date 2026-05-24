@@ -47,6 +47,9 @@ class CashFlowService {
   /// Expected columns: Category, Amount, Date (optional), Notes (optional).
   Future<CashFlowSnapshot> importFromExcelBytes(Uint8List bytes) async {
     final excel = Excel.decodeBytes(bytes);
+    if (excel.tables.isEmpty) {
+      throw Exception('Excel file has no sheets');
+    }
     final sheet = excel.tables[excel.tables.keys.first];
     if (sheet == null || sheet.rows.length < 2) {
       throw Exception('Excel file is empty or has no data rows');

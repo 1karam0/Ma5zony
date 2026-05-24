@@ -9,6 +9,9 @@ class Supplier {
   final String? address;
   final double? latitude;
   final double? longitude;
+  /// IDs of raw materials this supplier can provide. A single supplier
+  /// commonly carries several materials.
+  final List<String> suppliedRawMaterialIds;
 
   Supplier({
     required this.id,
@@ -20,6 +23,7 @@ class Supplier {
     this.address,
     this.latitude,
     this.longitude,
+    this.suppliedRawMaterialIds = const [],
   });
 
   factory Supplier.fromJson(Map<String, dynamic> json) {
@@ -35,6 +39,10 @@ class Supplier {
       address: json['address'] as String?,
       latitude: (json['latitude'] as num?)?.toDouble(),
       longitude: (json['longitude'] as num?)?.toDouble(),
+      suppliedRawMaterialIds: (json['suppliedRawMaterialIds'] as List?)
+              ?.map((e) => e.toString())
+              .toList() ??
+          const [],
     );
   }
 
@@ -49,6 +57,8 @@ class Supplier {
       if (address != null) 'address': address,
       if (latitude != null) 'latitude': latitude,
       if (longitude != null) 'longitude': longitude,
+      if (suppliedRawMaterialIds.isNotEmpty)
+        'suppliedRawMaterialIds': suppliedRawMaterialIds,
     };
   }
 }

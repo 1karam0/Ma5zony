@@ -187,13 +187,13 @@ class _ManufacturersScreenState extends State<ManufacturersScreen> {
                 await state.deleteManufacturer(m.id);
                 if (ctx.mounted) {
                   ScaffoldMessenger.of(ctx).showSnackBar(
-                    const SnackBar(content: Text('Manufacturer deleted')),
+                    const SnackBar(content: Text('Manufacturer deleted'), duration: Duration(seconds: 3)),
                   );
                 }
               } catch (e) {
                 if (ctx.mounted) {
                   ScaffoldMessenger.of(ctx).showSnackBar(
-                    SnackBar(content: Text('Error: $e')),
+                    SnackBar(duration: const Duration(seconds: 3), content: Text('Error: $e')),
                   );
                 }
               }
@@ -458,6 +458,7 @@ class _ManufacturerFormDialogState extends State<_ManufacturerFormDialog> {
         Navigator.pop(context);
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
+              duration: const Duration(seconds: 3),
               content:
                   Text(_isEdit ? 'Manufacturer updated' : 'Manufacturer added')),
         );
@@ -465,7 +466,7 @@ class _ManufacturerFormDialogState extends State<_ManufacturerFormDialog> {
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error: $e')),
+          SnackBar(duration: const Duration(seconds: 3), content: Text('Error: $e')),
         );
       }
     } finally {

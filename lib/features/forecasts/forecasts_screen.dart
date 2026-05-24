@@ -6,6 +6,7 @@ import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 import 'package:ma5zony/features/forecasts/algorithm_breakdown_panel.dart';
+import 'package:ma5zony/features/forecasts/order_wizard_dialog.dart';
 import 'package:ma5zony/features/products/products_screen.dart' show showProductEditDialog;
 import 'package:ma5zony/models/product.dart';
 import 'package:ma5zony/models/replenishment_recommendation.dart';
@@ -95,7 +96,7 @@ class ForecastsScreen extends StatefulWidget {
 
 class _ForecastsScreenState extends State<ForecastsScreen> {
   String? _selectedProductId;
-  String _algorithm = 'SMA';
+  String _algorithm = 'Auto';
   double _smaWindow = 3;
   int _wmaWeightCount = 3;
   double _alpha = 0.3;
@@ -105,6 +106,16 @@ class _ForecastsScreenState extends State<ForecastsScreen> {
   bool _running = false;
   bool _defaultsLoaded = false;
   bool _autoRanForPreSelected = false;
+  bool _showManualAlgorithms = false;
+
+  /// Length of Shopify sales history to import (months). Independent of the
+  /// SMA window — this is "how far back to pull", not "smoothing length".
+  int _importWindowMonths = 3;
+
+  /// User override for the coverage horizon (days of stock the product
+  /// should cover). Null means "derive from latest cash-flow snapshot, else
+  /// fall back to lead-time × 2".
+  int? _coverageDaysOverride;
 
   @override
   void didChangeDependencies() {
@@ -145,7 +156,32 @@ class _ForecastsScreenState extends State<ForecastsScreen> {
     _beta = s.holtBeta;
     _gamma = s.holtGamma;
     _seasonLength = s.holtWintersSeasonLength;
+    _showManualAlgorithms = _algorithm != 'Auto';
     _defaultsLoaded = true;
+  }
+
+  /// Days the latest cash-flow snapshot extends from "today". Returns null
+  /// when there is no snapshot or no future-dated entries.
+  int? _cashFlowCoverageDays(AppState state) {
+    final snap = state.latestCashFlow;
+    if (snap == null || snap.entries.isEmpty) return null;
+    final latest = snap.entries
+        .map((e) => e.date)
+        .reduce((a, b) => a.isAfter(b) ? a : b);
+    final days = latest.difference(DateTime.now()).inDays;
+    return days > 0 ? days : null;
+  }
+
+  int _effectiveCoverageDays(AppState state) {
+    if (_coverageDaysOverride != null) return _coverageDaysOverride!;
+    final fromCashFlow = _cashFlowCoverageDays(state);
+    if (fromCashFlow != null) return fromCashFlow;
+    final readiness =
+        _selectedProductId != null
+            ? state.productReadinessForForecast(_selectedProductId!)
+            : null;
+    final lt = readiness?.effectiveLeadTimeDays ?? 30;
+    return lt * 2;
   }
 
   List<double> get _wmaWeights {
@@ -229,7 +265,7 @@ class _ForecastsScreenState extends State<ForecastsScreen> {
         ? null
         : state.productReadinessForForecast(safeSelectedId);
     final canRunForecast =
-        safeSelectedId != null && (readiness?.isReady ?? false);
+        safeSelectedId != null && (readiness?.canCompute ?? false);
 
     return DefaultTabController(
       length: 2,
@@ -351,14 +387,48 @@ class _ForecastsScreenState extends State<ForecastsScreen> {
                                     if (readiness != null)
                                       _ReadinessGate(
                                         readiness: readiness,
-                                        windowMonths: _smaWindow.toInt(),
+                                        windowMonths: _importWindowMonths,
                                       ),
+                                    const SizedBox(height: 16),
+                                    _SalesWindowPicker(
+                                      months: _importWindowMonths,
+                                      onChanged: (v) =>
+                                          setState(() => _importWindowMonths = v),
+                                    ),
                                     const SizedBox(height: 12),
-                                    Text('Forecasting Algorithm', style: AppTextStyles.label.copyWith(fontWeight: FontWeight.w600)),
+                                    _CoveragePeriodPicker(
+                                      effectiveDays:
+                                          _effectiveCoverageDays(state),
+                                      overrideDays: _coverageDaysOverride,
+                                      cashFlowDays:
+                                          _cashFlowCoverageDays(state),
+                                      hasCashFlow: state.latestCashFlow != null,
+                                      onChanged: (v) => setState(
+                                          () => _coverageDaysOverride = v),
+                                    ),
+                                    const SizedBox(height: 16),
+                                    Text('Forecasting Algorithm',
+                                        style: AppTextStyles.label.copyWith(
+                                            fontWeight: FontWeight.w600)),
                                     const SizedBox(height: 10),
-                                    _AlgorithmSelector(
-                                      selected: _algorithm,
-                                      onChanged: (v) => setState(() => _algorithm = v),
+                                    _AutoAlgorithmCard(
+                                      selected: _algorithm == 'Auto',
+                                      onTap: () => setState(() {
+                                        _algorithm = 'Auto';
+                                        _showManualAlgorithms = false;
+                                      }),
+                                    ),
+                                    const SizedBox(height: 8),
+                                    _ManualAlgorithmExpander(
+                                      expanded: _showManualAlgorithms,
+                                      currentAlgo: _algorithm,
+                                      onToggle: () => setState(() =>
+                                          _showManualAlgorithms =
+                                              !_showManualAlgorithms),
+                                      onPick: (code) => setState(() {
+                                        _algorithm = code;
+                                        _showManualAlgorithms = true;
+                                      }),
                                     ),
                                     const SizedBox(height: 10),
                                     Container(
@@ -386,7 +456,8 @@ class _ForecastsScreenState extends State<ForecastsScreen> {
                                       ),
                                     ),
                                     const SizedBox(height: 20),
-                                    _AlgorithmParams(
+                                    if (_algorithm != 'Auto')
+                                      _AlgorithmParams(
                                       algorithm: _algorithm,
                                       smaWindow: _smaWindow,
                                       wmaWeightCount: _wmaWeightCount,
@@ -473,12 +544,13 @@ class _ForecastsScreenState extends State<ForecastsScreen> {
                                         state: context.read<AppState>(),
                                       ),
                                       const SizedBox(height: 20),
-                                      if (readiness != null && readiness.isReady)
-                                        _OrderEmailActionsCard(
+                                      if (readiness != null && readiness.canDispatch)
+                                        _GoToReplenishmentCard(
+                                          productId: _selectedProductId!,
                                           forecast: forecast,
                                           readiness: readiness,
                                         ),
-                                      if (readiness != null && readiness.isReady)
+                                      if (readiness != null && readiness.canDispatch)
                                         const SizedBox(height: 20),
                                       _ForecastDataTable(forecast: forecast),
                                       // RM Order CTA
@@ -511,75 +583,396 @@ class _ForecastsScreenState extends State<ForecastsScreen> {
   }
 }
 
-// ── Algorithm Selector Grid ─────────────────────────────────────────────────
+// ── Algorithm Selector ─────────────────────────────────────────────────────
+// Auto is presented as the recommended default; the rest live behind a
+// "Manual algorithm" expander so newcomers aren't asked to pick between SMA,
+// WMA, SES, Holt and Holt-Winters before they understand them.
 
-class _AlgorithmSelector extends StatelessWidget {
-  final String selected;
-  final ValueChanged<String> onChanged;
+class _AutoAlgorithmCard extends StatelessWidget {
+  final bool selected;
+  final VoidCallback onTap;
+  const _AutoAlgorithmCard({required this.selected, required this.onTap});
 
-  const _AlgorithmSelector({required this.selected, required this.onChanged});
+  @override
+  Widget build(BuildContext context) {
+    final auto = _algorithms.firstWhere((a) => a.code == 'Auto');
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(8),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 180),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+        decoration: BoxDecoration(
+          color: selected ? AppColors.primary : Colors.transparent,
+          border: Border.all(
+            color: selected ? AppColors.primary : AppColors.border,
+            width: selected ? 1.4 : 1,
+          ),
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: Row(
+          children: [
+            Icon(auto.icon,
+                size: 18,
+                color: selected ? Colors.white : AppColors.primary),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Text(
+                        'Auto',
+                        style: TextStyle(
+                          fontWeight: FontWeight.w700,
+                          fontSize: 14,
+                          color: selected
+                              ? Colors.white
+                              : AppColors.textPrimary,
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 6, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: selected
+                              ? Colors.white.withValues(alpha: 0.2)
+                              : AppColors.primaryLight,
+                          borderRadius: BorderRadius.circular(4),
+                        ),
+                        child: Text(
+                          'Recommended',
+                          style: TextStyle(
+                            fontSize: 10,
+                            fontWeight: FontWeight.w600,
+                            color: selected ? Colors.white : AppColors.primary,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    auto.fullName,
+                    style: TextStyle(
+                      fontSize: 11,
+                      color: selected
+                          ? Colors.white.withValues(alpha: 0.85)
+                          : AppColors.textSecondary,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            if (selected)
+              const Icon(Icons.check_circle, size: 16, color: Colors.white),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _ManualAlgorithmExpander extends StatelessWidget {
+  final bool expanded;
+  final String currentAlgo;
+  final VoidCallback onToggle;
+  final ValueChanged<String> onPick;
+  const _ManualAlgorithmExpander({
+    required this.expanded,
+    required this.currentAlgo,
+    required this.onToggle,
+    required this.onPick,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final manualAlgos = _algorithms.where((a) => a.code != 'Auto').toList();
+    final currentIsManual = currentAlgo != 'Auto';
+    final currentMeta = currentIsManual
+        ? _algorithms.firstWhere((a) => a.code == currentAlgo,
+            orElse: () => manualAlgos.first)
+        : null;
+    return Container(
+      decoration: BoxDecoration(
+        border: Border.all(color: AppColors.border),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          InkWell(
+            onTap: onToggle,
+            borderRadius: BorderRadius.circular(8),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              child: Row(
+                children: [
+                  const Icon(Icons.tune, size: 16, color: AppColors.textSecondary),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      currentMeta != null
+                          ? 'Manual algorithm: ${currentMeta.label}'
+                          : 'Manual algorithm',
+                      style: const TextStyle(
+                        fontWeight: FontWeight.w600,
+                        fontSize: 13,
+                        color: AppColors.textPrimary,
+                      ),
+                    ),
+                  ),
+                  Icon(expanded ? Icons.expand_less : Icons.expand_more,
+                      size: 18, color: AppColors.textSecondary),
+                ],
+              ),
+            ),
+          ),
+          if (expanded) ...[
+            const Divider(height: 1),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(8, 8, 8, 8),
+              child: Column(
+                children: manualAlgos.map((algo) {
+                  final isSelected = currentAlgo == algo.code;
+                  return Padding(
+                    padding: const EdgeInsets.only(bottom: 6),
+                    child: Tooltip(
+                      message: algo.description,
+                      preferBelow: false,
+                      child: InkWell(
+                        onTap: () => onPick(algo.code),
+                        borderRadius: BorderRadius.circular(8),
+                        child: AnimatedContainer(
+                          duration: const Duration(milliseconds: 180),
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 10, vertical: 8),
+                          decoration: BoxDecoration(
+                            color: isSelected
+                                ? AppColors.primary
+                                : Colors.transparent,
+                            border: Border.all(
+                              color: isSelected
+                                  ? AppColors.primary
+                                  : AppColors.border,
+                            ),
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: Row(
+                            children: [
+                              Icon(
+                                algo.icon,
+                                size: 14,
+                                color: isSelected
+                                    ? Colors.white
+                                    : AppColors.textSecondary,
+                              ),
+                              const SizedBox(width: 8),
+                              Text(
+                                algo.label,
+                                style: TextStyle(
+                                  fontWeight: FontWeight.w600,
+                                  fontSize: 12,
+                                  color: isSelected
+                                      ? Colors.white
+                                      : AppColors.textPrimary,
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: Text(
+                                  algo.fullName,
+                                  style: TextStyle(
+                                    fontSize: 11,
+                                    color: isSelected
+                                        ? Colors.white.withValues(alpha: 0.85)
+                                        : AppColors.textSecondary,
+                                  ),
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                              if (isSelected)
+                                const Icon(Icons.check_circle,
+                                    size: 14, color: Colors.white),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  );
+                }).toList(),
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+// ── Sales History Window Picker ────────────────────────────────────────────
+// How many months of Shopify history to import for this product. Separate
+// from the SMA smoothing window — this controls "how far back to pull".
+
+class _SalesWindowPicker extends StatelessWidget {
+  final int months;
+  final ValueChanged<int> onChanged;
+  const _SalesWindowPicker({required this.months, required this.onChanged});
+
+  static const _options = [1, 3, 6, 12, 24];
+
+  String _label(int m) {
+    if (m == 1) return 'Last 1 month';
+    if (m < 12) return 'Last $m months';
+    if (m == 12) return 'Last 12 months (1 year)';
+    return 'Last $m months';
+  }
 
   @override
   Widget build(BuildContext context) {
     return Column(
-      children: _algorithms.map((algo) {
-        final isSelected = selected == algo.code;
-        return Padding(
-          padding: const EdgeInsets.only(bottom: 6),
-          child: Tooltip(
-            message: algo.description,
-            preferBelow: false,
-            child: InkWell(
-              onTap: () => onChanged(algo.code),
-              borderRadius: BorderRadius.circular(8),
-              child: AnimatedContainer(
-                duration: const Duration(milliseconds: 180),
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            const Icon(Icons.history, size: 14, color: AppColors.textSecondary),
+            const SizedBox(width: 6),
+            Text('Sales History Window',
+                style: AppTextStyles.label
+                    .copyWith(fontWeight: FontWeight.w600)),
+          ],
+        ),
+        const SizedBox(height: 6),
+        DropdownButtonFormField<int>(
+          initialValue: months,
+          isDense: true,
+          decoration: const InputDecoration(
+            isDense: true,
+            contentPadding:
+                EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+            border: OutlineInputBorder(),
+          ),
+          items: _options
+              .map((m) => DropdownMenuItem(
+                    value: m,
+                    child: Text(_label(m),
+                        style: const TextStyle(fontSize: 12)),
+                  ))
+              .toList(),
+          onChanged: (v) {
+            if (v != null) onChanged(v);
+          },
+        ),
+        const SizedBox(height: 4),
+        Text(
+          'Controls how far back Shopify sales are pulled when importing.',
+          style: AppTextStyles.bodySmall.copyWith(
+              fontSize: 10.5, color: AppColors.textSecondary),
+        ),
+      ],
+    );
+  }
+}
+
+// ── Coverage Period Picker ─────────────────────────────────────────────────
+// How long the product needs to cover. Auto-derived from the latest cash-flow
+// snapshot when present, otherwise the user picks manually.
+
+class _CoveragePeriodPicker extends StatelessWidget {
+  final int effectiveDays;
+  final int? overrideDays;
+  final int? cashFlowDays;
+  final bool hasCashFlow;
+  final ValueChanged<int?> onChanged;
+  const _CoveragePeriodPicker({
+    required this.effectiveDays,
+    required this.overrideDays,
+    required this.cashFlowDays,
+    required this.hasCashFlow,
+    required this.onChanged,
+  });
+
+  static const _options = [14, 30, 45, 60, 90, 120, 180];
+
+  String _label(int d) {
+    if (d < 30) return '$d days';
+    final months = (d / 30).round();
+    return '$d days (~$months mo)';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final usingCashFlow = overrideDays == null && cashFlowDays != null;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            const Icon(Icons.event_available,
+                size: 14, color: AppColors.textSecondary),
+            const SizedBox(width: 6),
+            Text('Coverage Period',
+                style: AppTextStyles.label
+                    .copyWith(fontWeight: FontWeight.w600)),
+            const Spacer(),
+            if (usingCashFlow)
+              Container(
+                padding: const EdgeInsets.symmetric(
+                    horizontal: 6, vertical: 2),
                 decoration: BoxDecoration(
-                  color: isSelected ? AppColors.primary : Colors.transparent,
-                  border: Border.all(
-                    color: isSelected ? AppColors.primary : AppColors.border,
-                  ),
-                  borderRadius: BorderRadius.circular(8),
+                  color: AppColors.success.withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(4),
                 ),
-                child: Row(
-                  children: [
-                    Icon(
-                      algo.icon,
-                      size: 16,
-                      color: isSelected ? Colors.white : AppColors.textSecondary,
-                    ),
-                    const SizedBox(width: 8),
-                    Text(
-                      algo.label,
-                      style: TextStyle(
-                        fontWeight: FontWeight.w600,
-                        fontSize: 13,
-                        color: isSelected ? Colors.white : AppColors.textPrimary,
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Text(
-                        algo.fullName,
-                        style: TextStyle(
-                          fontSize: 11,
-                          color: isSelected
-                              ? Colors.white.withValues(alpha: 0.85)
-                              : AppColors.textSecondary,
-                        ),
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ),
-                    if (isSelected)
-                      const Icon(Icons.check_circle, size: 14, color: Colors.white),
-                  ],
+                child: const Text(
+                  'From cash flow',
+                  style: TextStyle(
+                    fontSize: 10,
+                    fontWeight: FontWeight.w600,
+                    color: AppColors.success,
+                  ),
                 ),
               ),
-            ),
+          ],
+        ),
+        const SizedBox(height: 6),
+        DropdownButtonFormField<int?>(
+          initialValue:
+              overrideDays ?? (_options.contains(effectiveDays) ? effectiveDays : null),
+          isDense: true,
+          decoration: const InputDecoration(
+            isDense: true,
+            contentPadding:
+                EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+            border: OutlineInputBorder(),
           ),
-        );
-      }).toList(),
+          hint: Text(_label(effectiveDays),
+              style: const TextStyle(fontSize: 12)),
+          items: [
+            if (hasCashFlow && cashFlowDays != null)
+              DropdownMenuItem<int?>(
+                value: null,
+                child: Text('Auto from cash flow (~$cashFlowDays d)',
+                    style: const TextStyle(fontSize: 12)),
+              ),
+            ..._options.map((d) => DropdownMenuItem<int?>(
+                  value: d,
+                  child:
+                      Text(_label(d), style: const TextStyle(fontSize: 12)),
+                )),
+          ],
+          onChanged: onChanged,
+        ),
+        const SizedBox(height: 4),
+        Text(
+          hasCashFlow
+              ? 'How long this product needs to last. Default comes from your latest cash-flow sheet.'
+              : 'How long this product needs to last. Upload a cash-flow sheet to auto-derive this.',
+          style: AppTextStyles.bodySmall.copyWith(
+              fontSize: 10.5, color: AppColors.textSecondary),
+        ),
+      ],
     );
   }
 }
@@ -626,11 +1019,10 @@ class _AlgorithmParams extends StatelessWidget {
         const SizedBox(height: 10),
         if (algorithm == 'SMA') ...[
           _ParamSlider(
-            label: 'Window size (n)',
+            label: 'History window',
             value: smaWindow,
             min: 2, max: 12, step: 1,
             display: '${smaWindow.toInt()} months',
-            formula: 'F = avg(last n periods)',
             onChanged: onSmaWindowChanged,
           ),
         ] else if (algorithm == 'WMA') ...[
@@ -639,70 +1031,62 @@ class _AlgorithmParams extends StatelessWidget {
             value: wmaWeightCount.toDouble(),
             min: 2, max: 8, step: 1,
             display: '$wmaWeightCount periods',
-            formula: 'Weights: ${List.generate(wmaWeightCount, (i) => i + 1).join(', ')} (linear)',
             onChanged: (v) => onWmaWeightCountChanged(v.toInt()),
           ),
         ] else if (algorithm == 'SES') ...[
           _ParamSlider(
-            label: 'Alpha (α) — smoothing',
+            label: 'Smoothing level',
             value: alpha,
             min: 0.05, max: 0.95, step: 0.05,
             display: alpha.toStringAsFixed(2),
-            formula: 'Higher α = more weight on recent demand',
             onChanged: onAlphaChanged,
           ),
         ] else if (algorithm == 'Holt') ...[
           _ParamSlider(
-            label: 'Alpha (α) — level',
+            label: 'Level smoothing',
             value: alpha,
             min: 0.05, max: 0.95, step: 0.05,
             display: alpha.toStringAsFixed(2),
-            formula: 'Controls how fast the level adapts',
             onChanged: onAlphaChanged,
           ),
           const SizedBox(height: 10),
           _ParamSlider(
-            label: 'Beta (β) — trend',
+            label: 'Trend smoothing',
             value: beta,
             min: 0.01, max: 0.50, step: 0.01,
             display: beta.toStringAsFixed(2),
-            formula: 'Controls how fast the trend adapts',
             onChanged: onBetaChanged,
           ),
         ] else if (algorithm == 'HoltWinters') ...[
           _ParamSlider(
-            label: 'Alpha (α) — level',
+            label: 'Level smoothing',
             value: alpha,
             min: 0.05, max: 0.95, step: 0.05,
             display: alpha.toStringAsFixed(2),
-            formula: 'Smoothing for the level component',
             onChanged: onAlphaChanged,
           ),
           const SizedBox(height: 10),
           _ParamSlider(
-            label: 'Beta (β) — trend',
+            label: 'Trend smoothing',
             value: beta,
             min: 0.01, max: 0.50, step: 0.01,
             display: beta.toStringAsFixed(2),
-            formula: 'Smoothing for the trend component',
             onChanged: onBetaChanged,
           ),
           const SizedBox(height: 10),
           _ParamSlider(
-            label: 'Gamma (γ) — seasonal',
+            label: 'Seasonal smoothing',
             value: gamma,
             min: 0.01, max: 0.50, step: 0.01,
             display: gamma.toStringAsFixed(2),
-            formula: 'Smoothing for the seasonal component',
             onChanged: onGammaChanged,
           ),
           const SizedBox(height: 10),
           _ParamSlider(
-            label: 'Season length (s)',
+            label: 'Season length',
             value: seasonLength.toDouble(),
             min: 4, max: 24, step: 1,
             display: '$seasonLength periods',
-            formula: 'Needs ≥$seasonLength data points',
             onChanged: (v) => onSeasonLengthChanged(v.toInt()),
           ),
         ],
@@ -718,7 +1102,6 @@ class _ParamSlider extends StatelessWidget {
   final double max;
   final double step;
   final String display;
-  final String formula;
   final ValueChanged<double> onChanged;
 
   const _ParamSlider({
@@ -728,7 +1111,6 @@ class _ParamSlider extends StatelessWidget {
     required this.max,
     required this.step,
     required this.display,
-    required this.formula,
     required this.onChanged,
   });
 
@@ -791,8 +1173,6 @@ class _ParamSlider extends StatelessWidget {
               ),
             ],
           ),
-          const SizedBox(height: 4),
-          Text(formula, style: AppTextStyles.bodySmall.copyWith(color: AppColors.textSubdued, fontSize: 10)),
         ],
       ),
     );
@@ -849,35 +1229,18 @@ class _ForecastKpiRow extends StatelessWidget {
       final cards = <Widget>[
         KPICard(
           title: 'Forecast Accuracy',
-          value: '${accuracy.toStringAsFixed(1)}%',
+          value: forecast.mape != null ? '${accuracy.toStringAsFixed(1)}%' : '-',
           icon: Icons.verified,
           color: accuracy >= 90
               ? AppColors.success
               : (accuracy >= 75 ? AppColors.warning : AppColors.error),
         ),
         KPICard(
-          title: 'MAPE',
-          value: mape == 0 ? '-' : '${mape.toStringAsFixed(1)}%',
-          icon: Icons.functions,
-          color: mape == 0
-              ? AppColors.textSecondary
-              : (mape < 10
-                  ? AppColors.success
-                  : (mape < 20 ? AppColors.warning : AppColors.error)),
-        ),
-        KPICard(
-          title: 'Next Period',
+          title: 'Next Period Forecast',
           value: '$nextPeriod units',
           icon: Icons.next_plan,
           color: AppColors.primary,
         ),
-        if (forecast.rmse != null)
-          KPICard(
-            title: 'RMSE',
-            value: forecast.rmse!.toStringAsFixed(1),
-            icon: Icons.analytics_outlined,
-            color: AppColors.info,
-          ),
       ];
 
       return Wrap(
@@ -1049,11 +1412,7 @@ class _InventoryPolicyPanel extends StatelessWidget {
             ),
             child: const Icon(Icons.calculate, color: AppColors.warning, size: 20),
           ),
-          title: Text('Inventory Policy (EOQ / Safety Stock / ROP)', style: AppTextStyles.h3),
-          subtitle: Text(
-            'Based on forecast → formulae from Silver, Pyke & Peterson',
-            style: AppTextStyles.bodySmall,
-          ),
+          title: Text('Inventory Policy', style: AppTextStyles.h3),
           children: [
             const Divider(),
             const SizedBox(height: 16),
@@ -1066,18 +1425,10 @@ class _InventoryPolicyPanel extends StatelessWidget {
                   child: _FormulaResultCard(
                     icon: Icons.shopping_cart,
                     color: AppColors.success,
-                    title: 'EOQ',
-                    subtitle: 'Economic Order Quantity',
-                    formula: 'EOQ = √(2 × D × S / H)',
-                    substituted:
-                        'EOQ = √(2 × ${annualDemand.toStringAsFixed(0)} × ${orderingCost.toStringAsFixed(0)} / ${holdingCostPerUnit.toStringAsFixed(2)})',
+                    title: 'Order Quantity (EOQ)',
+                    subtitle: 'Recommended units per order',
                     result: '$eoqRounded units',
                     explanation: 'Order this quantity each time to minimise total ordering + holding cost.',
-                    variables: [
-                      ('D', 'Annual demand', '${annualDemand.toStringAsFixed(0)} units/yr'),
-                      ('S', 'Ordering cost', 'EGP ${orderingCost.toStringAsFixed(0)}/order'),
-                      ('H', 'Holding cost', 'EGP ${holdingCostPerUnit.toStringAsFixed(2)}/unit/yr'),
-                    ],
                   ),
                 ),
                 const SizedBox(width: 12),
@@ -1087,16 +1438,8 @@ class _InventoryPolicyPanel extends StatelessWidget {
                     color: AppColors.info,
                     title: 'Safety Stock',
                     subtitle: 'Buffer for demand variability',
-                    formula: 'SS = Z × σ × √(LT)',
-                    substituted:
-                        'SS = ${serviceLevelZ.toStringAsFixed(2)} × σ × √(LT)',
                     result: '$safetyStock units',
                     explanation: 'Keep this buffer on hand to meet demand during unexpected delays.',
-                    variables: [
-                      ('Z', 'Service level z-score', '${serviceLevelZ.toStringAsFixed(2)} ($serviceLevelLabel SL)'),
-                      ('σ', 'Demand std deviation', 'from history'),
-                      ('LT', 'Lead time in periods', '${(forecast.leadTimeDays ?? 0) ~/ 30} months'),
-                    ],
                   ),
                 ),
                 const SizedBox(width: 12),
@@ -1105,17 +1448,9 @@ class _InventoryPolicyPanel extends StatelessWidget {
                     icon: Icons.notification_important,
                     color: AppColors.warning,
                     title: 'Reorder Point',
-                    subtitle: 'Trigger order when stock hits this',
-                    formula: 'ROP = (D × LT) + SS',
-                    substituted:
-                        'ROP = (${monthlyDemand.toStringAsFixed(1)} × ${(forecast.leadTimeDays ?? 0) ~/ 30}) + $safetyStock',
+                    subtitle: 'Place a new order when stock hits this level',
                     result: '$rop units',
-                    explanation: 'Place a new order when your stock level reaches this point.',
-                    variables: [
-                      ('D', 'Monthly demand forecast', '${monthlyDemand.toStringAsFixed(1)} units'),
-                      ('LT', 'Lead time', '${(forecast.leadTimeDays ?? 0) ~/ 30} months'),
-                      ('SS', 'Safety stock', '$safetyStock units'),
-                    ],
+                    explanation: 'Order when your stock drops to this level to avoid running out.',
                   ),
                 ),
               ],
@@ -1164,22 +1499,16 @@ class _FormulaResultCard extends StatelessWidget {
   final Color color;
   final String title;
   final String subtitle;
-  final String formula;
-  final String substituted;
   final String result;
   final String explanation;
-  final List<(String, String, String)> variables;
 
   const _FormulaResultCard({
     required this.icon,
     required this.color,
     required this.title,
     required this.subtitle,
-    required this.formula,
-    required this.substituted,
     required this.result,
     required this.explanation,
-    required this.variables,
   });
 
   @override
@@ -1203,31 +1532,6 @@ class _FormulaResultCard extends StatelessWidget {
           ),
           Text(subtitle, style: AppTextStyles.bodySmall.copyWith(color: AppColors.textSubdued, fontSize: 10)),
           const SizedBox(height: 10),
-
-          // Formula
-          Container(
-            width: double.infinity,
-            padding: const EdgeInsets.all(8),
-            decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.circular(6),
-              border: Border.all(color: AppColors.borderLight),
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(formula,
-                    style: const TextStyle(fontFamily: 'monospace', fontSize: 12, fontWeight: FontWeight.w600)),
-                const SizedBox(height: 4),
-                Text(substituted,
-                    style: TextStyle(fontFamily: 'monospace', fontSize: 10, color: color.withValues(alpha: 0.8))),
-              ],
-            ),
-          ),
-
-          const SizedBox(height: 10),
-
-          // Result
           Container(
             width: double.infinity,
             padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 10),
@@ -1241,28 +1545,6 @@ class _FormulaResultCard extends StatelessWidget {
               textAlign: TextAlign.center,
             ),
           ),
-
-          const SizedBox(height: 10),
-
-          // Variable table
-          ...variables.map((v) => Padding(
-            padding: const EdgeInsets.only(bottom: 3),
-            child: Row(
-              children: [
-                SizedBox(
-                  width: 18,
-                  child: Text(v.$1,
-                      style: TextStyle(fontWeight: FontWeight.w700, fontSize: 11, color: color)),
-                ),
-                Text(' = ', style: AppTextStyles.bodySmall.copyWith(fontSize: 10)),
-                Expanded(
-                  child: Text('${v.$2}: ${v.$3}',
-                      style: AppTextStyles.bodySmall.copyWith(fontSize: 10)),
-                ),
-              ],
-            ),
-          )),
-
           const SizedBox(height: 6),
           Text(explanation,
               style: AppTextStyles.bodySmall.copyWith(
@@ -2808,10 +3090,10 @@ class _ReadinessGateState extends State<_ReadinessGate> {
 
   ProductForecastReadiness get readiness => widget.readiness;
 
-  Future<void> _openProductEditor() async {
+  Future<void> _openProductEditor({String? hintSku}) async {
     final product = readiness.product;
     if (product == null) return;
-    await showProductEditDialog(context, product);
+    await showProductEditDialog(context, product, hintSku: hintSku);
   }
 
   Future<void> _importSalesForProduct() async {
@@ -2887,31 +3169,24 @@ class _ReadinessGateState extends State<_ReadinessGate> {
       } else {
         // No match for this product — build a helpful diagnostic using the
         // cloud function's unmatchedSamples list (if any).
-        String detail = 'The product name/SKU may not match any Shopify variant.';
+        String? firstMatchingSku;
         final samples = importResult?['unmatchedSamples'];
         if (samples is List && samples.isNotEmpty) {
-          final hints = samples
-              .take(3)
-              .map((s) {
-                final m = (s as Map);
-                final sku = (m['sku'] ?? '').toString();
-                final title = (m['title'] ?? m['productTitle'] ?? '').toString();
-                if (sku.isNotEmpty && title.isNotEmpty) return '"$title" (SKU $sku)';
-                if (sku.isNotEmpty) return 'SKU $sku';
-                return title;
-              })
-              .where((h) => h.isNotEmpty)
-              .toList();
-          if (hints.isNotEmpty) {
-            detail = 'Unmatched Shopify items: ${hints.join(", ")}. '
-                'Open Edit product and set the SKU to match one of these.';
-          }
+          final firstSku = (samples.first as Map)['sku']?.toString() ?? '';
+          if (firstSku.isNotEmpty) firstMatchingSku = firstSku;
         }
         messenger.showSnackBar(SnackBar(
           backgroundColor: AppColors.warning,
           content: Text(
-              'No Shopify sales found for "${product.name}" in the last ${widget.windowMonths} months. $detail'),
-          duration: const Duration(seconds: 10),
+              'No Shopify sales found for "${product.name}" in the last ${widget.windowMonths} months. Ensure the product SKU matches a variant in your Shopify store.'),
+          duration: const Duration(seconds: 5),
+          action: SnackBarAction(
+            label: 'Edit SKU',
+            textColor: Colors.white,
+            onPressed: () {
+              _openProductEditor(hintSku: firstMatchingSku);
+            },
+          ),
         ));
       }
     } catch (e) {
@@ -2946,18 +3221,71 @@ class _ReadinessGateState extends State<_ReadinessGate> {
 
     if (readiness.isReady) {
       final lt = readiness.effectiveLeadTimeDays;
+      final supplyLine = readiness.supplier != null
+          ? 'Supplier: ${readiness.supplier!.name}'
+          : readiness.manufacturer != null
+              ? 'Manufacturer: ${readiness.manufacturer!.name}'
+              : '';
       return _box(
         bg: AppColors.success.withValues(alpha: 0.08),
         border: AppColors.success.withValues(alpha: 0.4),
         icon: Icons.check_circle_outline,
         iconColor: AppColors.success,
-        title: 'Ready to forecast',
+        title: 'Ready to forecast & dispatch',
         body: Text(
-          'Supplier: ${readiness.supplier!.name}\n'
-          'Manufacturer: ${readiness.manufacturer!.name}\n'
+          '$supplyLine\n'
           'Lead time: $lt day${lt == 1 ? '' : 's'}  •  Unit cost: '
           '${readiness.product!.unitCost.toStringAsFixed(2)}',
           style: const TextStyle(fontSize: 12, color: AppColors.textSecondary),
+        ),
+      );
+    }
+
+    // Can compute but missing supplier/manufacturer (dispatch gate only)
+    if (readiness.canCompute) {
+      final lt = readiness.effectiveLeadTimeDays;
+      return _box(
+        bg: AppColors.primaryLight.withValues(alpha: 0.5),
+        border: AppColors.primary.withValues(alpha: 0.3),
+        icon: Icons.check_circle_outline,
+        iconColor: AppColors.primary,
+        title: 'Ready to forecast — dispatch setup needed',
+        body: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Lead time: $lt day${lt == 1 ? '' : 's'}  •  Unit cost: '
+              '${readiness.product!.unitCost.toStringAsFixed(2)}',
+              style: const TextStyle(fontSize: 12, color: AppColors.textSecondary),
+            ),
+            const SizedBox(height: 6),
+            const Text(
+              'You can run the forecast, but to send orders you\'ll also need:',
+              style: TextStyle(fontSize: 12, color: AppColors.textSecondary),
+            ),
+            const SizedBox(height: 4),
+            ...readiness.missingForDispatch.map((code) => Padding(
+                  padding: const EdgeInsets.only(left: 2, top: 2),
+                  child: Row(
+                    children: [
+                      const Icon(Icons.info_outline, size: 14, color: AppColors.warning),
+                      const SizedBox(width: 6),
+                      Text(readiness.labelFor(code),
+                          style: const TextStyle(fontSize: 12, color: AppColors.textPrimary)),
+                    ],
+                  ),
+                )),
+            const SizedBox(height: 8),
+            OutlinedButton.icon(
+              onPressed: _openProductEditor,
+              icon: const Icon(Icons.edit, size: 14),
+              label: const Text('Link supplier/manufacturer'),
+              style: OutlinedButton.styleFrom(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                visualDensity: VisualDensity.compact,
+              ),
+            ),
+          ],
         ),
       );
     }
@@ -3094,6 +3422,101 @@ class _ReadinessGateState extends State<_ReadinessGate> {
 // (forecast scaled to lead time) and two big buttons that compose pre-filled
 // emails to the supplier and the manufacturer via mailto:.
 
+// ── Go To Replenishment CTA ──────────────────────────────────────────────────
+// Shown when forecast is ready. Replaces direct email/PO buttons — all
+// approvals funnel through /replenishment for safety (draft-before-send gate).
+
+class _GoToReplenishmentCard extends StatelessWidget {
+  final String productId;
+  final ForecastResult forecast;
+  final ProductForecastReadiness readiness;
+
+  const _GoToReplenishmentCard({
+    required this.productId,
+    required this.forecast,
+    required this.readiness,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final product = readiness.product!;
+    final lt = readiness.effectiveLeadTimeDays;
+    final next = forecast.nextPeriodForecast;
+    final scaled = lt > 0 ? next * (lt / 30.0) : next;
+    final recommendedQty = scaled <= 0 ? 0 : scaled.ceil();
+
+    return Container(
+      padding: const EdgeInsets.all(18),
+      decoration: BoxDecoration(
+        color: AppColors.success.withValues(alpha: 0.05),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: AppColors.success.withValues(alpha: 0.35)),
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.check_circle_outline,
+              color: AppColors.success, size: 22),
+          const SizedBox(width: 14),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Forecast ready — review & approve order',
+                  style: TextStyle(
+                      fontWeight: FontWeight.w700,
+                      fontSize: 14,
+                      color: AppColors.success),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  'Suggested: ~$recommendedQty units of ${product.name} '
+                  '(${lt}d lead time). '
+                  'Approve now to auto-create the order and email the '
+                  '${(product.manufacturerId ?? '').isNotEmpty ? 'factory + manufacturer' : 'supplier'}.',
+                  style: const TextStyle(
+                      fontSize: 13, color: AppColors.textSecondary),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 14),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              FilledButton.icon(
+                onPressed: () => showOrderWizardDialog(
+                  context: context,
+                  product: product,
+                  forecast: forecast,
+                  leadTimeDays: lt,
+                ),
+                icon: const Icon(Icons.send_outlined, size: 16),
+                label: const Text('Create Order'),
+                style: FilledButton.styleFrom(
+                    backgroundColor: AppColors.success),
+              ),
+              const SizedBox(height: 6),
+              TextButton.icon(
+                onPressed: () =>
+                    context.go('/replenishment?productId=$productId'),
+                icon: const Icon(Icons.open_in_new, size: 14),
+                label: const Text('Open Replenishment',
+                    style: TextStyle(fontSize: 12)),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// _OrderEmailActionsCard removed — ordering is now done through the
+// Replenishment screen. See _GoToReplenishmentCard above.
+
+// ignore: unused_element
 class _OrderEmailActionsCard extends StatelessWidget {
   final ForecastResult forecast;
   final ProductForecastReadiness readiness;
@@ -3106,8 +3529,8 @@ class _OrderEmailActionsCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final product = readiness.product!;
-    final supplier = readiness.supplier!;
-    final manufacturer = readiness.manufacturer!;
+    final supplier = readiness.supplier;
+    final manufacturer = readiness.manufacturer;
 
     // Recommended quantity = next-period forecast scaled to the resolved
     // lead time (assume monthly periods → 30 days). Rounded up to whole units.
@@ -3133,7 +3556,11 @@ class _OrderEmailActionsCard extends StatelessWidget {
                   color: AppColors.primary, size: 20),
               const SizedBox(width: 10),
               Text(
-                'Notify supplier & manufacturer',
+                supplier != null && manufacturer != null
+                    ? 'Notify supplier & manufacturer'
+                    : supplier != null
+                        ? 'Notify supplier'
+                        : 'Notify manufacturer',
                 style: const TextStyle(
                     fontWeight: FontWeight.w700,
                     fontSize: 15,
@@ -3154,34 +3581,40 @@ class _OrderEmailActionsCard extends StatelessWidget {
           const SizedBox(height: 14),
           LayoutBuilder(builder: (ctx, constraints) {
             final stacked = constraints.maxWidth < 460;
-            final supBtn = _emailButton(
-              label: 'Email supplier',
-              subtitle: supplier.name,
-              icon: Icons.local_shipping_outlined,
-              enabled: supplier.contactEmail.isNotEmpty,
-              onPressed: () => _sendSupplierEmail(
-                  context, product, supplier, recommendedQty, totalCost, lt),
-            );
-            final mfgBtn = _emailButton(
-              label: 'Email manufacturer',
-              subtitle: manufacturer.name,
-              icon: Icons.precision_manufacturing_outlined,
-              enabled: manufacturer.contactEmail.isNotEmpty,
-              onPressed: () => _sendManufacturerEmail(
-                  context, product, manufacturer, recommendedQty, lt),
-            );
+            final buttons = <Widget>[
+              if (supplier != null)
+                _emailButton(
+                  label: 'Email supplier',
+                  subtitle: supplier.name,
+                  icon: Icons.local_shipping_outlined,
+                  enabled: supplier.contactEmail.isNotEmpty,
+                  onPressed: () => _sendSupplierEmail(
+                      context, product, supplier, recommendedQty, totalCost, lt),
+                ),
+              if (manufacturer != null)
+                _emailButton(
+                  label: 'Email manufacturer',
+                  subtitle: manufacturer.name,
+                  icon: Icons.precision_manufacturing_outlined,
+                  enabled: manufacturer.contactEmail.isNotEmpty,
+                  onPressed: () => _sendManufacturerEmail(
+                      context, product, manufacturer, recommendedQty, lt),
+                ),
+            ];
+            if (buttons.isEmpty) return const SizedBox.shrink();
             if (stacked) {
-              return Column(children: [
-                supBtn,
-                const SizedBox(height: 8),
-                mfgBtn,
-              ]);
+              return Column(
+                  children: buttons
+                      .expand((b) => [b, const SizedBox(height: 8)])
+                      .toList()
+                    ..removeLast());
             }
-            return Row(children: [
-              Expanded(child: supBtn),
-              const SizedBox(width: 12),
-              Expanded(child: mfgBtn),
-            ]);
+            return Row(
+              children: buttons
+                  .expand((b) => [Expanded(child: b), const SizedBox(width: 12)])
+                  .toList()
+                ..removeLast(),
+            );
           }),
         ],
       ),

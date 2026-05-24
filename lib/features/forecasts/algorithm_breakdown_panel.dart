@@ -66,21 +66,8 @@ class AlgorithmBreakdownPanel extends StatelessWidget {
             const Divider(),
             const SizedBox(height: 12),
 
-            // ── Formula Section ───────────────────────────────────────────
-            _FormulaCard(algorithm: result.algorithm),
-            const SizedBox(height: 16),
-
             // ── Parameters Section ────────────────────────────────────────
             _ParametersSection(params: result.algorithmParams),
-            const SizedBox(height: 16),
-
-            // ── Accuracy Metrics ──────────────────────────────────────────
-            _AccuracyMetricsRow(result: result),
-            const SizedBox(height: 16),
-
-            // ── Computation Steps ─────────────────────────────────────────
-            if (result.forecast.length > 1)
-              _ComputationStepsTable(result: result),
             const SizedBox(height: 16),
 
             // ── Interpretation ────────────────────────────────────────────

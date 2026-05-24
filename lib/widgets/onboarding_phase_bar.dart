@@ -4,19 +4,19 @@ import 'package:go_router/go_router.dart';
 import 'package:ma5zony/providers/app_state.dart';
 import 'package:ma5zony/utils/constants.dart';
 
-/// A thin sticky banner shown at the top of phase screens during onboarding.
-///
-/// Lets the user move directly from one phase to the next without going back
-/// to the dashboard. Auto-hides once onboarding is complete or the current
-/// route is not a phase.
+/// A thin sticky banner shown at the top of authenticated screens during
+/// onboarding. Shows compact progress + "Resume Setup" button.
+/// Auto-hides once all setup steps are complete.
 class OnboardingPhaseBar extends StatelessWidget {
   final AppState state;
-  final String currentRoute;
 
+  // currentRoute is kept for API compatibility with existing callers but
+  // is no longer used now that the banner is not route-specific.
+  // ignore: avoid_unused_constructor_parameters
   const OnboardingPhaseBar({
     super.key,
     required this.state,
-    required this.currentRoute,
+    required String currentRoute,
   });
 
   /// The ordered list of phase routes that the wizard walks through.
@@ -44,27 +44,42 @@ class OnboardingPhaseBar extends StatelessWidget {
     return false;
   }
 
-  int _currentPhaseIndex() {
-    for (var i = 0; i < phases.length; i++) {
-      if (currentRoute.startsWith(phases[i].route)) return i;
-    }
-    return -1;
-  }
-
   @override
   Widget build(BuildContext context) {
     if (!_needsOnboarding()) return const SizedBox.shrink();
-    final idx = _currentPhaseIndex();
-    if (idx < 0) return const SizedBox.shrink();
 
-    final prev = idx > 0 ? phases[idx - 1] : null;
-    final next = idx < phases.length - 1 ? phases[idx + 1] : null;
-    final current = phases[idx];
+    // Count completed phases for the progress fraction
+    final completed = phases.where((p) {
+      switch (p.route) {
+        case '/products':
+          return state.products.isNotEmpty;
+        case '/suppliers':
+          return state.suppliers.isNotEmpty;
+        case '/raw-materials':
+          return state.rawMaterials.isNotEmpty;
+        case '/bom':
+          final bomProductIds =
+              state.boms.map((b) => b.finalProductId).toSet();
+          return state.products
+              .every((p) => bomProductIds.contains(p.id));
+        case '/manufacturers':
+          return state.manufacturers.isNotEmpty;
+        case '/warehouses':
+          return state.warehouses.isNotEmpty;
+        case '/demand-data':
+          return state.demandByProduct.isNotEmpty;
+        case '/forecasts':
+          return state.currentForecast != null;
+        default:
+          return false;
+      }
+    }).length;
+    final progress = completed / phases.length;
 
     return Material(
       color: AppColors.primary.withValues(alpha: 0.06),
       child: Container(
-        height: 44,
+        height: 38,
         padding: const EdgeInsets.symmetric(horizontal: 16),
         decoration: BoxDecoration(
           border: Border(
@@ -77,10 +92,10 @@ class OnboardingPhaseBar extends StatelessWidget {
         child: Row(
           children: [
             const Icon(Icons.rocket_launch_outlined,
-                size: 16, color: AppColors.primary),
+                size: 14, color: AppColors.primary),
             const SizedBox(width: 8),
             Text(
-              'Setup wizard — Step ${idx + 1} of ${phases.length}: ${current.label}',
+              'Setup incomplete — $completed/${phases.length} steps done',
               style: const TextStyle(
                 fontSize: 12,
                 fontWeight: FontWeight.w600,
@@ -92,46 +107,26 @@ class OnboardingPhaseBar extends StatelessWidget {
               child: ClipRRect(
                 borderRadius: BorderRadius.circular(3),
                 child: LinearProgressIndicator(
-                  value: (idx + 1) / phases.length,
+                  value: progress,
                   minHeight: 4,
                   backgroundColor: AppColors.primary.withValues(alpha: 0.15),
-                  valueColor: const AlwaysStoppedAnimation<Color>(
-                      AppColors.primary),
+                  valueColor:
+                      const AlwaysStoppedAnimation<Color>(AppColors.primary),
                 ),
               ),
             ),
             const SizedBox(width: 12),
             TextButton.icon(
-              onPressed: prev == null ? null : () => context.go(prev.route),
-              icon: const Icon(Icons.chevron_left, size: 16),
-              label: Text(prev?.label ?? 'Previous',
-                  overflow: TextOverflow.ellipsis),
-              style: TextButton.styleFrom(
-                foregroundColor: AppColors.textSecondary,
-                padding: const EdgeInsets.symmetric(horizontal: 8),
-                minimumSize: const Size(0, 32),
-              ),
-            ),
-            const SizedBox(width: 4),
-            TextButton.icon(
-              onPressed: next == null ? null : () => context.go(next.route),
-              icon: const Icon(Icons.chevron_right, size: 16),
-              label: Text('Next: ${next?.label ?? '—'}',
-                  overflow: TextOverflow.ellipsis),
+              onPressed: () => context.go('/setup'),
+              icon: const Icon(Icons.arrow_forward, size: 14),
+              label: const Text('Resume Setup'),
               style: TextButton.styleFrom(
                 foregroundColor: AppColors.primary,
                 padding: const EdgeInsets.symmetric(horizontal: 8),
-                minimumSize: const Size(0, 32),
+                minimumSize: const Size(0, 28),
+                textStyle: const TextStyle(
+                    fontSize: 12, fontWeight: FontWeight.w600),
               ),
-            ),
-            const SizedBox(width: 4),
-            IconButton(
-              tooltip: 'Back to setup overview',
-              icon: const Icon(Icons.dashboard_outlined, size: 16),
-              onPressed: () => context.go('/dashboard'),
-              padding: EdgeInsets.zero,
-              constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
-              color: AppColors.textSecondary,
             ),
           ],
         ),

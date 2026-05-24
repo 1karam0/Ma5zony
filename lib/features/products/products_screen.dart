@@ -12,7 +12,8 @@ import 'package:ma5zony/widgets/zoho_patterns.dart';
 /// includes Supplier and Manufacturer pickers, lead time, unit cost, etc.
 /// Used by other screens (e.g. the Forecasts readiness gate) to jump straight
 /// to the form where supplier / manufacturer are linked to a product.
-Future<void> showProductEditDialog(BuildContext context, Product product) async {
+Future<void> showProductEditDialog(BuildContext context, Product product,
+    {String? hintSku}) async {
   final state = context.read<AppState>();
   await showDialog(
     context: context,
@@ -23,6 +24,7 @@ Future<void> showProductEditDialog(BuildContext context, Product product) async 
       rawMaterials: state.rawMaterials,
       existingProduct: product,
       existingBom: state.boms.where((b) => b.finalProductId == product.id).firstOrNull,
+      hintSku: hintSku,
     ),
   );
 }
@@ -701,6 +703,8 @@ class _AddProductDialog extends StatefulWidget {
   final List<dynamic> warehouses;
   final List<dynamic> rawMaterials;
   final BillOfMaterials? existingBom;
+  /// When set, shows a Shopify SKU suggestion banner inside the dialog.
+  final String? hintSku;
   const _AddProductDialog({
     required this.suppliers,
     required this.manufacturers,
@@ -708,6 +712,7 @@ class _AddProductDialog extends StatefulWidget {
     required this.rawMaterials,
     this.existingProduct,
     this.existingBom,
+    this.hintSku,
   });
 
   @override
@@ -733,6 +738,8 @@ class _AddProductDialogState extends State<_AddProductDialog> {
   final _nameCtrl = TextEditingController();
   final _categoryCtrl = TextEditingController();
   final _costCtrl = TextEditingController(text: '0.00');
+  final _sellingPriceCtrl = TextEditingController(text: '0.00');
+  final _productionFeeCtrl = TextEditingController(text: '0.00');
   final _stockCtrl = TextEditingController(text: '0');
   final _leadTimeCtrl = TextEditingController(text: '0');
   String? _selectedSupplierId;
@@ -743,6 +750,24 @@ class _AddProductDialogState extends State<_AddProductDialog> {
 
   bool get _isEdit => widget.existingProduct != null;
 
+  /// Sum of (qty × raw material unit cost) across all BOM rows.
+  /// Used as the read-only material cost for manufactured products.
+  double get _computedMaterialCost {
+    double total = 0;
+    for (final row in _bomRows) {
+      if (row.rawMaterialId == null) continue;
+      final qty = double.tryParse(row.qtyCtrl.text) ?? 0;
+      final rm = widget.rawMaterials
+          .where((m) => m.id == row.rawMaterialId)
+          .firstOrNull;
+      if (rm != null) total += qty * (rm.unitCost as double);
+    }
+    return total;
+  }
+
+  double get _computedTotalCost =>
+      _computedMaterialCost + (double.tryParse(_productionFeeCtrl.text) ?? 0);
+
   @override
   void initState() {
     super.initState();
@@ -752,6 +777,10 @@ class _AddProductDialogState extends State<_AddProductDialog> {
       _nameCtrl.text = p.name;
       _categoryCtrl.text = p.category;
       _costCtrl.text = p.unitCost.toStringAsFixed(2);
+      _sellingPriceCtrl.text =
+          (p.sellingPrice ?? 0).toStringAsFixed(2);
+      _productionFeeCtrl.text =
+          (p.productionFee ?? 0).toStringAsFixed(2);
       _stockCtrl.text = '${p.currentStock}';
       _leadTimeCtrl.text = '${p.leadTimeDays}';
       // Validate IDs against the passed lists so no DropdownButton assertion
@@ -837,6 +866,49 @@ class _AddProductDialogState extends State<_AddProductDialog> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
+                // ── Shopify SKU hint banner ───────────────────────────────
+                if (widget.hintSku != null &&
+                    _skuCtrl.text.trim() != widget.hintSku) ...[
+                  Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: AppColors.warning.withValues(alpha: 0.1),
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(
+                          color: AppColors.warning.withValues(alpha: 0.4)),
+                    ),
+                    child: Row(
+                      children: [
+                        const Icon(Icons.storefront_outlined,
+                            size: 16, color: AppColors.warning),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            'Shopify didn\'t find a match for this product. '
+                            'Suggested SKU from Shopify: ${widget.hintSku}',
+                            style: const TextStyle(
+                                fontSize: 12, color: AppColors.textPrimary),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        TextButton(
+                          onPressed: () =>
+                              setState(() => _skuCtrl.text = widget.hintSku!),
+                          style: TextButton.styleFrom(
+                            foregroundColor: AppColors.warning,
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 8, vertical: 4),
+                            minimumSize: const Size(0, 28),
+                            textStyle: const TextStyle(
+                                fontSize: 12, fontWeight: FontWeight.w600),
+                          ),
+                          child: const Text('Use this SKU'),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                ],
                 // ── Section 1: Basic Information ─────────────────────────
                 ZohoFormSection(
                   title: 'Basic Information',
@@ -885,29 +957,115 @@ class _AddProductDialogState extends State<_AddProductDialog> {
                 // ── Section 2: Pricing & Inventory ───────────────────────
                 ZohoFormSection(
                   title: 'Pricing & Inventory',
-                  subtitle:
-                      'Unit cost drives EOQ, holding cost and forecast spend.',
+                  subtitle: _sourceType == _ProductSourceType.manufactured
+                      ? 'Cost is calculated from raw materials + production fee. Set the selling price you charge customers.'
+                      : 'Enter the cost you pay per unit (drives EOQ & spend forecasts) and the price you sell it for.',
                   children: [
+                    // ── Row 1: Cost + Stock ──────────────────────────────
                     Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
+                        // Cost field (editable for purchased; read-only computed for manufactured)
+                        Expanded(
+                          child: _sourceType == _ProductSourceType.manufactured
+                              ? StatefulBuilder(
+                                  builder: (ctx, _) => InputDecorator(
+                                    decoration: InputDecoration(
+                                      labelText: 'Unit Cost (auto-calculated)',
+                                      prefixText: 'EGP ',
+                                      helperText:
+                                          'Materials + production fee',
+                                      filled: true,
+                                      fillColor: AppColors.background,
+                                    ),
+                                    child: Text(
+                                      _computedTotalCost.toStringAsFixed(2),
+                                      style: AppTextStyles.body,
+                                    ),
+                                  ),
+                                )
+                              : TextFormField(
+                                  controller: _costCtrl,
+                                  decoration: const InputDecoration(
+                                    labelText: 'Unit Cost *',
+                                    prefixText: 'EGP ',
+                                    helperText:
+                                        'Price you pay per unit to supplier',
+                                  ),
+                                  keyboardType: TextInputType.number,
+                                  validator: (v) {
+                                    final val = double.tryParse(v ?? '');
+                                    if (val == null || val < 0) {
+                                      return 'Enter a valid cost';
+                                    }
+                                    return null;
+                                  },
+                                ),
+                        ),
+                        const SizedBox(width: 16),
+                        // Selling price (always editable; pre-filled from Shopify if connected)
                         Expanded(
                           child: TextFormField(
-                            controller: _costCtrl,
-                            decoration: const InputDecoration(
-                              labelText: 'Unit Cost *',
+                            controller: _sellingPriceCtrl,
+                            decoration: InputDecoration(
+                              labelText: 'Selling Price',
                               prefixText: 'EGP ',
+                              helperText: widget.existingProduct?.shopifyVariantId != null
+                                  ? 'Synced from Shopify — edit to override'
+                                  : 'Price charged to customers',
+                              suffixIcon: widget.existingProduct?.shopifyVariantId != null
+                                  ? const Tooltip(
+                                      message: 'Linked to Shopify',
+                                      child: Icon(Icons.store_outlined,
+                                          size: 18),
+                                    )
+                                  : null,
                             ),
-                            keyboardType: TextInputType.number,
+                            keyboardType: const TextInputType.numberWithOptions(
+                                decimal: true),
                             validator: (v) {
-                              final val = double.tryParse(v ?? '');
+                              if (v == null || v.isEmpty) return null;
+                              final val = double.tryParse(v);
                               if (val == null || val < 0) {
-                                return 'Enter a valid cost';
+                                return 'Enter a valid price';
                               }
                               return null;
                             },
                           ),
                         ),
-                        const SizedBox(width: 16),
+                      ],
+                    ),
+                    // ── Row 2: Production Fee (manufactured only) + Stock ─
+                    const SizedBox(height: 16),
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        if (_sourceType == _ProductSourceType.manufactured) ...[
+                          Expanded(
+                            child: TextFormField(
+                              controller: _productionFeeCtrl,
+                              decoration: const InputDecoration(
+                                labelText: 'Production Fee per Unit',
+                                prefixText: 'EGP ',
+                                helperText:
+                                    'Manufacturer charge on top of materials',
+                              ),
+                              keyboardType:
+                                  const TextInputType.numberWithOptions(
+                                      decimal: true),
+                              onChanged: (_) => setState(() {}),
+                              validator: (v) {
+                                if (v == null || v.isEmpty) return null;
+                                final val = double.tryParse(v);
+                                if (val == null || val < 0) {
+                                  return 'Enter a valid fee';
+                                }
+                                return null;
+                              },
+                            ),
+                          ),
+                          const SizedBox(width: 16),
+                        ],
                         Expanded(
                           child: TextFormField(
                             controller: _stockCtrl,
@@ -927,6 +1085,40 @@ class _AddProductDialogState extends State<_AddProductDialog> {
                         ),
                       ],
                     ),
+                    // ── Margin hint (when both cost and selling price filled) ──
+                    if (_sellingPriceCtrl.text.isNotEmpty &&
+                        (double.tryParse(_sellingPriceCtrl.text) ?? 0) > 0)
+                      Builder(builder: (ctx) {
+                        final sp =
+                            double.tryParse(_sellingPriceCtrl.text) ?? 0;
+                        final cost = _sourceType ==
+                                _ProductSourceType.manufactured
+                            ? _computedTotalCost
+                            : (double.tryParse(_costCtrl.text) ?? 0);
+                        if (sp <= 0) return const SizedBox.shrink();
+                        final margin = sp > 0 ? ((sp - cost) / sp * 100) : 0.0;
+                        final marginColor = margin >= 30
+                            ? AppColors.success
+                            : margin >= 10
+                                ? AppColors.warning
+                                : AppColors.error;
+                        return Padding(
+                          padding: const EdgeInsets.only(top: 10),
+                          child: Row(
+                            children: [
+                              Icon(Icons.bar_chart_rounded,
+                                  size: 16, color: marginColor),
+                              const SizedBox(width: 6),
+                              Text(
+                                'Gross margin: ${margin.toStringAsFixed(1)}%'
+                                '  (Cost EGP ${cost.toStringAsFixed(2)} → Sell EGP ${sp.toStringAsFixed(2)})',
+                                style: AppTextStyles.bodySmall
+                                    .copyWith(color: marginColor),
+                              ),
+                            ],
+                          ),
+                        );
+                      }),
                   ],
                 ),
 
@@ -1139,6 +1331,7 @@ class _AddProductDialogState extends State<_AddProductDialog> {
                                     keyboardType:
                                         const TextInputType.numberWithOptions(
                                             decimal: true),
+                                    onChanged: (_) => setState(() {}),
                                     validator: (v) {
                                       final n = double.tryParse(v ?? '');
                                       if (n == null || n <= 0) {
@@ -1219,12 +1412,20 @@ class _AddProductDialogState extends State<_AddProductDialog> {
       sku: _skuCtrl.text.trim(),
       name: _nameCtrl.text.trim(),
       category: _categoryCtrl.text.trim(),
-      unitCost: double.tryParse(_costCtrl.text) ?? 0,
+      // For manufactured products the persisted unitCost is the computed
+      // (materials + fee) total so downstream EOQ/replenishment math is correct.
+      unitCost: _sourceType == _ProductSourceType.manufactured
+          ? _computedTotalCost
+          : (double.tryParse(_costCtrl.text) ?? 0),
       currentStock: int.tryParse(_stockCtrl.text) ?? 0,
       supplierId: supplierId,
       manufacturerId: manufacturerId,
       warehouseId: _selectedWarehouseId,
       leadTimeDays: int.tryParse(_leadTimeCtrl.text) ?? 0,
+      sellingPrice: double.tryParse(_sellingPriceCtrl.text.trim()),
+      productionFee: _sourceType == _ProductSourceType.manufactured
+          ? (double.tryParse(_productionFeeCtrl.text.trim()))
+          : null,
     );
     final appState = context.read<AppState>();
     try {
@@ -1295,6 +1496,8 @@ class _AddProductDialogState extends State<_AddProductDialog> {
     _nameCtrl.dispose();
     _categoryCtrl.dispose();
     _costCtrl.dispose();
+    _sellingPriceCtrl.dispose();
+    _productionFeeCtrl.dispose();
     _stockCtrl.dispose();
     _leadTimeCtrl.dispose();
     for (final r in _bomRows) {

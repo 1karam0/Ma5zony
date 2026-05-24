@@ -212,7 +212,7 @@ class WarehousesScreen extends StatelessWidget {
                                   } catch (e) {
                                     if (context.mounted) {
                                       ScaffoldMessenger.of(context).showSnackBar(
-                                        SnackBar(content: Text('Failed to delete warehouse: $e')),
+                                        SnackBar(duration: const Duration(seconds: 3), content: Text('Failed to delete warehouse: $e')),
                                       );
                                     }
                                   }
@@ -374,6 +374,7 @@ class WarehousesScreen extends StatelessWidget {
                 }
                 navigator.pop();
                 messenger.showSnackBar(SnackBar(
+                  duration: const Duration(seconds: 3),
                   content: Text(isEdit
                       ? 'Warehouse updated successfully'
                       : 'Warehouse added successfully'),
@@ -381,6 +382,7 @@ class WarehousesScreen extends StatelessWidget {
                 ));
               } catch (e) {
                 messenger.showSnackBar(SnackBar(
+                  duration: const Duration(seconds: 3),
                   content: Text('Error: $e'),
                   backgroundColor: AppColors.error,
                 ));
@@ -685,6 +687,7 @@ class _AssignProductsDialogState extends State<_AssignProductsDialog> {
                     }
                     navigator.pop();
                     messenger.showSnackBar(SnackBar(
+                      duration: const Duration(seconds: 3),
                       content: Text(
                           'Saved: ${toAssign.length} assigned, ${toUnassign.length} unassigned'),
                       backgroundColor: AppColors.success,
@@ -692,6 +695,7 @@ class _AssignProductsDialogState extends State<_AssignProductsDialog> {
                   } catch (e) {
                     if (mounted) setState(() => _saving = false);
                     messenger.showSnackBar(SnackBar(
+                      duration: const Duration(seconds: 3),
                       content: Text('Error: $e'),
                       backgroundColor: AppColors.error,
                     ));

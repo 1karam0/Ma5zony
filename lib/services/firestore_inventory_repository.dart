@@ -106,6 +106,31 @@ class FirestoreInventoryRepository implements InventoryRepository {
     return map;
   }
 
+  @override
+  Stream<Map<String, List<DomainDemandRecord>>> watchDemandHistory() {
+    return _demandCol.orderBy('periodStart').snapshots().map((snap) {
+      final map = <String, List<DomainDemandRecord>>{};
+      for (final d in snap.docs) {
+        final data = d.data();
+        data['id'] = d.id;
+        if (data['periodStart'] is Timestamp) {
+          data['periodStart'] =
+              (data['periodStart'] as Timestamp).toDate().toIso8601String();
+        }
+        try {
+          final record = DomainDemandRecord.fromJson(data);
+          map.putIfAbsent(record.productId, () => []).add(record);
+        } catch (_) {
+          // Skip malformed records silently
+        }
+      }
+      for (final key in map.keys) {
+        map[key]!.sort((a, b) => a.periodStart.compareTo(b.periodStart));
+      }
+      return map;
+    });
+  }
+
   // ── Products CRUD ────────────────────────────────────────────────────────
 
   @override

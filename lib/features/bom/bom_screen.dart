@@ -89,7 +89,7 @@ class _BomScreenState extends State<BomScreen> {
                             } catch (e) {
                               if (context.mounted) {
                                 ScaffoldMessenger.of(context).showSnackBar(
-                                  SnackBar(content: Text('Error: $e')),
+                                  SnackBar(duration: const Duration(seconds: 3), content: Text('Error: $e')),
                                 );
                               }
                             }
@@ -228,13 +228,13 @@ class _BomScreenState extends State<BomScreen> {
                 await state.deleteBOM(bom.id);
                 if (ctx.mounted) {
                   ScaffoldMessenger.of(ctx).showSnackBar(
-                    const SnackBar(content: Text('BOM deleted')),
+                    const SnackBar(content: Text('BOM deleted'), duration: Duration(seconds: 3)),
                   );
                 }
               } catch (e) {
                 if (ctx.mounted) {
                   ScaffoldMessenger.of(ctx).showSnackBar(
-                    SnackBar(content: Text('Error: $e')),
+                    SnackBar(duration: const Duration(seconds: 3), content: Text('Error: $e')),
                   );
                 }
               }
@@ -512,7 +512,7 @@ class _BomFormDialogState extends State<_BomFormDialog> {
     if (!_formKey.currentState!.validate()) return;
     if (_lines.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Add at least one material')),
+        const SnackBar(content: Text('Add at least one material'), duration: Duration(seconds: 3)),
       );
       return;
     }
@@ -538,13 +538,13 @@ class _BomFormDialogState extends State<_BomFormDialog> {
       if (mounted) {
         Navigator.pop(context);
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(_isEdit ? 'BOM updated' : 'BOM created')),
+          SnackBar(duration: const Duration(seconds: 3), content: Text(_isEdit ? 'BOM updated' : 'BOM created')),
         );
       }
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error: $e')),
+          SnackBar(duration: const Duration(seconds: 3), content: Text('Error: $e')),
         );
       }
     } finally {

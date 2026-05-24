@@ -279,6 +279,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
       if (context.mounted) {
         final imported = orderResult?['newRecordsImported'] ?? 0;
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          duration: const Duration(seconds: 3),
           content: Text('Shopify synced! $imported new demand records imported.'),
           backgroundColor: AppColors.success,
         ));
@@ -286,7 +287,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
     } catch (e) {
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Sync failed: $e'), backgroundColor: AppColors.error),
+          SnackBar(duration: const Duration(seconds: 3), content: Text('Sync failed: $e'), backgroundColor: AppColors.error),
         );
       }
     } finally {
@@ -968,6 +969,7 @@ class _KpiRow extends StatelessWidget {
               title: 'Total Units in Stock',
               value: NumberFormat.compact().format(totalUnits),
               icon: Icons.inventory_2,
+              onTap: () => context.go('/products'),
             ),
           ),
           SizedBox(
@@ -978,6 +980,7 @@ class _KpiRow extends StatelessWidget {
               icon: Icons.warning_amber,
               isAlert: lowStockItems > 0,
               color: lowStockItems > 0 ? AppColors.warning : AppColors.success,
+              onTap: () => context.go('/replenishment'),
             ),
           ),
           SizedBox(
@@ -987,6 +990,7 @@ class _KpiRow extends StatelessWidget {
               value: '$openRecommendations',
               icon: Icons.assignment_late,
               color: openRecommendations > 0 ? AppColors.primary : AppColors.textSecondary,
+              onTap: () => context.go('/replenishment'),
             ),
           ),
           SizedBox(

@@ -12,6 +12,8 @@ import 'package:ma5zony/utils/constants.dart';
 import 'package:ma5zony/utils/download_helper.dart';
 import 'package:ma5zony/widgets/shared_widgets.dart';
 
+enum _ApproveAction { draft, sendNow }
+
 class ReplenishmentScreen extends StatefulWidget {
   const ReplenishmentScreen({super.key});
 
@@ -50,7 +52,7 @@ class _ReplenishmentScreenState extends State<ReplenishmentScreen> {
     if (kIsWeb) {
       downloadCsvWeb(csvString, 'replenishment_export.csv');
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('CSV downloaded')),
+        const SnackBar(content: Text('CSV downloaded'), duration: Duration(seconds: 3)),
       );
     } else {
       // Non-web fallback: show in a dialog
@@ -124,8 +126,21 @@ class _ReplenishmentScreenState extends State<ReplenishmentScreen> {
     ReplenishmentRecommendation r,
     bool isManufacture,
   ) async {
+    final productMap = {
+      for (final p in context.read<AppState>().products) p.id: p
+    };
+    final supplierMap = {
+      for (final s in context.read<AppState>().suppliers) s.id: s
+    };
+    final action = await _showReviewDialog(
+      context,
+      recs: [r],
+      productMap: productMap,
+      supplierMap: supplierMap,
+    );
+    if (action == null || !context.mounted) return;
+
     setState(() => _approving[r.productId] = true);
-    // Capture before any await.
     final state = context.read<AppState>();
     final messenger = ScaffoldMessenger.of(context);
     final navigator = GoRouter.of(context);
@@ -133,6 +148,29 @@ class _ReplenishmentScreenState extends State<ReplenishmentScreen> {
       final adjustedRec = _adjustedQty.containsKey(r.productId)
           ? r.copyWith(suggestedOrderQty: _adjustedQty[r.productId])
           : r;
+      if (action == _ApproveAction.draft) {
+        if (isManufacture) {
+          await state.saveDraftProductionOrderFromRecommendation(adjustedRec);
+          if (!context.mounted) return;
+          messenger.showSnackBar(const SnackBar(
+            content: Text('Draft production order saved — confirm on Production Orders'),
+            backgroundColor: AppColors.primary,
+            duration: Duration(seconds: 3),
+          ));
+          navigator.go('/production-orders');
+        } else {
+          await state.saveDraftPOFromRecommendation(adjustedRec);
+          if (!context.mounted) return;
+          messenger.showSnackBar(const SnackBar(
+            content: Text('Draft purchase order saved — confirm on Orders'),
+            backgroundColor: AppColors.primary,
+            duration: Duration(seconds: 3),
+          ));
+          navigator.go('/orders');
+        }
+        return;
+      }
+      // sendNow path — existing approve flow
       if (isManufacture) {
         await state.approveReplenishmentManufacture(adjustedRec);
       } else {
@@ -145,6 +183,7 @@ class _ReplenishmentScreenState extends State<ReplenishmentScreen> {
               ? ' (no factory email on file)'
               : ' (no supplier email on file)';
       messenger.showSnackBar(SnackBar(
+        duration: const Duration(seconds: 3),
         content: Text('${r.productName} approved$emailNote'),
         backgroundColor: AppColors.success,
       ));
@@ -161,6 +200,7 @@ class _ReplenishmentScreenState extends State<ReplenishmentScreen> {
       ));
     } catch (e) {
       messenger.showSnackBar(SnackBar(
+        duration: const Duration(seconds: 3),
         content: Text('Error: $e'),
         backgroundColor: AppColors.error,
       ));
@@ -170,6 +210,23 @@ class _ReplenishmentScreenState extends State<ReplenishmentScreen> {
   }
 
   Future<void> _approveSelected(BuildContext context, List<ReplenishmentRecommendation> recs, Map<String, Product> productMap) async {
+    final supplierMap = {
+      for (final s in context.read<AppState>().suppliers) s.id: s
+    };
+    final selectedRecs = recs
+        .where((r) => _selectedIds.contains(r.productId))
+        .where((r) => !context.read<AppState>().approvedRecommendations.contains(r.productId))
+        .toList();
+    if (selectedRecs.isEmpty) return;
+
+    final action = await _showReviewDialog(
+      context,
+      recs: selectedRecs,
+      productMap: productMap,
+      supplierMap: supplierMap,
+    );
+    if (action == null || !context.mounted) return;
+
     setState(() => _bulkApproving = true);
     final state = context.read<AppState>();
     final messenger = ScaffoldMessenger.of(context);
@@ -178,9 +235,7 @@ class _ReplenishmentScreenState extends State<ReplenishmentScreen> {
     int mfgCount = 0;
     int emailsFailed = 0;
     try {
-      for (final r in recs) {
-        if (!_selectedIds.contains(r.productId)) continue;
-        if (state.approvedRecommendations.contains(r.productId)) continue;
+      for (final r in selectedRecs) {
         final adjustedRec = _adjustedQty.containsKey(r.productId)
             ? r.copyWith(suggestedOrderQty: _adjustedQty[r.productId])
             : r;
@@ -188,10 +243,18 @@ class _ReplenishmentScreenState extends State<ReplenishmentScreen> {
         final isManufacture = product?.manufacturerId != null &&
             product!.manufacturerId!.isNotEmpty;
         try {
-          if (isManufacture) {
-            await state.approveReplenishmentManufacture(adjustedRec);
+          if (action == _ApproveAction.draft) {
+            if (isManufacture) {
+              await state.saveDraftProductionOrderFromRecommendation(adjustedRec);
+            } else {
+              await state.saveDraftPOFromRecommendation(adjustedRec);
+            }
           } else {
-            await state.approveRecommendation(adjustedRec);
+            if (isManufacture) {
+              await state.approveReplenishmentManufacture(adjustedRec);
+            } else {
+              await state.approveRecommendation(adjustedRec);
+            }
           }
         } on CloudFunctionException {
           emailsFailed++;
@@ -206,25 +269,189 @@ class _ReplenishmentScreenState extends State<ReplenishmentScreen> {
       final parts = <String>[];
       if (purchaseCount > 0) parts.add('$purchaseCount purchase');
       if (mfgCount > 0) parts.add('$mfgCount manufacturing');
+      final actionLabel =
+          action == _ApproveAction.draft ? 'drafts saved' : 'order(s) approved';
       final failNote = emailsFailed > 0
           ? ' ($emailsFailed email failure${emailsFailed == 1 ? '' : 's'})'
           : '';
       messenger.showSnackBar(SnackBar(
-        content: Text('${parts.join(", ")} order(s) approved$failNote'),
+        duration: const Duration(seconds: 3),
+        content: Text('${parts.join(", ")} $actionLabel$failNote'),
         backgroundColor: emailsFailed > 0 ? AppColors.warning : AppColors.success,
       ));
       setState(() {
         _selectedIds.clear();
         _selectAll = false;
       });
-      if (mfgCount > 0) {
+      if (mfgCount > 0 && action == _ApproveAction.sendNow) {
         navigator.go('/recommendations');
-      } else if (purchaseCount > 0) {
-        navigator.go('/orders');
+      } else {
+        navigator.go(mfgCount > 0 ? '/production-orders' : '/orders');
       }
     } finally {
       if (mounted) setState(() => _bulkApproving = false);
     }
+  }
+
+  /// Shows the approve review dialog.
+  /// Returns [_ApproveAction.draft] to save as draft, [_ApproveAction.sendNow]
+  /// to approve + send emails, or null if the user cancelled.
+  Future<_ApproveAction?> _showReviewDialog(
+    BuildContext context, {
+    required List<ReplenishmentRecommendation> recs,
+    required Map<String, Product> productMap,
+    required Map<String, Supplier> supplierMap,
+  }) async {
+    double totalCost = 0;
+    for (final r in recs) {
+      final product = productMap[r.productId];
+      final qty = _adjustedQty[r.productId] ?? r.suggestedOrderQty;
+      totalCost += qty * (product?.unitCost ?? 0);
+    }
+
+    return showDialog<_ApproveAction>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: Row(
+          children: [
+            const Icon(Icons.rate_review_outlined, color: AppColors.primary, size: 22),
+            const SizedBox(width: 10),
+            Text(
+              recs.length == 1 ? 'Review Order' : 'Review ${recs.length} Orders',
+              style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w700),
+            ),
+          ],
+        ),
+        content: SizedBox(
+          width: 460,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'Choose how to proceed. "Save as Draft" lets you review the order before any emails are sent.',
+                style: TextStyle(fontSize: 13, color: AppColors.textSecondary),
+              ),
+              const SizedBox(height: 14),
+              ...recs.map((r) {
+                final product = productMap[r.productId];
+                final qty = _adjustedQty[r.productId] ?? r.suggestedOrderQty;
+                final cost = qty * (product?.unitCost ?? 0);
+                final isManufacture = product?.manufacturerId != null &&
+                    product!.manufacturerId!.isNotEmpty;
+                final supplierId = product?.supplierId;
+                final supplierName = supplierId != null
+                    ? supplierMap[supplierId]?.name
+                    : null;
+                return Container(
+                  margin: const EdgeInsets.only(bottom: 10),
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 14, vertical: 10),
+                  decoration: BoxDecoration(
+                    color: AppColors.background,
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(color: AppColors.border),
+                  ),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Icon(
+                        isManufacture
+                            ? Icons.precision_manufacturing_outlined
+                            : Icons.inventory_outlined,
+                        size: 18,
+                        color: isManufacture
+                            ? Colors.deepPurple
+                            : AppColors.primary,
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(r.productName,
+                                style: const TextStyle(
+                                    fontWeight: FontWeight.w600,
+                                    fontSize: 14)),
+                            const SizedBox(height: 2),
+                            Text(
+                              '${isManufacture ? "Manufacture" : "Purchase"}'
+                              '${supplierName != null ? " · $supplierName" : ""}',
+                              style: const TextStyle(
+                                  fontSize: 12,
+                                  color: AppColors.textSecondary),
+                            ),
+                          ],
+                        ),
+                      ),
+                      Column(
+                        crossAxisAlignment: CrossAxisAlignment.end,
+                        children: [
+                          Text('$qty units',
+                              style: const TextStyle(
+                                  fontWeight: FontWeight.w600,
+                                  fontSize: 13)),
+                          Text(
+                            'EGP ${cost.toStringAsFixed(0)}',
+                            style: const TextStyle(
+                                fontSize: 12,
+                                color: AppColors.textSecondary),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                );
+              }),
+              if (recs.length > 1)
+                Padding(
+                  padding: const EdgeInsets.only(top: 4),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.end,
+                    children: [
+                      Text(
+                        'Total: EGP ${totalCost.toStringAsFixed(0)}',
+                        style: const TextStyle(
+                            fontWeight: FontWeight.w700, fontSize: 14),
+                      ),
+                    ],
+                  ),
+                ),
+            ],
+          ),
+        ),
+        actionsPadding:
+            const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+        actions: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.end,
+            children: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: const Text('Cancel'),
+              ),
+              const SizedBox(width: 8),
+              OutlinedButton.icon(
+                onPressed: () =>
+                    Navigator.pop(ctx, _ApproveAction.draft),
+                icon: const Icon(Icons.save_outlined, size: 16),
+                label: const Text('Save as Draft'),
+              ),
+              const SizedBox(width: 8),
+              FilledButton.icon(
+                onPressed: () =>
+                    Navigator.pop(ctx, _ApproveAction.sendNow),
+                icon: const Icon(Icons.send_outlined, size: 16),
+                label: const Text('Confirm & Send'),
+                style: FilledButton.styleFrom(
+                    backgroundColor: AppColors.success),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
   }
 
   @override

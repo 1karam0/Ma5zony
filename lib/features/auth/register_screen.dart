@@ -310,7 +310,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
       context.go('/dashboard');
     } else if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(appState.authError ?? 'Registration failed')),
+        SnackBar(duration: const Duration(seconds: 3), content: Text(appState.authError ?? 'Registration failed')),
       );
     }
   }

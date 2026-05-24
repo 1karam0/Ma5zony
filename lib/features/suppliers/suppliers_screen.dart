@@ -254,7 +254,7 @@ class SuppliersScreen extends StatelessWidget {
                                   } catch (e) {
                                     if (context.mounted) {
                                       ScaffoldMessenger.of(context).showSnackBar(
-                                        SnackBar(content: Text('Failed to delete supplier: $e')),
+                                        SnackBar(duration: const Duration(seconds: 3), content: Text('Failed to delete supplier: $e')),
                                       );
                                     }
                                   }
@@ -443,11 +443,14 @@ class _SupplierFormDialogState extends State<_SupplierFormDialog> {
   late final TextEditingController _mapsUrlCtrl;
   double? _latitude;
   double? _longitude;
+  late Set<String> _selectedRawMaterialIds;
 
   @override
   void initState() {
     super.initState();
     final s = widget.supplier;
+    _selectedRawMaterialIds =
+        Set<String>.from(s?.suppliedRawMaterialIds ?? const []);
     _nameCtrl = TextEditingController(text: s?.name ?? '');
     _emailCtrl = TextEditingController(text: s?.contactEmail ?? '');
     _phoneCtrl = TextEditingController(text: s?.phone ?? '');
@@ -552,6 +555,7 @@ class _SupplierFormDialogState extends State<_SupplierFormDialog> {
           : _addressCtrl.text.trim(),
       latitude: _latitude,
       longitude: _longitude,
+      suppliedRawMaterialIds: _selectedRawMaterialIds.toList(),
     );
     final navigator = Navigator.of(context);
     final messenger = ScaffoldMessenger.of(context);
@@ -564,11 +568,12 @@ class _SupplierFormDialogState extends State<_SupplierFormDialog> {
       }
       navigator.pop();
       messenger.showSnackBar(
-        SnackBar(content: Text(isEdit ? 'Supplier updated' : 'Supplier added')),
+        SnackBar(duration: const Duration(seconds: 3), content: Text(isEdit ? 'Supplier updated' : 'Supplier added')),
       );
     } catch (e) {
       messenger.showSnackBar(
         SnackBar(
+          duration: const Duration(seconds: 3),
           content: Text('Failed to save supplier: $e'),
           backgroundColor: Colors.red,
         ),
@@ -730,7 +735,14 @@ class _SupplierFormDialogState extends State<_SupplierFormDialog> {
                   ],
                 ),
 
-                // ── Section 3: Location (collapsible) ────────────────────
+                // ── Section 3: Materials Supplied ────────────────────
+                _RawMaterialsPicker(
+                  selectedIds: _selectedRawMaterialIds,
+                  onChanged: (ids) =>
+                      setState(() => _selectedRawMaterialIds = ids),
+                ),
+
+                // ── Section 4: Location (collapsible) ────────────────────
                 ZohoFormSection(
                   title: 'Location',
                   subtitle:
@@ -789,6 +801,68 @@ class _SupplierFormDialogState extends State<_SupplierFormDialog> {
           onPressed: _save,
           child: Text(isEdit ? 'Save Changes' : 'Add Supplier'),
         ),
+      ],
+    );
+  }
+}
+
+/// Multi-select chip picker for the raw materials this supplier carries.
+/// A single vendor commonly delivers many materials, so we expose all of
+/// them and let the user toggle them on/off.
+class _RawMaterialsPicker extends StatelessWidget {
+  final Set<String> selectedIds;
+  final ValueChanged<Set<String>> onChanged;
+
+  const _RawMaterialsPicker({
+    required this.selectedIds,
+    required this.onChanged,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final rawMaterials = context.watch<AppState>().rawMaterials;
+    return ZohoFormSection(
+      title: 'Materials Supplied',
+      subtitle:
+          'Tick every raw material this supplier can deliver. Used when '
+          'auto-generating purchase orders.',
+      collapsible: true,
+      initiallyExpanded: selectedIds.isNotEmpty,
+      children: [
+        if (rawMaterials.isEmpty)
+          Text(
+            'No raw materials defined yet. Add them in the Raw Materials '
+            'screen, then come back to link them here.',
+            style: AppTextStyles.bodySmall
+                .copyWith(color: AppColors.textSecondary),
+          )
+        else
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: rawMaterials.map((rm) {
+              final isSelected = selectedIds.contains(rm.id);
+              return FilterChip(
+                label: Text(rm.name),
+                selected: isSelected,
+                onSelected: (val) {
+                  final next = Set<String>.from(selectedIds);
+                  if (val) {
+                    next.add(rm.id);
+                  } else {
+                    next.remove(rm.id);
+                  }
+                  onChanged(next);
+                },
+              );
+            }).toList(),
+          ),
+        if (selectedIds.isNotEmpty) ...[
+          const SizedBox(height: 8),
+          Text('${selectedIds.length} material(s) selected',
+              style: AppTextStyles.bodySmall
+                  .copyWith(color: AppColors.textSecondary)),
+        ],
       ],
     );
   }

@@ -219,7 +219,7 @@ class _ManufacturerPortalScreenState extends State<ManufacturerPortalScreen> {
   }
 
   Future<void> _updateStatus(String newStatus) async {
-    if (_docId == null) return;
+    if (_docId == null || _order == null) return;
     setState(() => _submitting = true);
     try {
       final data = <String, dynamic>{
@@ -240,14 +240,14 @@ class _ManufacturerPortalScreenState extends State<ManufacturerPortalScreen> {
       });
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Status updated to ${_statusLabel(newStatus)}')),
+          SnackBar(duration: const Duration(seconds: 3), content: Text('Status updated to ${_statusLabel(newStatus)}')),
         );
       }
     } catch (e) {
       setState(() => _submitting = false);
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error: $e')),
+          SnackBar(duration: const Duration(seconds: 3), content: Text('Error: $e')),
         );
       }
     }

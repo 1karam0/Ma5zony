@@ -282,6 +282,7 @@ class _IntegrationsScreenState extends State<IntegrationsScreen> {
                                                 content: Text(
                                                   'Import failed: $e',
                                                 ),
+                                                duration: const Duration(seconds: 3),
                                               ),
                                             );
                                           }

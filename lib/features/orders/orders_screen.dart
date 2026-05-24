@@ -196,8 +196,8 @@ class _OrdersScreenState extends State<OrdersScreen>
                           DataColumn(label: Text('Action')),
                         ],
                         rows: orders.map((order) {
-                          // Human-readable PO number: first 8 chars of doc ID
-                          final poNum =
+                          // Human-readable PO number
+                          final poNum = order.poNumber ??
                               'PO-${order.id.substring(0, order.id.length > 6 ? 6 : order.id.length).toUpperCase()}';
                           // Resolve supplier name from first line item
                           final firstSupplierId = order.items.isNotEmpty

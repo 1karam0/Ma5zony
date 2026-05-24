@@ -232,7 +232,7 @@ class _FactoryPortalScreenState extends State<FactoryPortalScreen> {
   }
 
   Future<void> _updateStatus(String newStatus) async {
-    if (_docId == null) return;
+    if (_docId == null || _order == null) return;
     setState(() => _submitting = true);
     try {
       final data = <String, dynamic>{

@@ -60,6 +60,7 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
       } else {
         messenger.showSnackBar(
           SnackBar(
+            duration: const Duration(seconds: 3),
             content: Text('Email sending failed: ${response.body}'),
             backgroundColor: Colors.red,
           ),
@@ -67,7 +68,7 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
       }
     } catch (e) {
       messenger.showSnackBar(
-        SnackBar(content: Text('Failed: $e'), backgroundColor: Colors.red),
+        SnackBar(duration: const Duration(seconds: 3), content: Text('Failed: $e'), backgroundColor: Colors.red),
       );
     } finally {
       if (mounted) setState(() => _sendingEmails = false);
@@ -125,7 +126,7 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      'Order #${order.id.substring(0, order.id.length > 8 ? 8 : order.id.length).toUpperCase()}',
+                      order.poNumber ?? 'Order #${order.id.substring(0, order.id.length > 8 ? 8 : order.id.length).toUpperCase()}',
                       style: AppTextStyles.h3,
                     ),
                     Text(
@@ -526,6 +527,7 @@ class _SupplierOrderCardState extends State<_SupplierOrderCard> {
         final totalUnits = result.values.fold(0, (a, b) => a + b);
         messenger.showSnackBar(
           SnackBar(
+            duration: const Duration(seconds: 3),
             content: Text(
               'GRN recorded — $totalUnits units received from ${so.supplierName}. Stock updated!',
             ),
@@ -536,7 +538,7 @@ class _SupplierOrderCardState extends State<_SupplierOrderCard> {
     } catch (e) {
       if (mounted) {
         messenger.showSnackBar(
-          SnackBar(content: Text('Failed: $e'), backgroundColor: Colors.red),
+          SnackBar(duration: const Duration(seconds: 3), content: Text('Failed: $e'), backgroundColor: Colors.red),
         );
       }
     } finally {

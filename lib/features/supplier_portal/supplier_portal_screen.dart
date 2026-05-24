@@ -95,7 +95,7 @@ class _SupplierPortalScreenState extends State<SupplierPortalScreen> {
 
     if (deliveryDays == null || deliveryDays <= 0) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Please enter a valid delivery time.')),
+        const SnackBar(content: Text('Please enter a valid delivery time.'), duration: Duration(seconds: 3)),
       );
       return;
     }
@@ -130,13 +130,14 @@ class _SupplierPortalScreenState extends State<SupplierPortalScreen> {
           const SnackBar(
             content: Text('Response submitted successfully!'),
             backgroundColor: Colors.green,
+            duration: Duration(seconds: 3),
           ),
         );
       }
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed: $e'), backgroundColor: Colors.red),
+          SnackBar(duration: const Duration(seconds: 3), content: Text('Failed: $e'), backgroundColor: Colors.red),
         );
       }
     } finally {
