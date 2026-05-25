@@ -5,6 +5,7 @@ import 'package:ma5zony/providers/app_state.dart';
 import 'package:ma5zony/utils/constants.dart';
 import 'package:ma5zony/widgets/shared_widgets.dart';
 import 'package:ma5zony/widgets/zoho_patterns.dart';
+import 'package:ma5zony/features/onboarding/tour_targets.dart';
 
 class ManufacturersScreen extends StatefulWidget {
   const ManufacturersScreen({super.key});
@@ -39,10 +40,13 @@ class _ManufacturersScreenState extends State<ManufacturersScreen> {
           SectionHeader(
             title: 'Manufacturers',
             actions: [
-              ElevatedButton.icon(
-                icon: const Icon(Icons.add, size: 18),
-                label: const Text('Add Manufacturer'),
-                onPressed: () => _showFormDialog(context, state),
+              KeyedSubtree(
+                key: TourTargets.instance.keyFor('page:manufacturers.add'),
+                child: ElevatedButton.icon(
+                  icon: const Icon(Icons.add, size: 18),
+                  label: const Text('Add Manufacturer'),
+                  onPressed: () => _showFormDialog(context, state),
+                ),
               ),
             ],
           ),

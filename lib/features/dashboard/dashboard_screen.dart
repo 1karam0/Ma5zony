@@ -4,6 +4,9 @@ import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 import 'package:ma5zony/models/demand_record.dart';
+import 'package:ma5zony/models/manufacturing_recommendation.dart';
+import 'package:ma5zony/models/production_order.dart';
+import 'package:ma5zony/models/purchase_order.dart';
 import 'package:ma5zony/providers/app_state.dart';
 import 'package:ma5zony/utils/constants.dart';
 import 'package:ma5zony/widgets/shared_widgets.dart';
@@ -213,6 +216,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
             const SizedBox(height: 24),
           ],
 
+          // ── Action items (replaces Action Center) ──────────────────────
+          _DashboardActionPanel(state: state),
+
           // ── Charts ─────────────────────────────────────────────────────
           if (hasData)
             LayoutBuilder(builder: (context, constraints) {
@@ -293,6 +299,236 @@ class _DashboardScreenState extends State<DashboardScreen> {
     } finally {
       if (mounted) setState(() => _syncing = false);
     }
+  }
+}
+
+// ── Dashboard Action Panel (replaces standalone Action Center) ────────────────
+
+enum _ActionSeverity { critical, warning, info }
+
+class _ActionPanelItem {
+  final _ActionSeverity severity;
+  final IconData icon;
+  final String title;
+  final String subtitle;
+  final String actionLabel;
+  final String route;
+
+  const _ActionPanelItem({
+    required this.severity,
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+    required this.actionLabel,
+    required this.route,
+  });
+
+  Color get color => switch (severity) {
+        _ActionSeverity.critical => AppColors.error,
+        _ActionSeverity.warning => AppColors.warning,
+        _ActionSeverity.info => AppColors.primary,
+      };
+
+  Color get bgColor => switch (severity) {
+        _ActionSeverity.critical => const Color(0xFFFFF1F1),
+        _ActionSeverity.warning => const Color(0xFFFFF8E1),
+        _ActionSeverity.info => const Color(0xFFF0F4FF),
+      };
+}
+
+class _DashboardActionPanel extends StatelessWidget {
+  final AppState state;
+  const _DashboardActionPanel({required this.state});
+
+  List<_ActionPanelItem> _buildItems() {
+    final items = <_ActionPanelItem>[];
+
+    // 1. Draft purchase orders awaiting confirmation
+    final draftPos = state.purchaseOrders
+        .where((o) => o.status == OrderStatus.draft)
+        .toList();
+    if (draftPos.isNotEmpty) {
+      items.add(_ActionPanelItem(
+        severity: _ActionSeverity.warning,
+        icon: Icons.receipt_long_outlined,
+        title: '${draftPos.length} draft purchase order${draftPos.length == 1 ? '' : 's'} need confirmation',
+        subtitle: 'Confirm to send to suppliers — '
+            '${draftPos.take(3).map((o) => '${o.items.length} item${o.items.length == 1 ? '' : 's'}').join(', ')}',
+        actionLabel: 'Go to Orders',
+        route: '/orders',
+      ));
+    }
+
+    // 2. Pending manufacturing recommendations
+    final pendingMfg = state.mfgRecommendations
+        .where((r) => r.status == RecommendationStatus.pending)
+        .toList();
+    if (pendingMfg.isNotEmpty) {
+      final names = pendingMfg
+          .take(3)
+          .map((r) =>
+              state.products.where((p) => p.id == r.productId).firstOrNull?.name ?? r.productId)
+          .join(', ');
+      items.add(_ActionPanelItem(
+        severity: _ActionSeverity.warning,
+        icon: Icons.precision_manufacturing_outlined,
+        title: '${pendingMfg.length} manufacturing recommendation${pendingMfg.length == 1 ? '' : 's'} pending',
+        subtitle: names + (pendingMfg.length > 3 ? ' and ${pendingMfg.length - 3} more' : ''),
+        actionLabel: 'Review',
+        route: '/recommendations',
+      ));
+    }
+
+    // 3. Active production orders in progress
+    final activeProd = state.productionOrders
+        .where((o) =>
+            o.status == ProductionOrderStatus.draft ||
+            o.status == ProductionOrderStatus.approved ||
+            o.status == ProductionOrderStatus.inProduction)
+        .toList();
+    if (activeProd.isNotEmpty) {
+      items.add(_ActionPanelItem(
+        severity: _ActionSeverity.info,
+        icon: Icons.factory_outlined,
+        title: '${activeProd.length} production order${activeProd.length == 1 ? '' : 's'} in progress',
+        subtitle: activeProd
+            .take(3)
+            .map((o) => '${o.quantity}× (${_statusLabel(o.status)})')
+            .join(', '),
+        actionLabel: 'View',
+        route: '/production-orders',
+      ));
+    }
+
+    // 4. Supplier responses received
+    final responses = state.supplierOrders
+        .where((o) => o.status == 'acknowledged' && o.response != null)
+        .toList();
+    if (responses.isNotEmpty) {
+      items.add(_ActionPanelItem(
+        severity: _ActionSeverity.info,
+        icon: Icons.mark_email_unread_outlined,
+        title: '${responses.length} supplier response${responses.length == 1 ? '' : 's'} received',
+        subtitle: responses
+            .take(3)
+            .map((o) => '${o.supplierName}: '
+                '${o.response!.estimatedDeliveryDays != null ? "${o.response!.estimatedDeliveryDays}d delivery" : "responded"}')
+            .join(' · '),
+        actionLabel: 'Review',
+        route: '/orders',
+      ));
+    }
+
+    return items;
+  }
+
+  static String _statusLabel(ProductionOrderStatus s) => switch (s) {
+        ProductionOrderStatus.draft => 'Draft',
+        ProductionOrderStatus.approved => 'Approved',
+        ProductionOrderStatus.materialsOrdered => 'Materials Ordered',
+        ProductionOrderStatus.materialsReady => 'Materials Ready',
+        ProductionOrderStatus.inProduction => 'In Production',
+        ProductionOrderStatus.completed => 'Completed',
+      };
+
+  @override
+  Widget build(BuildContext context) {
+    final items = _buildItems();
+    if (items.isEmpty) return const SizedBox.shrink();
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 24),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.only(bottom: 12),
+            child: Text('Actions Needed', style: AppTextStyles.h3),
+          ),
+          ...items.map((item) => _ActionItemCard(item: item)),
+        ],
+      ),
+    );
+  }
+}
+
+class _ActionItemCard extends StatelessWidget {
+  final _ActionPanelItem item;
+  const _ActionItemCard({required this.item});
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      margin: const EdgeInsets.only(bottom: 10),
+      elevation: 0,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(10),
+        side: BorderSide(color: item.color.withValues(alpha: 0.3)),
+      ),
+      color: item.bgColor,
+      child: InkWell(
+        onTap: () => context.go(item.route),
+        borderRadius: BorderRadius.circular(10),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              Container(
+                width: 36,
+                height: 36,
+                decoration: BoxDecoration(
+                  color: item.color.withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Icon(item.icon, color: item.color, size: 18),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(item.title,
+                        style: TextStyle(
+                            fontWeight: FontWeight.w700,
+                            fontSize: 13,
+                            color: item.color)),
+                    const SizedBox(height: 2),
+                    Text(item.subtitle,
+                        style: const TextStyle(
+                            fontSize: 12, color: AppColors.textSecondary),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 12),
+              OutlinedButton(
+                onPressed: () => context.go(item.route),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: item.color,
+                  side: BorderSide(color: item.color.withValues(alpha: 0.5)),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+                  minimumSize: Size.zero,
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  textStyle: const TextStyle(
+                      fontSize: 12, fontWeight: FontWeight.w600),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(item.actionLabel),
+                    const SizedBox(width: 4),
+                    const Icon(Icons.arrow_forward, size: 13),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 }
 

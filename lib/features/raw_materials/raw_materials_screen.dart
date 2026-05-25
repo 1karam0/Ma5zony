@@ -1,10 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:ma5zony/models/raw_material.dart';
+import 'package:ma5zony/models/supplier.dart';
 import 'package:ma5zony/providers/app_state.dart';
 import 'package:ma5zony/utils/constants.dart';
 import 'package:ma5zony/widgets/shared_widgets.dart';
 import 'package:ma5zony/widgets/zoho_patterns.dart';
+import 'package:ma5zony/features/onboarding/tour_targets.dart';
 
 const _kUomOptions = ['units', 'g', 'kg', 'm', 'cm', 'L', 'mL', 'pcs'];
 
@@ -54,10 +56,13 @@ class _RawMaterialsScreenState extends State<RawMaterialsScreen> {
           SectionHeader(
             title: 'Raw Materials',
             actions: [
-              ElevatedButton.icon(
-                icon: const Icon(Icons.add, size: 18),
-                label: const Text('Add Material'),
-                onPressed: () => _showFormDialog(context, state),
+              KeyedSubtree(
+                key: TourTargets.instance.keyFor('page:rawmaterials.add'),
+                child: ElevatedButton.icon(
+                  icon: const Icon(Icons.add, size: 18),
+                  label: const Text('Add Material'),
+                  onPressed: () => _showFormDialog(context, state),
+                ),
               ),
             ],
           ),
@@ -343,6 +348,11 @@ class _RawMaterialFormDialogState extends State<_RawMaterialFormDialog> {
   String _uom = 'units';
   bool _saving = false;
 
+  // Inline new-supplier creation
+  bool _creatingNewSupplier = false;
+  final _newSupplierNameCtrl = TextEditingController();
+  final _newSupplierEmailCtrl = TextEditingController();
+
   bool get _isEdit => widget.existing != null;
 
   @override
@@ -372,6 +382,8 @@ class _RawMaterialFormDialogState extends State<_RawMaterialFormDialog> {
     _stockCtrl.dispose();
     _safetyCtrl.dispose();
     _leadTimeCtrl.dispose();
+    _newSupplierNameCtrl.dispose();
+    _newSupplierEmailCtrl.dispose();
     super.dispose();
   }
 
@@ -522,24 +534,58 @@ class _RawMaterialFormDialogState extends State<_RawMaterialFormDialog> {
                       'Who delivers this material and how long shipping takes.',
                   children: [
                     Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Expanded(
                           flex: 2,
-                          child: DropdownButtonFormField<String>(
-                            value: _supplierId,
-                            decoration: const InputDecoration(
-                                labelText: 'Supplier *'),
-                            hint: const Text('Select supplier'),
-                            items: suppliers
-                                .map((s) => DropdownMenuItem(
-                                    value: s.id, child: Text(s.name)))
-                                .toList(),
-                            onChanged: (v) =>
-                                setState(() => _supplierId = v),
-                            validator: (v) => (v == null || v.isEmpty)
-                                ? 'Select a supplier'
-                                : null,
-                          ),
+                          child: _creatingNewSupplier
+                              ? _buildNewSupplierInline()
+                              : Column(
+                                  crossAxisAlignment:
+                                      CrossAxisAlignment.start,
+                                  children: [
+                                    DropdownButtonFormField<String>(
+                                      value: _supplierId,
+                                      decoration: const InputDecoration(
+                                          labelText: 'Supplier'),
+                                      hint: const Text('Select supplier'),
+                                      items: [
+                                        ...suppliers.map((s) =>
+                                            DropdownMenuItem(
+                                                value: s.id,
+                                                child: Text(s.name))),
+                                        const DropdownMenuItem(
+                                          value: '__new__',
+                                          child: Row(
+                                            children: [
+                                              Icon(Icons.add_circle_outline,
+                                                  size: 16,
+                                                  color: AppColors.primary),
+                                              SizedBox(width: 6),
+                                              Text('New supplier…',
+                                                  style: TextStyle(
+                                                      color:
+                                                          AppColors.primary,
+                                                      fontWeight:
+                                                          FontWeight.w600)),
+                                            ],
+                                          ),
+                                        ),
+                                      ],
+                                      onChanged: (v) {
+                                        if (v == '__new__') {
+                                          setState(() {
+                                            _supplierId = null;
+                                            _creatingNewSupplier = true;
+                                          });
+                                        } else {
+                                          setState(() => _supplierId = v);
+                                        }
+                                      },
+                                      validator: null,
+                                    ),
+                                  ],
+                                ),
                         ),
                         const SizedBox(width: 16),
                         Expanded(
@@ -594,18 +640,84 @@ class _RawMaterialFormDialogState extends State<_RawMaterialFormDialog> {
     );
   }
 
+  Widget _buildNewSupplierInline() {
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: AppColors.primaryLight.withValues(alpha: 0.15),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: AppColors.primary.withValues(alpha: 0.3)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.add_business_outlined,
+                  size: 14, color: AppColors.primary),
+              const SizedBox(width: 6),
+              Text('New Supplier',
+                  style: AppTextStyles.bodySmall.copyWith(
+                      color: AppColors.primary,
+                      fontWeight: FontWeight.w700)),
+              const Spacer(),
+              GestureDetector(
+                onTap: () => setState(() => _creatingNewSupplier = false),
+                child: const Icon(Icons.close,
+                    size: 14, color: AppColors.textSecondary),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          TextFormField(
+            controller: _newSupplierNameCtrl,
+            decoration: const InputDecoration(
+                labelText: 'Supplier Name *', isDense: true),
+            validator: (v) => _creatingNewSupplier &&
+                    (v == null || v.trim().isEmpty)
+                ? 'Required'
+                : null,
+          ),
+          const SizedBox(height: 10),
+          TextFormField(
+            controller: _newSupplierEmailCtrl,
+            decoration: const InputDecoration(
+                labelText: 'Email (optional)', isDense: true),
+            keyboardType: TextInputType.emailAddress,
+          ),
+        ],
+      ),
+    );
+  }
+
   Future<void> _save() async {
     if (!_formKey.currentState!.validate()) return;
     setState(() => _saving = true);
     try {
+      // If the user filled in a new supplier inline, create it first.
+      String? resolvedSupplierId = _supplierId;
+      if (_creatingNewSupplier &&
+          _newSupplierNameCtrl.text.trim().isNotEmpty) {
+        final newSupplier = Supplier(
+          id: '',
+          name: _newSupplierNameCtrl.text.trim(),
+          contactEmail: _newSupplierEmailCtrl.text.trim(),
+          typicalLeadTimeDays:
+              int.tryParse(_leadTimeCtrl.text.trim()) ?? 0,
+          suppliedRawMaterialIds: const [],
+        );
+        final saved = await widget.state.addSupplier(newSupplier);
+        resolvedSupplierId = saved.id;
+      }
+
       final material = RawMaterial(
         id: widget.existing?.id ?? '',
         name: _nameCtrl.text.trim(),
         sku: _skuCtrl.text.trim(),
         unit: _uom,
         unitOfMeasure: _uom,
-        unitCost: double.parse(_unitCostCtrl.text.trim()),
-        supplierId: _supplierId,
+        unitCost: double.tryParse(_unitCostCtrl.text.trim()) ?? 0.0,
+        supplierId: resolvedSupplierId,
         currentStock: int.tryParse(_stockCtrl.text.trim()) ?? 0,
         safetyStock: int.tryParse(_safetyCtrl.text.trim()) ?? 0,
         leadTimeDays: int.tryParse(_leadTimeCtrl.text.trim()) ?? 0,
@@ -616,8 +728,9 @@ class _RawMaterialFormDialogState extends State<_RawMaterialFormDialog> {
         await widget.state.addRawMaterial(material);
       }
       if (mounted) {
+        final messenger = ScaffoldMessenger.of(context);
         Navigator.pop(context);
-        ScaffoldMessenger.of(context).showSnackBar(
+        messenger.showSnackBar(
           SnackBar(content: Text(_isEdit ? 'Material updated' : 'Material added')),
         );
       }

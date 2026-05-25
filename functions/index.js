@@ -315,7 +315,58 @@ exports.shopifyImportProducts = onRequest(
     // GraphQL query with cursor-based pagination.
     // `query: "status:active"` filters out archived/draft products so only
     // currently-sellable items are imported into Ma5zony.
-    const PRODUCTS_QUERY = `
+    //
+    // We pull Shopify's selling price (`variant.price`) and bundle
+    // composition only. **Cost per item is intentionally NOT imported** —
+    // cost is always derived inside Ma5zony from either:
+    //   • the raw materials in the BOM + production fee (manufactured), or
+    //   • the supplier price typed by the user (purchased).
+    // This keeps the inventory cost on the dashboard accurate to what the
+    // business actually pays.
+    //
+    // `productVariantComponents` is only available on stores running the
+    // Shopify Bundles app + API 2024-01+. We try the full query first and
+    // fall back to the no-bundles query if Shopify rejects the field.
+    const PRODUCTS_QUERY_WITH_BUNDLES = `
+      query FetchProducts($cursor: String) {
+        products(first: 100, after: $cursor, query: "status:active") {
+          pageInfo { hasNextPage endCursor }
+          edges {
+            node {
+              id
+              title
+              productType
+              status
+              variants(first: 50) {
+                edges {
+                  node {
+                    id
+                    title
+                    sku
+                    price
+                    inventoryQuantity
+                    productVariantComponents(first: 25) {
+                      edges {
+                        node {
+                          quantity
+                          productVariant {
+                            id
+                            sku
+                            product { id title }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    `;
+
+    const PRODUCTS_QUERY_NO_BUNDLES = `
       query FetchProducts($cursor: String) {
         products(first: 100, after: $cursor, query: "status:active") {
           pageInfo { hasNextPage endCursor }
@@ -342,19 +393,68 @@ exports.shopifyImportProducts = onRequest(
       }
     `;
 
+    // Mutable: starts with bundle-aware query, downgrades on first failure.
+    let PRODUCTS_QUERY = PRODUCTS_QUERY_WITH_BUNDLES;
+    let bundleQuerySupported = true;
+
+    // Auto-categorisation: keyword in the product title overrides whatever
+    // Shopify productType says. Keeps "Figure 8 Strap", "Wrist Strap" etc. all
+    // under one "Straps" category for the user's setup workflow.
+    function autoCategory(title, fallback) {
+      const t = String(title || "").toLowerCase();
+      if (/\bstrap(s)?\b/.test(t)) return "Straps";
+      if (/\bbelt(s)?\b/.test(t)) return "Belts";
+      if (/\bcuff(s)?\b/.test(t)) return "Cuffs";
+      return fallback || "Uncategorised";
+    }
+
     try {
+      // ── Pre-read existing Shopify-linked docs ─────────────────────────────
+      // Used to (a) deactivation sweep and (b) preserve user-set fields (cost,
+      // supplier, leadTime) that must NOT be overwritten on re-import.
+      const existingSnap = await db
+        .collection("users")
+        .doc(uid)
+        .collection("products")
+        .where("shopifyProductId", "!=", null)
+        .get();
+      const existingDocMap = {};
+      for (const doc of existingSnap.docs) {
+        existingDocMap[doc.id] = doc.data();
+      }
+
       const imported = [];
       const batch = db.batch();
       let cursor = null;
       let hasNextPage = true;
 
       while (hasNextPage) {
-        const data = await shopifyGraphQL(
-          shopDomain,
-          accessToken,
-          PRODUCTS_QUERY,
-          { cursor }
-        );
+        let data;
+        try {
+          data = await shopifyGraphQL(
+            shopDomain,
+            accessToken,
+            PRODUCTS_QUERY,
+            { cursor }
+          );
+        } catch (err) {
+          // Downgrade once if the bundle field is unsupported on this store.
+          const msg = String(err && err.message ? err.message : err);
+          if (
+            bundleQuerySupported &&
+            /productVariantComponents|Field .* doesn't exist|Field .* not found/i
+              .test(msg)
+          ) {
+            console.log(
+              "[shopifyImport] productVariantComponents unsupported — " +
+                "falling back to cost-only query."
+            );
+            bundleQuerySupported = false;
+            PRODUCTS_QUERY = PRODUCTS_QUERY_NO_BUNDLES;
+            continue; // retry same page with downgraded query
+          }
+          throw err;
+        }
 
         const { edges, pageInfo } = data.products;
         hasNextPage = pageInfo.hasNextPage;
@@ -364,36 +464,100 @@ exports.shopifyImportProducts = onRequest(
           // Extract numeric ID from Shopify GID (e.g. "gid://shopify/Product/123" → "123")
           const shopifyId = sp.id.split("/").pop();
           const variants = sp.variants.edges.map((e) => e.node);
-          const multiVariant = variants.length > 1;
+          if (variants.length === 0) continue;
 
-          for (const variant of variants) {
-            const variantId = variant.id.split("/").pop();
-            const variantSuffix = multiVariant ? `_${variantId}` : "";
-            const docId = `shopify_${shopifyId}${variantSuffix}`;
+          // ── Collapse all variants into ONE parent product ─────────────────
+          // The user only needs to set up the general product once (cost,
+          // supplier, etc.) — variants share those. Stock is summed across
+          // variants so the parent reflects the real on-hand total.
+          const totalStock = variants.reduce(
+            (s, v) => s + (v.inventoryQuantity ?? 0),
+            0
+          );
+          // Pick a representative SKU: first variant's SKU, or fall back.
+          const firstSku = variants.find((v) => v.sku && v.sku.trim())?.sku;
+          const sku = firstSku || `SHOP-${shopifyId}`;
+          // Shopify selling price (first variant) — stored separately so it is
+          // never confused with the user's cost price.
+          const sellingPrice = parseFloat(
+            variants.find((v) => v.price)?.price ?? "0"
+          ) || null;
 
-            const docData = {
-              sku: variant.sku || `SHOP-${shopifyId}${variantSuffix}`,
-              name: multiVariant
-                ? `${sp.title} — ${variant.title || ""}`
-                : sp.title,
-              category: sp.productType || "Uncategorised",
-              // unitCost is NOT imported from Shopify — selling price ≠ cost.
-              // Users must set the cost manually in the product editor.
-              currentStock: variant.inventoryQuantity ?? 0,
-              supplierId: null,
-              isActive: sp.status === "ACTIVE",
-              shopifyProductId: shopifyId,
-              shopifyVariantId: variantId,
-            };
-
-            const ref = db
-              .collection("users")
-              .doc(uid)
-              .collection("products")
-              .doc(docId);
-            batch.set(ref, docData, { merge: true });
-            imported.push({ id: ref.id, ...docData });
+          // ── Bundle components (Shopify Bundles) ───────────────────────────
+          // Flatten components across all variants of this product. Each
+          // entry records which Shopify variant (and parent product) makes up
+          // one unit of this bundle, plus the quantity. Cost is rolled up at
+          // read time inside the Flutter app via AppState.effectiveUnitCost.
+          const bundleComponents = [];
+          for (const v of variants) {
+            const compEdges =
+              (v.productVariantComponents &&
+                v.productVariantComponents.edges) ||
+              [];
+            for (const { node: comp } of compEdges) {
+              const pv = comp && comp.productVariant;
+              if (!pv) continue;
+              const compVariantId = pv.id ? pv.id.split("/").pop() : null;
+              const compProductId =
+                pv.product && pv.product.id
+                  ? pv.product.id.split("/").pop()
+                  : null;
+              bundleComponents.push({
+                shopifyVariantId: compVariantId,
+                shopifyProductId: compProductId,
+                quantity: comp.quantity || 1,
+                name: pv.product ? pv.product.title : pv.sku || null,
+              });
+            }
           }
+          const isBundle = bundleComponents.length > 0;
+
+          const docId = `shopify_${shopifyId}`;
+          const existing = existingDocMap[docId];
+
+          // ── unitCost: NEVER touched by Shopify import ─────────────────────
+          // Cost is sourced from the BOM (manufactured) or typed by the user
+          // (purchased). On first import we initialise to 0; on subsequent
+          // imports we leave whatever the user has entered alone.
+          const unitCostField = existing ? {} : { unitCost: 0 };
+
+          const docData = {
+            sku,
+            name: sp.title,
+            category: autoCategory(sp.title, sp.productType),
+            // sellingPrice always comes from Shopify (source of truth).
+            sellingPrice,
+            // unitCost left untouched (managed inside Ma5zony, not Shopify).
+            ...unitCostField,
+            currentStock: totalStock,
+            // Don't overwrite supplierId / manufacturerId / leadTimeDays that
+            // the user may have linked — only set them on first import.
+            ...(existing ? {} : { supplierId: null }),
+            isActive: sp.status === "ACTIVE",
+            shopifyProductId: shopifyId,
+            // Comma-separated list of all variant IDs so order matching can
+            // resolve any variant sale back to this single parent product.
+            shopifyVariantId: variants
+              .map((v) => v.id.split("/").pop())
+              .join(","),
+            variantCount: variants.length,
+            // Bundle metadata. Always write so removed bundles are cleared.
+            isBundle,
+            bundleComponents,
+          };
+
+          const ref = db
+            .collection("users")
+            .doc(uid)
+            .collection("products")
+            .doc(docId);
+          batch.set(ref, docData, { merge: true });
+          imported.push({
+            id: ref.id,
+            ...docData,
+            unitCost:
+              unitCostField.unitCost ?? existing?.unitCost ?? 0,
+          });
         }
       }
 
@@ -405,13 +569,6 @@ exports.shopifyImportProducts = onRequest(
       // Shopify. Mark those Firestore docs as isActive: false so they are hidden
       // from forecasts, low-stock alerts, and replenishment recommendations.
       const importedDocIds = new Set(imported.map((p) => p.id));
-      const existingSnap = await db
-        .collection("users")
-        .doc(uid)
-        .collection("products")
-        .where("shopifyProductId", "!=", null)
-        .get();
-
       const deactivateBatch = db.batch();
       let deactivated = 0;
       for (const doc of existingSnap.docs) {
@@ -492,21 +649,21 @@ exports.shopifySyncStock = onRequest(
         for (const { node: sp } of edges) {
           const shopifyId = sp.id.split("/").pop();
           const variants = sp.variants.edges.map((e) => e.node);
-          const multiVariant = variants.length > 1;
 
-          for (const variant of variants) {
-            const variantId = variant.id.split("/").pop();
-            const variantSuffix = multiVariant ? `_${variantId}` : "";
-            const ref = db
-              .collection("users")
-              .doc(uid)
-              .collection("products")
-              .doc(`shopify_${shopifyId}${variantSuffix}`);
-            batch.set(ref, {
-              currentStock: variant.inventoryQuantity ?? 0,
-            }, { merge: true });
-            synced++;
-          }
+          // Sum stock across all variants → write to the single parent doc.
+          const totalStock = variants.reduce(
+            (s, v) => s + (v.inventoryQuantity ?? 0),
+            0
+          );
+          const ref = db
+            .collection("users")
+            .doc(uid)
+            .collection("products")
+            .doc(`shopify_${shopifyId}`);
+          batch.set(ref, {
+            currentStock: totalStock,
+          }, { merge: true });
+          synced++;
         }
       }
 
@@ -624,7 +781,17 @@ exports.shopifyImportOrders = onRequest(
 
       for (const doc of productsSnap.docs) {
         const d = doc.data();
-        if (d.shopifyVariantId) byVariantId[String(d.shopifyVariantId)] = doc.id;
+        // Skip inactive (archived) products so they're never matched against
+        // incoming Shopify orders.
+        if (d.isActive === false) continue;
+        // shopifyVariantId may be a single ID OR a comma-separated list of
+        // every variant under this parent product (collapsed variants).
+        if (d.shopifyVariantId) {
+          for (const vid of String(d.shopifyVariantId).split(",")) {
+            const trimmed = vid.trim();
+            if (trimmed) byVariantId[trimmed] = doc.id;
+          }
+        }
         if (d.sku) {
           const sku = String(d.sku);
           bySku[sku.toLowerCase()] = doc.id;

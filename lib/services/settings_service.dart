@@ -1,5 +1,70 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 
+/// One-time onboarding answers that decide which screens, fields, and
+/// terminology the rest of the app shows. Persisted alongside the rest of
+/// user settings so guards and the sidebar can read it synchronously after
+/// login.
+///
+/// `stockMode`:
+///   - 'single'   → one warehouse / location
+///   - 'multi'    → multiple warehouses / branches
+///   - 'dropship' → no physical stock, fulfilment partner ships
+///
+/// `sourcing`:
+///   - 'buy'  → resell finished goods (purchased)
+///   - 'make' → manufacture in-house / via partner (BOM-driven)
+///   - 'both' → mix; show every workflow
+///
+/// `channels`: any subset of {'shopify','instore','wholesale','marketplace'}.
+class BusinessProfile {
+  final String stockMode;
+  final String sourcing;
+  final List<String> channels;
+
+  const BusinessProfile({
+    required this.stockMode,
+    required this.sourcing,
+    required this.channels,
+  });
+
+  bool get sellsB2c => channels.contains('shopify') ||
+      channels.contains('instore') ||
+      channels.contains('marketplace');
+  bool get sellsWholesale => channels.contains('wholesale');
+  bool get isDropship => stockMode == 'dropship';
+  bool get isMultiLocation => stockMode == 'multi';
+  bool get manufactures => sourcing == 'make' || sourcing == 'both';
+  bool get purchases => sourcing == 'buy' || sourcing == 'both';
+
+  factory BusinessProfile.fromMap(Map<String, dynamic> m) {
+    return BusinessProfile(
+      stockMode: m['stockMode'] as String? ?? 'single',
+      sourcing: m['sourcing'] as String? ?? 'both',
+      channels: (m['channels'] as List?)
+              ?.map((e) => e.toString())
+              .toList() ??
+          const ['shopify'],
+    );
+  }
+
+  Map<String, dynamic> toMap() => {
+        'stockMode': stockMode,
+        'sourcing': sourcing,
+        'channels': channels,
+      };
+
+  BusinessProfile copyWith({
+    String? stockMode,
+    String? sourcing,
+    List<String>? channels,
+  }) =>
+      BusinessProfile(
+        stockMode: stockMode ?? this.stockMode,
+        sourcing: sourcing ?? this.sourcing,
+        channels: channels ?? this.channels,
+      );
+}
+
 /// User-level settings persisted in Firestore at `users/{uid}/settings/global`.
 class UserSettings {
   final double serviceLevelTarget;
@@ -15,6 +80,11 @@ class UserSettings {
   final double holdingRate;
   final bool emailDigest;
   final bool lowStockAlerts;
+  final BusinessProfile? businessProfile;
+  /// True once the user has seen the welcome tour overlay. Used by
+  /// `AppState`/`OwnerDashboardScreen` to decide whether to auto-show the
+  /// guided walkthrough on first visit to the dashboard.
+  final bool tourCompleted;
 
   const UserSettings({
     this.serviceLevelTarget = 95,
@@ -30,6 +100,8 @@ class UserSettings {
     this.holdingRate = 0.20,
     this.emailDigest = true,
     this.lowStockAlerts = true,
+    this.businessProfile,
+    this.tourCompleted = false,
   });
 
   factory UserSettings.fromMap(Map<String, dynamic> m) {
@@ -47,6 +119,11 @@ class UserSettings {
       holdingRate: (m['holdingRate'] as num?)?.toDouble() ?? 0.20,
       emailDigest: m['emailDigest'] as bool? ?? true,
       lowStockAlerts: m['lowStockAlerts'] as bool? ?? true,
+      businessProfile: m['businessProfile'] is Map
+          ? BusinessProfile.fromMap(
+              Map<String, dynamic>.from(m['businessProfile'] as Map))
+          : null,
+      tourCompleted: m['tourCompleted'] as bool? ?? false,
     );
   }
 
@@ -64,6 +141,9 @@ class UserSettings {
         'holdingRate': holdingRate,
         'emailDigest': emailDigest,
         'lowStockAlerts': lowStockAlerts,
+        if (businessProfile != null)
+          'businessProfile': businessProfile!.toMap(),
+        'tourCompleted': tourCompleted,
       };
 
   UserSettings copyWith({
@@ -80,6 +160,9 @@ class UserSettings {
     double? holdingRate,
     bool? emailDigest,
     bool? lowStockAlerts,
+    BusinessProfile? businessProfile,
+    bool clearBusinessProfile = false,
+    bool? tourCompleted,
   }) {
     return UserSettings(
       serviceLevelTarget: serviceLevelTarget ?? this.serviceLevelTarget,
@@ -95,6 +178,10 @@ class UserSettings {
       holdingRate: holdingRate ?? this.holdingRate,
       emailDigest: emailDigest ?? this.emailDigest,
       lowStockAlerts: lowStockAlerts ?? this.lowStockAlerts,
+      businessProfile: clearBusinessProfile
+          ? null
+          : (businessProfile ?? this.businessProfile),
+      tourCompleted: tourCompleted ?? this.tourCompleted,
     );
   }
 }

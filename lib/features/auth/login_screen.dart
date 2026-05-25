@@ -5,6 +5,8 @@ import 'package:provider/provider.dart';
 import 'package:ma5zony/providers/app_state.dart';
 import 'package:ma5zony/utils/constants.dart';
 
+/// Sign-in screen. Calm, centered, restrained — one column, one card, no
+/// marketing copy. Designed to feel like a quiet utility, not a landing page.
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
 
@@ -28,160 +30,264 @@ class _LoginScreenState extends State<LoginScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final isWide = MediaQuery.of(context).size.width >= 900;
     return Scaffold(
-      backgroundColor: AppColors.canvas,
-      body: isWide ? _WideLayout(state: this) : _NarrowLayout(state: this),
+      backgroundColor: AppColors.background,
+      body: Center(
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 48),
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 380),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                // ── Wordmark ─────────────────────────────────────────
+                Center(
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Container(
+                        width: 32,
+                        height: 32,
+                        decoration: BoxDecoration(
+                          color: AppColors.primary,
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: const Icon(Icons.inventory_2,
+                            color: Colors.white, size: 18),
+                      ),
+                      const SizedBox(width: 10),
+                      Text(
+                        'Ma5zony',
+                        style: GoogleFonts.inter(
+                          fontSize: 18,
+                          fontWeight: FontWeight.w700,
+                          color: AppColors.textPrimary,
+                          letterSpacing: -0.2,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 40),
+
+                // ── Card ─────────────────────────────────────────────
+                Container(
+                  padding: const EdgeInsets.fromLTRB(28, 32, 28, 28),
+                  decoration: BoxDecoration(
+                    color: AppColors.surface,
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: AppColors.border),
+                  ),
+                  child: Form(
+                    key: _formKey,
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        Text(
+                          'Sign in',
+                          style: GoogleFonts.inter(
+                            fontSize: 22,
+                            fontWeight: FontWeight.w700,
+                            color: AppColors.textPrimary,
+                            letterSpacing: -0.3,
+                          ),
+                        ),
+                        const SizedBox(height: 6),
+                        Text(
+                          'Welcome back to your inventory.',
+                          style: AppTextStyles.bodySmall
+                              .copyWith(color: AppColors.textSecondary),
+                        ),
+                        const SizedBox(height: 28),
+
+                        // Email
+                        const _FieldLabel('Email'),
+                        const SizedBox(height: 6),
+                        TextFormField(
+                          controller: _emailController,
+                          keyboardType: TextInputType.emailAddress,
+                          autofillHints: const [AutofillHints.email],
+                          decoration: _inputDecoration('you@company.com'),
+                          validator: (v) {
+                            if (v == null || v.trim().isEmpty) {
+                              return 'Email is required';
+                            }
+                            if (!RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]+$')
+                                .hasMatch(v.trim())) {
+                              return 'Enter a valid email address';
+                            }
+                            return null;
+                          },
+                        ),
+                        const SizedBox(height: 18),
+
+                        // Password label + inline Forgot
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            const _FieldLabel('Password'),
+                            InkWell(
+                              onTap: _handleForgotPassword,
+                              borderRadius: BorderRadius.circular(4),
+                              child: Padding(
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 2, vertical: 1),
+                                child: Text(
+                                  'Forgot?',
+                                  style: AppTextStyles.bodySmall.copyWith(
+                                    color: AppColors.primary,
+                                    fontWeight: FontWeight.w500,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 6),
+                        TextFormField(
+                          controller: _passwordController,
+                          obscureText: _obscurePassword,
+                          autofillHints: const [AutofillHints.password],
+                          decoration: _inputDecoration('').copyWith(
+                            suffixIcon: IconButton(
+                              splashRadius: 18,
+                              icon: Icon(
+                                _obscurePassword
+                                    ? Icons.visibility_outlined
+                                    : Icons.visibility_off_outlined,
+                                size: 18,
+                                color: AppColors.textSecondary,
+                              ),
+                              onPressed: () => setState(() =>
+                                  _obscurePassword = !_obscurePassword),
+                            ),
+                          ),
+                          onFieldSubmitted: (_) => _handleLogin(),
+                          validator: (v) {
+                            if (v == null || v.isEmpty) {
+                              return 'Password is required';
+                            }
+                            return null;
+                          },
+                        ),
+                        const SizedBox(height: 24),
+
+                        // Sign in button
+                        SizedBox(
+                          height: 44,
+                          child: ElevatedButton(
+                            onPressed: _isLoading ? null : _handleLogin,
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: AppColors.primary,
+                              foregroundColor: Colors.white,
+                              elevation: 0,
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(8),
+                              ),
+                              textStyle: GoogleFonts.inter(
+                                fontSize: 14,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                            child: _isLoading
+                                ? const SizedBox(
+                                    width: 18,
+                                    height: 18,
+                                    child: CircularProgressIndicator(
+                                      color: Colors.white,
+                                      strokeWidth: 2,
+                                    ),
+                                  )
+                                : const Text('Sign in'),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 20),
+
+                // ── Footer ───────────────────────────────────────────
+                Center(
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Text(
+                        'New to Ma5zony?',
+                        style: AppTextStyles.bodySmall
+                            .copyWith(color: AppColors.textSecondary),
+                      ),
+                      const SizedBox(width: 6),
+                      InkWell(
+                        onTap: () => context.go('/register'),
+                        borderRadius: BorderRadius.circular(4),
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 2, vertical: 1),
+                          child: Text(
+                            'Create an account',
+                            style: AppTextStyles.bodySmall.copyWith(
+                              color: AppColors.primary,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 18),
+                Center(
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      _FooterLink(
+                          label: 'Privacy',
+                          onTap: () => context.push('/privacy')),
+                      Text(' · ',
+                          style: AppTextStyles.bodySmall.copyWith(
+                              color: AppColors.textSubdued)),
+                      _FooterLink(
+                          label: 'Terms',
+                          onTap: () => context.push('/terms')),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
     );
   }
 
-  Widget _buildForm(BuildContext context) {
-    return Form(
-      key: _formKey,
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          // Wordmark
-          Row(children: [
-            Container(
-              width: 28,
-              height: 28,
-              decoration: BoxDecoration(
-                color: AppColors.primary,
-                borderRadius: AppRadius.sharp,
-              ),
-              child:
-                  const Icon(Icons.inventory_2, color: Colors.white, size: 16),
-            ),
-            const SizedBox(width: 10),
-            Text(
-              'Ma5zony',
-              style: GoogleFonts.inter(
-                fontSize: 15,
-                fontWeight: FontWeight.w700,
-                color: AppColors.textPrimary,
-              ),
-            ),
-          ]),
-          const SizedBox(height: 32),
-          Text('SIGN IN', style: AppTextStyles.eyebrow),
-          const SizedBox(height: 8),
-          Text('Welcome back', style: AppTextStyles.h1),
-          const SizedBox(height: 6),
-          Text(
-            'Enter your credentials to continue.',
-            style:
-                AppTextStyles.body.copyWith(color: AppColors.textSecondary),
-          ),
-          const SizedBox(height: 28),
-          TextFormField(
-            controller: _emailController,
-            decoration: const InputDecoration(labelText: 'Work email'),
-            keyboardType: TextInputType.emailAddress,
-            autofillHints: const [AutofillHints.email],
-            validator: (v) {
-              if (v == null || v.trim().isEmpty) return 'Email is required';
-              if (!RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]+$').hasMatch(v.trim())) {
-                return 'Enter a valid email address';
-              }
-              return null;
-            },
-          ),
-          const SizedBox(height: 16),
-          TextFormField(
-            controller: _passwordController,
-            obscureText: _obscurePassword,
-            decoration: InputDecoration(
-              labelText: 'Password',
-              suffixIcon: IconButton(
-                icon: Icon(
-                  _obscurePassword
-                      ? Icons.visibility_outlined
-                      : Icons.visibility_off_outlined,
-                  size: 18,
-                ),
-                onPressed: () =>
-                    setState(() => _obscurePassword = !_obscurePassword),
-                tooltip: _obscurePassword ? 'Show password' : 'Hide password',
-              ),
-            ),
-            autofillHints: const [AutofillHints.password],
-            validator: (v) {
-              if (v == null || v.isEmpty) return 'Password is required';
-              return null;
-            },
-          ),
-          const SizedBox(height: 6),
-          Align(
-            alignment: Alignment.centerRight,
-            child: TextButton(
-              onPressed: _handleForgotPassword,
-              style: TextButton.styleFrom(
-                padding: EdgeInsets.zero,
-                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-              ),
-              child: Text('Forgot password?', style: AppTextStyles.bodySmall),
-            ),
-          ),
-          const SizedBox(height: 20),
-          ElevatedButton(
-            onPressed: _isLoading ? null : _handleLogin,
-            style: ElevatedButton.styleFrom(
-              padding: const EdgeInsets.symmetric(vertical: 14),
-            ),
-            child: _isLoading
-                ? const SizedBox(
-                    width: 18,
-                    height: 18,
-                    child: CircularProgressIndicator(
-                        color: Colors.white, strokeWidth: 2),
-                  )
-                : const Text('Sign in'),
-          ),
-          const SizedBox(height: 20),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Text("Don't have an account?",
-                  style: AppTextStyles.bodySmall),
-              const SizedBox(width: 2),
-              TextButton(
-                onPressed: () => context.go('/register'),
-                style: TextButton.styleFrom(
-                  padding: EdgeInsets.zero,
-                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                ),
-                child: Text('Create account',
-                    style: AppTextStyles.bodySmall
-                        .copyWith(color: AppColors.primary)),
-              ),
-            ],
-          ),
-          const SizedBox(height: 12),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              TextButton(
-                onPressed: () => context.push('/privacy'),
-                style: TextButton.styleFrom(
-                    padding: EdgeInsets.zero,
-                    tapTargetSize: MaterialTapTargetSize.shrinkWrap),
-                child: Text('Privacy', style: AppTextStyles.bodySmall),
-              ),
-              Text(' · ',
-                  style: AppTextStyles.bodySmall
-                      .copyWith(color: AppColors.textSubdued)),
-              TextButton(
-                onPressed: () => context.push('/terms'),
-                style: TextButton.styleFrom(
-                    padding: EdgeInsets.zero,
-                    tapTargetSize: MaterialTapTargetSize.shrinkWrap),
-                child: Text('Terms', style: AppTextStyles.bodySmall),
-              ),
-            ],
-          ),
-        ],
+  InputDecoration _inputDecoration(String hint) {
+    final base = OutlineInputBorder(
+      borderRadius: BorderRadius.circular(8),
+      borderSide: BorderSide(color: AppColors.border),
+    );
+    return InputDecoration(
+      hintText: hint,
+      hintStyle: AppTextStyles.body.copyWith(color: AppColors.textSubdued),
+      isDense: true,
+      contentPadding:
+          const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+      filled: true,
+      fillColor: AppColors.surface,
+      border: base,
+      enabledBorder: base,
+      focusedBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(8),
+        borderSide: const BorderSide(color: AppColors.primary, width: 1.5),
+      ),
+      errorBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(8),
+        borderSide: const BorderSide(color: AppColors.error),
+      ),
+      focusedErrorBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(8),
+        borderSide: const BorderSide(color: AppColors.error, width: 1.5),
       ),
     );
   }
@@ -201,7 +307,10 @@ class _LoginScreenState extends State<LoginScreen> {
       context.go('/dashboard');
     } else {
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(duration: const Duration(seconds: 3), content: Text(appState.authError ?? 'Login failed')),
+        SnackBar(
+          duration: const Duration(seconds: 3),
+          content: Text(appState.authError ?? 'Login failed'),
+        ),
       );
     }
   }
@@ -210,7 +319,10 @@ class _LoginScreenState extends State<LoginScreen> {
     final email = _emailController.text.trim();
     if (email.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Enter your email first'), duration: Duration(seconds: 3)),
+        const SnackBar(
+          content: Text('Enter your email first'),
+          duration: Duration(seconds: 3),
+        ),
       );
       return;
     }
@@ -219,168 +331,62 @@ class _LoginScreenState extends State<LoginScreen> {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-              content: Text('Password reset email sent. Check your inbox.'), duration: Duration(seconds: 3)),
+            content: Text('Password reset email sent. Check your inbox.'),
+            duration: Duration(seconds: 3),
+          ),
         );
       }
     } on Exception {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-              content: Text(
-                  'Could not send reset email. Check the address and try again.'), duration: Duration(seconds: 3)),
+            content: Text(
+                'Could not send reset email. Check the address and try again.'),
+            duration: Duration(seconds: 3),
+          ),
         );
       }
     }
   }
 }
 
-// ─── Wide (2-column) layout ────────────────────────────────────────────────
+// ── Small reusable atoms ──────────────────────────────────────────────────
 
-class _WideLayout extends StatelessWidget {
-  final _LoginScreenState state;
-  const _WideLayout({required this.state});
+class _FieldLabel extends StatelessWidget {
+  final String text;
+  const _FieldLabel(this.text);
 
   @override
   Widget build(BuildContext context) {
-    return Row(
-      children: [
-        // Left 45%: brand panel — dark, editorial
-        Flexible(
-          flex: 45,
-          child: Container(
-            color: AppColors.sidebarBg,
-            padding: const EdgeInsets.symmetric(horizontal: 52, vertical: 48),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                // Wordmark
-                Row(children: [
-                  Container(
-                    width: 32,
-                    height: 32,
-                    decoration: BoxDecoration(
-                      color: AppColors.primary.withValues(alpha: 0.2),
-                      borderRadius: AppRadius.sharp,
-                    ),
-                    child: const Icon(Icons.inventory_2,
-                        color: AppColors.primary, size: 18),
-                  ),
-                  const SizedBox(width: 10),
-                  Text(
-                    'Ma5zony',
-                    style: GoogleFonts.inter(
-                      fontSize: 15,
-                      fontWeight: FontWeight.w600,
-                      color: AppColors.sidebarTextActive,
-                    ),
-                  ),
-                ]),
-                const Spacer(),
-                // Editorial headline
-                Text(
-                  'INVENTORY INTELLIGENCE',
-                  style: AppTextStyles.eyebrow.copyWith(
-                    color: AppColors.primary,
-                    letterSpacing: 1.2,
-                  ),
-                ),
-                const SizedBox(height: 16),
-                Text(
-                  'Stop stockouts.\nForecast demand.\nGrow profit.',
-                  style: AppTextStyles.display.copyWith(
-                    color: AppColors.sidebarTextActive,
-                    height: 1.15,
-                  ),
-                ),
-                const SizedBox(height: 24),
-                Text(
-                  'The inventory intelligence platform built for growing SMEs. '
-                  'Know what to order, when to order, and exactly how much.',
-                  style: AppTextStyles.body.copyWith(
-                    color: AppColors.sidebarText,
-                    height: 1.65,
-                  ),
-                ),
-                const SizedBox(height: 36),
-                // Feature pills
-                Wrap(
-                  spacing: 8,
-                  runSpacing: 8,
-                  children: const [
-                    _FeaturePill('Demand forecasting'),
-                    _FeaturePill('ABC-XYZ classification'),
-                    _FeaturePill('Shopify sync'),
-                    _FeaturePill('Purchase orders'),
-                    _FeaturePill('Manufacturing workflow'),
-                  ],
-                ),
-                const Spacer(),
-              ],
-            ),
-          ),
-        ),
-        // Right 55%: form panel
-        Flexible(
-          flex: 55,
-          child: Container(
-            color: AppColors.canvas,
-            child: Center(
-              child: SingleChildScrollView(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 64, vertical: 48),
-                child: ConstrainedBox(
-                  constraints: const BoxConstraints(maxWidth: 400),
-                  child: state._buildForm(context),
-                ),
-              ),
-            ),
-          ),
-        ),
-      ],
+    return Text(
+      text,
+      style: GoogleFonts.inter(
+        fontSize: 13,
+        fontWeight: FontWeight.w600,
+        color: AppColors.textPrimary,
+      ),
     );
   }
 }
 
-class _FeaturePill extends StatelessWidget {
+class _FooterLink extends StatelessWidget {
   final String label;
-  const _FeaturePill(this.label);
+  final VoidCallback onTap;
+  const _FooterLink({required this.label, required this.onTap});
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-      decoration: BoxDecoration(
-        color: AppColors.sidebarBgHover,
-        borderRadius: AppRadius.pill,
-        border: Border.all(color: AppColors.sidebarAccent),
-      ),
-      child: Text(
-        label,
-        style: AppTextStyles.bodySmall.copyWith(
-          color: AppColors.sidebarText,
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(4),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 1),
+        child: Text(
+          label,
+          style: AppTextStyles.bodySmall
+              .copyWith(color: AppColors.textSecondary),
         ),
       ),
     );
   }
 }
-
-// ─── Narrow (single-column) layout ────────────────────────────────────────
-
-class _NarrowLayout extends StatelessWidget {
-  final _LoginScreenState state;
-  const _NarrowLayout({required this.state});
-
-  @override
-  Widget build(BuildContext context) {
-    return Center(
-      child: SingleChildScrollView(
-        padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 48),
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 420),
-          child: state._buildForm(context),
-        ),
-      ),
-    );
-  }
-}
-

@@ -12,6 +12,7 @@ import 'package:ma5zony/features/warehouses/warehouses_screen.dart';
 import 'package:ma5zony/features/demand_data/demand_data_screen.dart';
 import 'package:ma5zony/features/forecasts/forecasts_screen.dart';
 import 'package:ma5zony/features/forecasts/forecast_comparison_screen.dart';
+import 'package:ma5zony/features/reorder_plan/reorder_plan_screen.dart';
 import 'package:ma5zony/features/classification/abc_xyz_screen.dart';
 import 'package:ma5zony/features/integrations/integrations_screen.dart';
 import 'package:ma5zony/features/settings/settings_screen.dart';
@@ -31,6 +32,7 @@ import 'package:ma5zony/features/manufacturer_portal/manufacturer_portal_screen.
 import 'package:ma5zony/features/factory_portal/factory_portal_screen.dart';
 import 'package:ma5zony/features/legal/legal_screens.dart';
 import 'package:ma5zony/features/onboarding/setup_wizard_screen.dart';
+import 'package:ma5zony/features/onboarding/business_profile_wizard.dart';
 import 'package:ma5zony/features/orders/raw_material_orders_screen.dart';
 import 'package:ma5zony/features/orders/create_raw_material_order_screen.dart';
 import 'package:ma5zony/features/replenishment/replenishment_screen.dart';
@@ -88,6 +90,20 @@ GoRouter buildAppRouter(AppState appState) {
         return FactoryPortalScreen(accessToken: token);
       },
     ),
+    // Business-profile onboarding — kept as an *opt-in* route for users
+    // who want to set their stock model / business type later (from
+    // Settings). It is no longer forced on first login; the interactive
+    // spotlight tour walks new users through setup instead.
+    GoRoute(
+      path: '/onboarding/profile',
+      redirect: (context, state) {
+        // If user landed here from a stale forced redirect (current session
+        // before the change), or simply types the URL with no business
+        // reason, send them to the dashboard so the spotlight tour can run.
+        return '/dashboard';
+      },
+      builder: (context, state) => const BusinessProfileWizard(),
+    ),
     ShellRoute(
       navigatorKey: _shellNavigatorKey,
       builder: (context, state, child) {
@@ -131,6 +147,11 @@ GoRouter buildAppRouter(AppState appState) {
         ),
         GoRoute(
           path: '/forecasts',
+          pageBuilder: (context, state) =>
+              const NoTransitionPage(child: ReorderPlanScreen()),
+        ),
+        GoRoute(
+          path: '/forecasts/advanced',
           pageBuilder: (context, state) {
             final productId = state.uri.queryParameters['productId'];
             return NoTransitionPage(
@@ -274,6 +295,12 @@ GoRouter buildAppRouter(AppState appState) {
 
     // Setup wizard is accessible after login
     if (path == '/setup' && !loggedIn) return '/login';
+
+    // The business-profile wizard is no longer forced. New owners land
+    // straight on the dashboard and are guided by the interactive spotlight
+    // tour (see `WelcomeTourDialog.show`). The /onboarding/profile route
+    // remains accessible for users who want to set their profile later from
+    // Settings.
 
     // NOTE: We no longer force owners through a standalone setup wizard route.
     // The dashboard onboarding checklist IS the wizard — it appears on first

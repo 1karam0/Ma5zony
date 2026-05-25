@@ -20,6 +20,29 @@ class Product {
   /// Extra per-unit production fee charged by the manufacturer on top of
   /// raw-material costs (only meaningful for manufactured products).
   final double? productionFee;
+  /// Cost-per-item as last reported by Shopify (`inventoryItem.unitCost`).
+  /// Kept separately from [unitCost] so we can detect when the user has
+  /// overridden the Shopify value manually.
+  final double? shopifyUnitCost;
+  /// True when this product is a Shopify Bundle (composed of other variants).
+  /// The effective cost is then derived from the sum of component costs.
+  final bool isBundle;
+  /// Components that make up this bundle. Empty for non-bundle products.
+  final List<BundleComponent> bundleComponents;
+  /// All sourcing options for this product. The first entry with
+  /// [SourcingOption.isDefault] == true is the active option and drives cost,
+  /// lead-time, and replenishment logic. Remaining entries are alternatives
+  /// (backup suppliers, cheaper options, etc.).
+  final List<SourcingOption> sourcingOptions;
+  /// Per-warehouse stock breakdown. Keys are [Warehouse.id]; values are the
+  /// on-hand unit count at that location. When non-empty, [currentStock]
+  /// should equal the sum of all values. When empty, [currentStock] is the
+  /// legacy single-location scalar.
+  final Map<String, int> stockByWarehouse;
+
+  /// Returns the stock count at a specific warehouse (0 if not tracked).
+  int stockAtWarehouse(String warehouseId) =>
+      stockByWarehouse[warehouseId] ?? 0;
 
   Product({
     required this.id,
@@ -39,6 +62,11 @@ class Product {
     this.shopifyProductId,
     this.sellingPrice,
     this.productionFee,
+    this.shopifyUnitCost,
+    this.isBundle = false,
+    this.bundleComponents = const [],
+    this.sourcingOptions = const [],
+    this.stockByWarehouse = const {},
   });
 
   /// Resolves a value from multiple possible field name aliases.
@@ -94,6 +122,23 @@ class Product {
           (_resolve<dynamic>(data, ['shopify_price', 'compareAtPrice']) as num?)
               ?.toDouble(),
       productionFee: (data['productionFee'] as num?)?.toDouble(),
+      shopifyUnitCost: (data['shopifyUnitCost'] as num?)?.toDouble(),
+      isBundle: data['isBundle'] as bool? ?? false,
+      bundleComponents: (data['bundleComponents'] as List<dynamic>?)
+              ?.map((e) => BundleComponent.fromJson(
+                  Map<String, dynamic>.from(e as Map)))
+              .toList() ??
+          const [],
+      sourcingOptions: (data['sourcingOptions'] as List<dynamic>?)
+              ?.map((e) => SourcingOption.fromJson(
+                  Map<String, dynamic>.from(e as Map)))
+              .toList() ??
+          const [],
+      stockByWarehouse: {
+        for (final entry in
+            (data['stockByWarehouse'] as Map<String, dynamic>? ?? {}).entries)
+          entry.key: (entry.value as num).toInt(),
+      },
     );
   }
 
@@ -123,6 +168,109 @@ class Product {
       if (shopifyProductId != null) 'shopifyProductId': shopifyProductId,
       if (sellingPrice != null) 'sellingPrice': sellingPrice,
       if (productionFee != null) 'productionFee': productionFee,
+      if (shopifyUnitCost != null) 'shopifyUnitCost': shopifyUnitCost,
+      if (isBundle) 'isBundle': true,
+      if (bundleComponents.isNotEmpty)
+        'bundleComponents':
+            bundleComponents.map((c) => c.toJson()).toList(),
+      if (sourcingOptions.isNotEmpty)
+        'sourcingOptions': sourcingOptions.map((o) => o.toJson()).toList(),
+      if (stockByWarehouse.isNotEmpty)
+        'stockByWarehouse': stockByWarehouse,
     };
   }
+}
+
+/// One way to source a product — either by purchasing from a supplier or
+/// by having it manufactured. A product can have multiple options; the one
+/// with [isDefault] = true drives cost calculations and replenishment orders.
+class SourcingOption {
+  /// 'purchase' — buy from a supplier; 'manufacture' — make with a manufacturer.
+  final String kind;
+  final String? supplierId;
+  final String? manufacturerId;
+  /// Unit cost for this sourcing path (for manufacture options, this reflects
+  /// BOM material cost + production fee at save time).
+  final double unitCost;
+  /// Typical days from order placement to stock receipt.
+  final int leadTimeDays;
+  /// Minimum order quantity for this option (null = no minimum).
+  final int? moq;
+  /// Whether this is the active/primary sourcing path.
+  final bool isDefault;
+
+  const SourcingOption({
+    required this.kind,
+    this.supplierId,
+    this.manufacturerId,
+    required this.unitCost,
+    required this.leadTimeDays,
+    this.moq,
+    this.isDefault = false,
+  });
+
+  factory SourcingOption.fromJson(Map<String, dynamic> json) {
+    return SourcingOption(
+      kind: json['kind'] as String? ?? 'purchase',
+      supplierId: json['supplierId'] as String?,
+      manufacturerId: json['manufacturerId'] as String?,
+      unitCost: (json['unitCost'] as num?)?.toDouble() ?? 0.0,
+      leadTimeDays: (json['leadTimeDays'] as num?)?.toInt() ?? 0,
+      moq: (json['moq'] as num?)?.toInt(),
+      isDefault: json['isDefault'] as bool? ?? false,
+    );
+  }
+
+  Map<String, dynamic> toJson() => {
+        'kind': kind,
+        if (supplierId != null) 'supplierId': supplierId,
+        if (manufacturerId != null) 'manufacturerId': manufacturerId,
+        'unitCost': unitCost,
+        'leadTimeDays': leadTimeDays,
+        if (moq != null) 'moq': moq,
+        'isDefault': isDefault,
+      };
+}
+
+/// A single line in a bundle: how many of which component variant this
+/// bundle contains. Either [productId] (Ma5zony Firestore id) or
+/// [shopifyVariantId] / [shopifyProductId] can be used to look up the
+/// component's current unit cost when computing the bundle's effective cost.
+class BundleComponent {
+  /// Ma5zony product id of the component (resolved post-import when possible).
+  final String? productId;
+  /// Shopify variant id of the component (raw numeric id, no `gid://` prefix).
+  final String? shopifyVariantId;
+  /// Shopify parent product id of the component.
+  final String? shopifyProductId;
+  /// Quantity of this component contained in one bundle unit.
+  final int quantity;
+  /// Display name of the component variant (for UI; not used in cost calc).
+  final String? name;
+
+  const BundleComponent({
+    this.productId,
+    this.shopifyVariantId,
+    this.shopifyProductId,
+    required this.quantity,
+    this.name,
+  });
+
+  factory BundleComponent.fromJson(Map<String, dynamic> json) {
+    return BundleComponent(
+      productId: json['productId'] as String?,
+      shopifyVariantId: json['shopifyVariantId']?.toString(),
+      shopifyProductId: json['shopifyProductId']?.toString(),
+      quantity: (json['quantity'] as num?)?.toInt() ?? 1,
+      name: json['name'] as String?,
+    );
+  }
+
+  Map<String, dynamic> toJson() => {
+        if (productId != null) 'productId': productId,
+        if (shopifyVariantId != null) 'shopifyVariantId': shopifyVariantId,
+        if (shopifyProductId != null) 'shopifyProductId': shopifyProductId,
+        'quantity': quantity,
+        if (name != null) 'name': name,
+      };
 }

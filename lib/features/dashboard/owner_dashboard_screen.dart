@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
+import 'package:ma5zony/features/onboarding/welcome_tour.dart';
 import 'package:ma5zony/models/production_order.dart';
 import 'package:ma5zony/models/purchase_order.dart';
 import 'package:ma5zony/providers/app_state.dart';
@@ -26,6 +27,43 @@ class _OwnerDashboardScreenState extends State<OwnerDashboardScreen> {
   bool _showBanner = true;
   bool _showChecklist = true;
   int _selectedTab = 0; // 0=Dashboard, 1=Getting Started, 2=Help
+  bool _tourCheckScheduled = false;
+
+  @override
+  void initState() {
+    super.initState();
+    // After the first frame, auto-show the welcome tour for brand-new users
+    // (those who have just finished the business-profile wizard and never
+    // seen the tour). `tourCompleted` is persisted in UserSettings.
+    WidgetsBinding.instance.addPostFrameCallback((_) => _maybeShowTour());
+  }
+
+  Future<void> _maybeShowTour() async {
+    if (_tourCheckScheduled) return;
+    _tourCheckScheduled = true;
+    if (!mounted) return;
+    final state = context.read<AppState>();
+    // Wait for settings to finish loading (they load asynchronously after
+    // sign-in). If still loading, retry shortly.
+    if (state.isLoading) {
+      Future.delayed(const Duration(milliseconds: 600), () {
+        _tourCheckScheduled = false;
+        if (mounted) _maybeShowTour();
+      });
+      return;
+    }
+    // If tourCompleted is set but the user has zero setup data, the flag was
+    // probably written before they finished onboarding (e.g. they refreshed
+    // mid-tour). Reset and show the tour again.
+    final setupEmpty = state.suppliers.isEmpty &&
+        state.products.isEmpty &&
+        state.warehouses.isEmpty;
+    if (state.settings.tourCompleted && !setupEmpty) return;
+
+    if (mounted) {
+      await WelcomeTourDialog.show(context);
+    }
+  }
 
   /// Remaining onboarding tasks count (drives the tab badge).
   int _remainingTasks(AppState state) {
@@ -44,17 +82,24 @@ class _OwnerDashboardScreenState extends State<OwnerDashboardScreen> {
 
   // ── Helpers ──────────────────────────────────────────────────────────────
 
-  /// Monthly COGS estimate = Σ(demand qty last 30 days × unit cost).
+  /// Monthly COGS estimate = Σ(demand qty last 30 days × effective unit cost).
+  /// Uses [AppState.effectiveUnitCost] so manufactured products are valued at
+  /// their rolled-up BOM cost (raw materials + production fee), not the
+  /// often-zero manual unitCost field.
   double _monthlyCOGS(AppState state) {
     final now = DateTime.now();
     final thirtyDaysAgo = now.subtract(const Duration(days: 30));
+    final activeIds = {for (final p in state.products) p.id};
     double cogs = 0;
     for (final entry in state.demandByProduct.entries) {
-      final product = state.products.where((p) => p.id == entry.key).firstOrNull;
+      if (!activeIds.contains(entry.key)) continue;
+      final product =
+          state.products.where((p) => p.id == entry.key).firstOrNull;
       if (product == null) continue;
+      final unitCost = state.effectiveUnitCost(product);
       for (final d in entry.value) {
         if (d.periodStart.isAfter(thirtyDaysAgo)) {
-          cogs += d.quantity * product.unitCost;
+          cogs += d.quantity * unitCost;
         }
       }
     }
@@ -67,14 +112,17 @@ class _OwnerDashboardScreenState extends State<OwnerDashboardScreen> {
     return state.totalStockValue * annualHoldingRate / 12;
   }
 
-  /// Open order cost = Σ(suggestedQty × unitCost) for all open recommendations.
+  /// Open order cost = Σ(suggestedQty × effective unit cost) for all open
+  /// recommendations. Uses [AppState.effectiveUnitCost] so manufactured items
+  /// are valued via their BOM rollup, keeping the figure consistent with the
+  /// Inventory Cost KPI shown alongside it.
   double _openOrderCost(AppState state) {
     double total = 0;
     for (final rec in state.recommendations) {
       final product =
           state.products.where((p) => p.id == rec.productId).firstOrNull;
       if (product != null) {
-        total += rec.suggestedOrderQty * product.unitCost;
+        total += rec.suggestedOrderQty * state.effectiveUnitCost(product);
       }
     }
     return total;
@@ -229,21 +277,21 @@ class _OwnerDashboardScreenState extends State<OwnerDashboardScreen> {
                       style: AppTextStyles.body.copyWith(color: AppColors.textSecondary)),
                 ],
               ),
+              const Spacer(),
+              OutlinedButton.icon(
+                onPressed: () => WelcomeTourDialog.show(context),
+                icon: const Icon(Icons.play_circle_outline, size: 16),
+                label: const Text('Replay tour'),
+              ),
             ],
           ),
           const SizedBox(height: 20),
-
-          // ── Critical stock urgency banner + table ────────────────────
-          if (state.hasUrgentStockAlerts) _buildCriticalStockSection(state),
-
-          // ── Secondary: open recommendations ──────────────────────────
-          if (state.openRecommendations > 0) _buildOpenRecsCard(state),
 
           // ── Getting Started nudge banner (full checklist lives in the
           //    "Getting Started" tab now) ─────────────────────────────────
           if (_showChecklist) _buildOnboardingNudge(state),
 
-          // ── Pending Actions (Zoho-style consolidated to-do) ──────────
+          // ── Pending Actions (consolidated to-do) ─────────────────────
           _buildPendingActions(context, state),
 
           // ── Hero metric card ─────────────────────────────────────────
@@ -488,182 +536,11 @@ class _OwnerDashboardScreenState extends State<OwnerDashboardScreen> {
 
   // ── Sub-widgets ──────────────────────────────────────────────────────────
 
-  /// Critical stock urgency banner with a per-product action table.
-  /// Shown only when there is at least one product with current stock below
-  /// its computed minimum (cycle + safety stock).
-  Widget _buildCriticalStockSection(AppState state) {
-    final critical = state.criticalStockProducts;
-    if (critical.isEmpty) return const SizedBox.shrink();
-
-    final mostUrgent = critical.first;
-    final minDays = critical
-        .map((r) => r.daysOfStockLeft.isFinite ? r.daysOfStockLeft : 9999.0)
-        .reduce((a, b) => a < b ? a : b);
-
-    return Container(
-      margin: const EdgeInsets.only(bottom: 20),
-      decoration: BoxDecoration(
-        color: AppColors.errorBg,
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: AppColors.error.withValues(alpha: 0.3)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 12, 8, 8),
-            child: Row(
-              children: [
-                const Icon(Icons.warning_amber_rounded,
-                    color: AppColors.error, size: 18),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    '${critical.length} product${critical.length > 1 ? 's' : ''} '
-                    'critically low — stockout in ~${minDays.toStringAsFixed(0)} day'
-                    '${minDays.round() == 1 ? '' : 's'}',
-                    style: const TextStyle(
-                        fontWeight: FontWeight.w700,
-                        color: AppColors.error,
-                        fontSize: 13),
-                  ),
-                ),
-                TextButton.icon(
-                  icon: const Icon(Icons.show_chart, size: 16),
-                  label: const Text('Run Forecast Now →'),
-                  onPressed: () => context
-                      .go('/forecasts?productId=${mostUrgent.productId}'),
-                  style: TextButton.styleFrom(
-                    foregroundColor: AppColors.error,
-                    textStyle: const TextStyle(
-                        fontSize: 12, fontWeight: FontWeight.w700),
-                  ),
-                ),
-              ],
-            ),
-          ),
-          // Critical products table (top 5)
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
-            child: Table(
-              columnWidths: const {
-                0: FlexColumnWidth(1.5),
-                1: FlexColumnWidth(2.4),
-                2: FlexColumnWidth(1),
-                3: FlexColumnWidth(1.1),
-                4: FlexColumnWidth(1.1),
-                5: FlexColumnWidth(1.4),
-              },
-              children: [
-                TableRow(
-                  children: ['SKU', 'Product', 'Current', 'Min', 'Days Left', '']
-                      .map((h) => Padding(
-                            padding: const EdgeInsets.only(bottom: 4),
-                            child: Text(h,
-                                style: const TextStyle(
-                                    fontSize: 11,
-                                    fontWeight: FontWeight.w700,
-                                    color: AppColors.error)),
-                          ))
-                      .toList(),
-                ),
-                ...critical.take(5).map((r) {
-                  final days = r.daysOfStockLeft.isFinite
-                      ? r.daysOfStockLeft
-                      : 0.0;
-                  return TableRow(
-                    children: [
-                      Text(r.sku,
-                          style: const TextStyle(
-                              fontSize: 12, color: AppColors.textPrimary)),
-                      Text(r.productName,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
-                              fontSize: 12, color: AppColors.textPrimary)),
-                      Text('${r.currentStock}',
-                          style: const TextStyle(fontSize: 12)),
-                      Text('${r.minimumStock}',
-                          style: const TextStyle(fontSize: 12)),
-                      Text('${days.toStringAsFixed(0)} d',
-                          style: TextStyle(
-                              fontSize: 12,
-                              color: days < 3
-                                  ? AppColors.error
-                                  : AppColors.warning,
-                              fontWeight: FontWeight.w700)),
-                      InkWell(
-                        onTap: () => context
-                            .go('/forecasts?productId=${r.productId}'),
-                        child: const Text('Forecast →',
-                            style: TextStyle(
-                                fontSize: 12,
-                                color: AppColors.primary,
-                                fontWeight: FontWeight.w600)),
-                      ),
-                    ]
-                        .map((w) => Padding(
-                              padding: const EdgeInsets.symmetric(vertical: 3),
-                              child: w,
-                            ))
-                        .toList(),
-                  );
-                }),
-              ],
-            ),
-          ),
-          if (critical.length > 5)
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
-              child: Text(
-                '+ ${critical.length - 5} more — see Forecasts page',
-                style: AppTextStyles.label
-                    .copyWith(color: AppColors.error.withValues(alpha: 0.85)),
-              ),
-            ),
-        ],
-      ),
-    );
-  }
-
-  /// Secondary lower-severity card surfacing pending replenishment
-  /// recommendations (not a true stockout-risk alert).
-  Widget _buildOpenRecsCard(AppState state) {
-    return Container(
-      margin: const EdgeInsets.only(bottom: 20),
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-      decoration: BoxDecoration(
-        color: AppColors.warningBg.withValues(alpha: 0.5),
-        border: Border.all(color: AppColors.warning.withValues(alpha: 0.35)),
-        borderRadius: BorderRadius.circular(10),
-      ),
-      child: Row(
-        children: [
-          const Icon(Icons.assignment_late_outlined,
-              size: 16, color: AppColors.warning),
-          const SizedBox(width: 8),
-          Expanded(
-            child: Text(
-              '${state.openRecommendations} replenishment recommendation'
-              '${state.openRecommendations > 1 ? 's' : ''} pending review',
-              style: AppTextStyles.bodySmall,
-            ),
-          ),
-          TextButton(
-            onPressed: () => context.go('/replenishment'),
-            style: TextButton.styleFrom(
-              foregroundColor: AppColors.warning,
-              textStyle:
-                  const TextStyle(fontSize: 11, fontWeight: FontWeight.w600),
-              padding: const EdgeInsets.symmetric(horizontal: 8),
-              minimumSize: Size.zero,
-              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-            ),
-            child: const Text('Review →'),
-          ),
-        ],
-      ),
-    );
-  }
+  // Note: the old critical-stock banner and "open recommendations" card were
+  // removed — both are now consolidated into the Pending Actions card, which
+  // routes to the Reorder Plan where the user reviews each SKU and decides
+  // single vs bulk approve there. This keeps the dashboard quiet and avoids
+  // accidental bulk orders triggered from a single click.
 
   Widget _buildShopifyBanner() {
     return Container(
@@ -707,36 +584,87 @@ class _OwnerDashboardScreenState extends State<OwnerDashboardScreen> {
   }
 
   Widget _buildOnboardingChecklist(AppState state) {
-    final steps = [
+    // Whether the user has indicated they manufacture anything. We treat the
+    // presence of *any* manufacturer / raw material / manufactured product as
+    // the signal — for purely retail SMEs the manufacturing steps stay
+    // optional and don't block setup completion.
+    final hasManufacturing = state.manufacturers.isNotEmpty ||
+        state.rawMaterials.isNotEmpty ||
+        state.products.any(
+            (p) => p.manufacturerId != null && p.manufacturerId!.isNotEmpty);
+
+    final missingCost = state.productsMissingCost.length;
+    final missingBom = state.manufacturedProductsMissingBom.length;
+    final missingSupplier = state.productsMissingSupplier.length;
+
+    // STRICT ORDER: partners first, then storage, then products. This matches
+    // the data dependencies — products link to suppliers/manufacturers, BOMs
+    // link to raw materials, and reorder plans need warehouses to make sense.
+    final steps = <_ChecklistStep>[
       _ChecklistStep(
-        label: 'Connect Shopify or add products',
-        route: '/integrations',
-        isDone: state.products.isNotEmpty,
-      ),
-      _ChecklistStep(
-        label: 'Add at least one supplier',
+        label: '1. Add at least one supplier',
         route: '/suppliers',
         isDone: state.suppliers.isNotEmpty,
       ),
+      if (hasManufacturing || state.products.isEmpty)
+        _ChecklistStep(
+          label: '2. Add manufacturers (skip if you only resell)',
+          route: '/manufacturers',
+          isDone: state.manufacturers.isNotEmpty || !hasManufacturing,
+        ),
+      if (hasManufacturing || state.products.isEmpty)
+        _ChecklistStep(
+          label: '3. Add raw materials & link them to suppliers',
+          route: '/raw-materials',
+          isDone: state.rawMaterials.isNotEmpty || !hasManufacturing,
+        ),
       _ChecklistStep(
-        label: 'Add a warehouse',
+        label: '4. Add at least one warehouse',
         route: '/warehouses',
         isDone: state.warehouses.isNotEmpty,
       ),
       _ChecklistStep(
-        label: 'Import demand data',
+        label: '5. Add products (Shopify import or manual)',
+        route: '/products',
+        isDone: state.products.isNotEmpty,
+      ),
+      _ChecklistStep(
+        label: missingCost == 0
+            ? '6. Unit cost set for every product'
+            : '6. Set unit cost for $missingCost product${missingCost == 1 ? '' : 's'}',
+        route: '/products',
+        isDone: state.products.isNotEmpty && missingCost == 0,
+      ),
+      _ChecklistStep(
+        label: missingSupplier == 0
+            ? '7. Every product is linked to a supplier'
+            : '7. Link $missingSupplier product${missingSupplier == 1 ? '' : 's'} to a supplier',
+        route: '/products',
+        isDone: state.products.isNotEmpty && missingSupplier == 0,
+      ),
+      if (hasManufacturing)
+        _ChecklistStep(
+          label: missingBom == 0
+              ? '8. BOM built for every manufactured product'
+              : '8. Build BOM for $missingBom manufactured product${missingBom == 1 ? '' : 's'}',
+          route: '/bom',
+          isDone: missingBom == 0,
+        ),
+      _ChecklistStep(
+        label: 'Import demand data (or wait for Shopify sales sync)',
         route: '/demand-data',
         isDone: state.demandByProduct.isNotEmpty,
       ),
       _ChecklistStep(
-        label: 'Run your first forecast',
+        label: 'Run your first reorder plan',
         route: '/forecasts',
         isDone: state.currentForecast != null,
       ),
       _ChecklistStep(
         label: 'Configure EOQ & holding cost in Settings',
         route: '/settings',
-        isDone: state.settings.orderingCost != 250.0 || state.settings.holdingRate != 0.20,
+        isDone: state.settings.orderingCost != 250.0 ||
+            state.settings.holdingRate != 0.20,
       ),
     ];
     final doneCount = steps.where((s) => s.isDone).length;
@@ -867,70 +795,172 @@ class _OwnerDashboardScreenState extends State<OwnerDashboardScreen> {
     final accuracy = state.forecastAccuracy > 0
         ? '${(state.forecastAccuracy * 100).toStringAsFixed(1)}%'
         : '—';
+    final nf = NumberFormat.decimalPattern();
 
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.fromLTRB(28, 24, 28, 24),
       decoration: BoxDecoration(
-        color: AppColors.sidebarBg,
+        gradient: const LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [
+            Color(0xFF1A1A2E),
+            Color(0xFF24243E),
+          ],
+        ),
         borderRadius: AppRadius.md,
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
-            'INVENTORY VALUE',
-            style: AppTextStyles.eyebrow
-                .copyWith(color: Colors.white.withValues(alpha: 0.45)),
+          Row(
+            children: [
+              Container(
+                width: 28,
+                height: 28,
+                decoration: BoxDecoration(
+                  color: AppColors.primary.withValues(alpha: 0.18),
+                  borderRadius: BorderRadius.circular(7),
+                ),
+                child: const Icon(Icons.inventory_2_rounded,
+                    size: 16, color: AppColors.primary),
+              ),
+              const SizedBox(width: 10),
+              Text(
+                'Inventory Cost',
+                style: AppTextStyles.eyebrow.copyWith(
+                  color: Colors.white.withValues(alpha: 0.55),
+                  letterSpacing: 0.6,
+                ),
+              ),
+              const SizedBox(width: 8),
+              Tooltip(
+                message:
+                    'Cost basis — what you paid for the stock you currently hold '
+                    '(Σ qty × unit cost). Distinct from retail value below.',
+                child: Icon(
+                  Icons.info_outline,
+                  size: 13,
+                  color: Colors.white.withValues(alpha: 0.4),
+                ),
+              ),
+              // Setup-health pill — surfaces the silent killer of KPI trust:
+              // products with no unit cost. Clicking jumps straight to the
+              // Products screen so the fix is one tap away.
+              if (state.productsMissingCost.isNotEmpty) ...[
+                const SizedBox(width: 12),
+                InkWell(
+                  onTap: () => context.go('/products'),
+                  borderRadius: BorderRadius.circular(20),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 10, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: AppColors.warning.withValues(alpha: 0.18),
+                      borderRadius: BorderRadius.circular(20),
+                      border: Border.all(
+                        color: AppColors.warning.withValues(alpha: 0.5),
+                      ),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Icon(Icons.warning_amber_rounded,
+                            size: 12, color: AppColors.warning),
+                        const SizedBox(width: 6),
+                        Text(
+                          '${state.productsMissingCost.length} need cost',
+                          style: AppTextStyles.bodySmall.copyWith(
+                            color: AppColors.warning,
+                            fontSize: 11,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
+            ],
           ),
-          const SizedBox(height: 8),
+          const SizedBox(height: 14),
           Row(
             crossAxisAlignment: CrossAxisAlignment.end,
             children: [
               Text(
-                'EGP ${state.totalStockValue.toStringAsFixed(0)}',
-                style: AppTextStyles.display.copyWith(color: Colors.white),
+                'EGP',
+                style: AppTextStyles.metricSuffix.copyWith(
+                  color: Colors.white.withValues(alpha: 0.55),
+                  fontSize: 15,
+                ),
+              ),
+              const SizedBox(width: 8),
+              Text(
+                nf.format(state.totalStockValue.round()),
+                style: AppTextStyles.metricXl.copyWith(color: Colors.white),
               ),
               const SizedBox(width: 14),
               Padding(
-                padding: const EdgeInsets.only(bottom: 6),
+                padding: const EdgeInsets.only(bottom: 8),
                 child: Text(
-                  '${state.products.length} products · ${_totalUnits(state)} units',
+                  '${state.products.length} products · ${nf.format(_totalUnits(state))} units',
                   style: AppTextStyles.body.copyWith(
-                    color: Colors.white.withValues(alpha: 0.4),
+                    color: Colors.white.withValues(alpha: 0.5),
+                    fontSize: 13,
                   ),
                 ),
               ),
             ],
           ),
-          const SizedBox(height: 20),
+          const SizedBox(height: 22),
           Divider(
               color: Colors.white.withValues(alpha: 0.1), height: 1),
-          const SizedBox(height: 20),
+          const SizedBox(height: 18),
           IntrinsicHeight(
             child: SingleChildScrollView(
               scrollDirection: Axis.horizontal,
               child: Row(
                 children: [
-                  _heroSubMetric('MONTHLY COGS',
-                      'EGP ${cogs.toStringAsFixed(0)}'),
-                  VerticalDivider(
-                      color: Colors.white.withValues(alpha: 0.12),
-                      width: 40),
-                  _heroSubMetric('HOLDING COST',
-                      'EGP ${holdingCost.toStringAsFixed(0)}'),
+                  _heroSubMetric(
+                    'Retail Value',
+                    'EGP ${nf.format(state.totalRetailValue.round())}',
+                    helper: 'Σ qty × selling price',
+                    accent: AppColors.primary,
+                  ),
                   VerticalDivider(
                       color: Colors.white.withValues(alpha: 0.12),
                       width: 40),
                   _heroSubMetric(
-                    'OPEN ORDERS',
-                    'EGP ${openOrderCost.toStringAsFixed(0)}',
+                    'Margin Locked',
+                    'EGP ${nf.format(state.unrealizedMargin.round())}',
+                    helper: 'Retail − Cost',
+                    accent: state.unrealizedMargin >= 0
+                        ? AppColors.success
+                        : AppColors.error,
+                  ),
+                  VerticalDivider(
+                      color: Colors.white.withValues(alpha: 0.12),
+                      width: 40),
+                  _heroSubMetric('Monthly COGS',
+                      'EGP ${nf.format(cogs.round())}'),
+                  VerticalDivider(
+                      color: Colors.white.withValues(alpha: 0.12),
+                      width: 40),
+                  _heroSubMetric('Holding Cost',
+                      'EGP ${nf.format(holdingCost.round())}'),
+                  VerticalDivider(
+                      color: Colors.white.withValues(alpha: 0.12),
+                      width: 40),
+                  _heroSubMetric(
+                    'Open Orders',
+                    'EGP ${nf.format(openOrderCost.round())}',
                     isAlert: openOrderCost > 0,
                   ),
                   VerticalDivider(
                       color: Colors.white.withValues(alpha: 0.12),
                       width: 40),
-                  _heroSubMetric('FORECAST ACC.', accuracy),
+                  _heroSubMetric('Forecast Acc.', accuracy),
                 ],
               ),
             ),
@@ -941,26 +971,52 @@ class _OwnerDashboardScreenState extends State<OwnerDashboardScreen> {
   }
 
   Widget _heroSubMetric(String label, String value,
-      {bool isAlert = false}) {
+      {bool isAlert = false, String? helper, Color? accent}) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(
-          label,
-          style: AppTextStyles.eyebrow
-              .copyWith(color: Colors.white.withValues(alpha: 0.4)),
+        Row(
+          children: [
+            if (accent != null) ...[
+              Container(
+                width: 6,
+                height: 6,
+                decoration: BoxDecoration(
+                  color: accent,
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+              const SizedBox(width: 6),
+            ],
+            Text(
+              label.toUpperCase(),
+              style: AppTextStyles.eyebrow.copyWith(
+                color: Colors.white.withValues(alpha: 0.45),
+                fontSize: 10,
+                letterSpacing: 0.8,
+              ),
+            ),
+          ],
         ),
         const SizedBox(height: 6),
         Text(
           value,
-          style: AppTextStyles.mono.copyWith(
-            fontSize: 20,
-            fontWeight: FontWeight.w600,
-            color: isAlert && value != 'EGP 0'
+          style: AppTextStyles.metricMd.copyWith(
+            color: isAlert && !value.endsWith(' 0')
                 ? AppColors.warning
-                : Colors.white,
+                : (accent ?? Colors.white),
           ),
         ),
+        if (helper != null) ...[
+          const SizedBox(height: 4),
+          Text(
+            helper,
+            style: AppTextStyles.bodySmall.copyWith(
+              color: Colors.white.withValues(alpha: 0.35),
+              fontSize: 11,
+            ),
+          ),
+        ],
       ],
     );
   }
@@ -1270,9 +1326,10 @@ class _OwnerDashboardScreenState extends State<OwnerDashboardScreen> {
       actions.add(PendingAction(
         icon: Icons.inventory_2_outlined,
         iconColor: AppColors.error,
-        label: 'Products with less than 7 days of stock',
+        label:
+            '$lowStockCount product${lowStockCount == 1 ? '' : 's'} need reordering — review in Reorder Plan',
         count: '$lowStockCount',
-        onTap: () => context.go('/products'),
+        onTap: () => context.go('/forecasts'),
       ));
     }
     if (openRecs > 0) {

@@ -85,6 +85,12 @@ class AppState extends ChangeNotifier {
   StreamSubscription<List<AppNotification>>? _notifSub;
   StreamSubscription<Map<String, List<DomainDemandRecord>>>? _demandSub;
   Timer? _shopifyAutoSyncTimer;
+  // Shopify auto-sync status (surfaced to UI so users can see whether the
+  // background sync is actually working).
+  DateTime? _lastShopifySyncAt;
+  Map<String, dynamic>? _lastShopifySyncResult;
+  String? _lastShopifySyncError;
+  bool _shopifySyncInProgress = false;
   late final ForecastingService _forecastingService;
   late final InventoryPolicyService _policyService;
   late final ReplenishmentService _replenishmentService;
@@ -385,7 +391,14 @@ class AppState extends ChangeNotifier {
   List<RawMaterialPurchaseOrder> _rmPurchaseOrders = [];
   bool _onboardingComplete = false;
   bool _onboardingStateLoaded = false;
-  List<Product> get products => _products;
+  /// Only active products. Archived/inactive items (e.g. products archived in
+  /// Shopify) are hidden from the UI everywhere by default. Use [allProducts]
+  /// for the rare case where you need the full list (settings/admin).
+  List<Product> get products =>
+      _products.where((p) => p.isActive).toList(growable: false);
+
+  /// Unfiltered product list including inactive/archived items.
+  List<Product> get allProducts => _products;
   List<Warehouse> get warehouses => _warehouses;
   List<Supplier> get suppliers => _suppliers;
   Map<String, List<DomainDemandRecord>> get demandByProduct => _demandByProduct;
@@ -400,6 +413,17 @@ class AppState extends ChangeNotifier {
 
   Map<String, ProductClassification> get abcXyzMatrix => _abcXyzMatrix;
   ShopifyStoreConnection? get shopifyConnection => _shopifyConnection;
+  DateTime? get lastShopifySyncAt => _lastShopifySyncAt;
+  Map<String, dynamic>? get lastShopifySyncResult => _lastShopifySyncResult;
+  String? get lastShopifySyncError => _lastShopifySyncError;
+  bool get shopifySyncInProgress => _shopifySyncInProgress;
+
+  /// Public manual trigger for an immediate Shopify sales sync. Returns the
+  /// result map from the Cloud Function (or null on error/disconnected).
+  Future<Map<String, dynamic>?> syncShopifyNow() async {
+    await _silentShopifySync();
+    return _lastShopifySyncResult;
+  }
   UserSettings get settings => _settings;
   ThemeMode get themeMode => _themeMode;
   void toggleTheme() {
@@ -467,6 +491,54 @@ class AppState extends ChangeNotifier {
     }
   }
 
+  /// Update the on-hand count for a specific warehouse location. Recomputes
+  /// [Product.currentStock] as the sum of all warehouse quantities so the
+  /// rest of the codebase (replenishment, forecasts) sees the updated total
+  /// without requiring a migration.
+  Future<void> setStockAtWarehouse(
+    String productId,
+    String warehouseId,
+    int qty,
+  ) async {
+    final idx = _products.indexWhere((p) => p.id == productId);
+    if (idx == -1) return;
+    final p = _products[idx];
+    final updated = Map<String, int>.from(p.stockByWarehouse);
+    if (qty <= 0) {
+      updated.remove(warehouseId);
+    } else {
+      updated[warehouseId] = qty;
+    }
+    final totalStock = updated.isEmpty
+        ? p.currentStock
+        : updated.values.fold(0, (a, b) => a + b);
+    final newProduct = Product(
+      id: p.id,
+      sku: p.sku,
+      name: p.name,
+      category: p.category,
+      unitCost: p.unitCost,
+      currentStock: totalStock,
+      supplierId: p.supplierId,
+      manufacturerId: p.manufacturerId,
+      warehouseId: p.warehouseId,
+      isActive: p.isActive,
+      leadTimeDays: p.leadTimeDays,
+      averageDailySales: p.averageDailySales,
+      minimumStock: p.minimumStock,
+      shopifyVariantId: p.shopifyVariantId,
+      shopifyProductId: p.shopifyProductId,
+      sellingPrice: p.sellingPrice,
+      productionFee: p.productionFee,
+      shopifyUnitCost: p.shopifyUnitCost,
+      isBundle: p.isBundle,
+      bundleComponents: p.bundleComponents,
+      sourcingOptions: p.sourcingOptions,
+      stockByWarehouse: updated,
+    );
+    await updateProduct(newProduct);
+  }
+
   /// Bulk-assign a set of products to a warehouse (or pass null to unassign).
   /// Used by the Warehouse → "Manage Products" workflow.
   Future<void> assignProductsToWarehouse(
@@ -531,11 +603,12 @@ class AppState extends ChangeNotifier {
 
   // ── Supplier CRUD ──────────────────────────────────────────────────────────
 
-  Future<void> addSupplier(Supplier supplier) async {
+  Future<Supplier> addSupplier(Supplier supplier) async {
     try {
       final saved = await _repo!.addSupplier(supplier);
       _suppliers.add(saved);
       notifyListeners();
+      return saved;
     } catch (e) {
       _errorMessage = 'Failed to add supplier: $e';
       notifyListeners();
@@ -716,6 +789,11 @@ class AppState extends ChangeNotifier {
     if (_settingsService == null) return;
     _settings = await _settingsService!.load();
     notifyListeners();
+    // The router's redirect callback checks `settings.businessProfile`.
+    // Kicking authNotifier here makes the router re-evaluate after the
+    // initial login load so the wizard redirect fires (or doesn't) with
+    // accurate data instead of the default empty settings.
+    authNotifier.notifyAuthChanged();
   }
 
   Future<void> saveSettings(UserSettings updated) async {
@@ -723,6 +801,7 @@ class AppState extends ChangeNotifier {
     await _settingsService!.save(updated);
     _settings = updated;
     notifyListeners();
+    authNotifier.notifyAuthChanged();
   }
 
   // ── Replenishment Approval ─────────────────────────────────────────────────
@@ -763,6 +842,7 @@ class AppState extends ChangeNotifier {
       createdByUid: _currentUser!.uid,
       createdByName: _currentUser!.name,
       items: [item],
+      supplierId: supplierId,
     );
 
     // Create PO + SupplierOrders.
@@ -1066,9 +1146,177 @@ class AppState extends ChangeNotifier {
 
   // ── Computed KPIs ──────────────────────────────────────────────────────────
 
-  /// Total inventory value = Σ(currentStock × unitCost)
-  double get totalStockValue =>
-      _products.fold(0, (acc, p) => acc + (p.currentStock * p.unitCost));
+  /// Effective unit cost for a product. For bundles, this is the sum of
+  /// `component.unitCost × quantity` over each bundle component (resolved by
+  /// Shopify variant id). For non-bundle products, it's simply [Product.unitCost].
+  ///
+  /// Use this everywhere stock value / COGS is calculated so bundle pricing
+  /// stays consistent with Shopify (where the bundle inherits the cost of
+  /// its components).
+  /// Effective unit cost for a product — the **single source of truth** for
+  /// any cost-basis KPI. The cost comes from ONE of these sources, in order:
+  ///
+  ///   1. **Bundle** (composed of other variants): Σ over `bundleComponents`
+  ///      of `(componentEffectiveCost × quantity)`. Components are resolved
+  ///      via `productId` or `shopifyVariantId`.
+  ///   2. **Manufactured product** (has `manufacturerId`): Σ over the linked
+  ///      BOM of `(rawMaterial.unitCost × quantityPerUnit)` PLUS the
+  ///      product's `productionFee` (per-unit fee charged by the manufacturer
+  ///      on top of materials).
+  ///   3. **Purchased product** (default): the user-entered `unitCost` —
+  ///      what the supplier charges per unit.
+  ///
+  /// Costs are NEVER pulled from Shopify (Shopify's "Cost per item" is
+  /// ignored). Selling price still comes from Shopify, but cost is always
+  /// derived from raw-materials + manufacturing fees, or from the supplier
+  /// price typed in by the user. This guarantees the inventory cost shown
+  /// on the dashboard matches what the business actually pays.
+  double effectiveUnitCost(Product p) => _effectiveUnitCost(p, <String>{});
+
+  /// Depth-tracked recursive cost calculator.
+  ///
+  /// [visiting] is the set of product ids currently on the call stack — when
+  /// a sub-assembly references a product that's already being computed
+  /// (direct or transitive loop) we bail out at 0 for that branch instead
+  /// of recursing forever. Also caps total recursion depth at 5 to match the
+  /// product-level decision in the plan: nobody should need to nest BOMs
+  /// more than five levels deep, and runaway data shouldn't lock the UI.
+  static const int _kMaxBomDepth = 5;
+
+  double _effectiveUnitCost(Product p, Set<String> visiting) {
+    if (visiting.length >= _kMaxBomDepth) return p.unitCost;
+    if (visiting.contains(p.id)) return 0; // cycle guard
+
+    // 1) Bundle rollup.
+    if (p.isBundle && p.bundleComponents.isNotEmpty) {
+      double sum = 0;
+      for (final c in p.bundleComponents) {
+        Product? comp;
+        if (c.productId != null) {
+          comp = _products.firstWhere(
+            (x) => x.id == c.productId,
+            orElse: () => _emptyProduct,
+          );
+        }
+        if ((comp == null || comp.id.isEmpty) && c.shopifyVariantId != null) {
+          comp = _products.firstWhere(
+            (x) => (x.shopifyVariantId ?? '')
+                .split(',')
+                .contains(c.shopifyVariantId),
+            orElse: () => _emptyProduct,
+          );
+        }
+        if (comp != null && comp.id.isNotEmpty) {
+          sum += _effectiveUnitCost(comp, {...visiting, p.id}) * c.quantity;
+        }
+      }
+      if (sum > 0) return sum;
+    }
+
+    // 2) Manufactured product → BOM materials + production fee.
+    //    BOM lines may point at raw materials OR at sub-assembly products
+    //    (Phase 2.3). Sub-product cost recurses via _effectiveUnitCost.
+    //    Yield loss is applied per line via [BomMaterial.effectiveQuantityPerUnit].
+    final isManufactured =
+        p.manufacturerId != null && p.manufacturerId!.isNotEmpty;
+    if (isManufactured) {
+      final bom = _boms
+          .where((b) => b.finalProductId == p.id && b.isActive)
+          .firstOrNull;
+      if (bom != null && bom.materials.isNotEmpty) {
+        double materialsCost = 0;
+        final nextVisiting = {...visiting, p.id};
+        for (final m in bom.materials) {
+          final qty = m.effectiveQuantityPerUnit;
+          if (m.kind == BomComponentKind.product) {
+            // Sub-assembly — roll up its own cost.
+            final sub =
+                _products.where((x) => x.id == m.refId).firstOrNull;
+            if (sub != null) {
+              materialsCost += _effectiveUnitCost(sub, nextVisiting) * qty;
+            }
+          } else {
+            final rm = _rawMaterials
+                .where((r) => r.id == m.refId)
+                .firstOrNull;
+            if (rm != null) materialsCost += rm.unitCost * qty;
+          }
+        }
+        return materialsCost + (p.productionFee ?? 0);
+      }
+      // No BOM yet → fall through to manual unitCost so the row still has
+      // a number (will be 0 until the user sets up the BOM).
+    }
+
+    // 3) Purchased product (or manufactured without a BOM yet).
+    return p.unitCost;
+  }
+
+  static final Product _emptyProduct = Product(
+    id: '',
+    sku: '',
+    name: '',
+    category: '',
+    unitCost: 0,
+  );
+
+  /// Total inventory **cost** = Σ(currentStock × effectiveUnitCost) for ACTIVE
+  /// products only — keeps the number consistent with the "52 products" count
+  /// shown in the dashboard subtitle (inactive products are excluded).
+  double get totalStockValue => _products
+      .where((p) => p.isActive)
+      .fold(0, (acc, p) => acc + (p.currentStock * effectiveUnitCost(p)));
+
+  /// Total inventory **retail value** = Σ(currentStock × sellingPrice) for
+  /// ACTIVE products only. Represents potential revenue at list price.
+  double get totalRetailValue => _products
+      .where((p) => p.isActive)
+      .fold(0, (acc, p) => acc + (p.currentStock * (p.sellingPrice ?? 0)));
+
+  /// Margin locked in current inventory = retail − cost. Represents the
+  /// gross profit still sitting on the shelf, waiting to be realised on sale.
+  double get unrealizedMargin => totalRetailValue - totalStockValue;
+
+  // ── Setup-health getters ──────────────────────────────────────────────────
+  // Every KPI on the dashboard is only as honest as the data behind it. These
+  // helpers let the UI nudge the user to finish product setup BEFORE trusting
+  // any number. A Shopify-imported product, for example, lands with
+  // unitCost = 0 — which silently distorts inventory cost, COGS, and margin.
+
+  /// Active products whose **effective** unit cost is still 0 (Shopify or
+  /// manually added without a cost). For manufactured products this checks
+  /// the rolled-up BOM cost, so a product with a complete BOM counts as
+  /// "cost set" even if the manual unitCost field is 0.
+  List<Product> get productsMissingCost => _products
+      .where((p) => p.isActive && effectiveUnitCost(p) <= 0)
+      .toList(growable: false);
+
+  /// Active products that aren't linked to a supplier AND aren't marked as
+  /// manufactured. These can't be reordered automatically.
+  List<Product> get productsMissingSupplier => _products
+      .where((p) =>
+          p.isActive &&
+          (p.supplierId == null || p.supplierId!.isEmpty) &&
+          (p.manufacturerId == null || p.manufacturerId!.isEmpty))
+      .toList(growable: false);
+
+  /// Active products flagged as manufactured (have a manufacturerId) but
+  /// missing a Bill of Materials. Without a BOM the system can't generate
+  /// raw-material orders or roll up cost.
+  List<Product> get manufacturedProductsMissingBom => _products
+      .where((p) =>
+          p.isActive &&
+          (p.manufacturerId != null && p.manufacturerId!.isNotEmpty) &&
+          !_boms.any((b) => b.finalProductId == p.id && b.isActive))
+      .toList(growable: false);
+
+  /// True when every active product has a cost AND every manufactured product
+  /// has a BOM AND every non-manufactured product has a supplier. Drives the
+  /// "Setup complete — KPIs are trustworthy" indicator on the dashboard.
+  bool get productSetupHealthy =>
+      productsMissingCost.isEmpty &&
+      manufacturedProductsMissingBom.isEmpty &&
+      productsMissingSupplier.isEmpty;
 
   /// Number of products below minimum stock level (critically low).
   int get lowStockItems => _minimumStockResults.isEmpty
@@ -1229,13 +1477,31 @@ class AppState extends ChangeNotifier {
     double gamma = 0.2,
     List<double> wmaWeights = const [1, 2, 3],
     int seasonLength = 12,
+    int? momentumWindowMonths,
   }) async {
     // ── Resolve the actual algorithm to run ────────────────────────────────
     // Special "Auto" mode picks the best algorithm based on the data shape.
-    final records = _demandByProduct[productId] ?? [];
+    var records = _demandByProduct[productId] ?? [];
     if (records.isEmpty) {
       throw Exception(
           'No demand data found for this product. Add demand records first via the Sales History screen.');
+    }
+
+    // Momentum-window filter: keep only the most recent N monthly records.
+    // When set, this is the user-chosen "how the product sells" window that
+    // drives the velocity estimate. We also force the internal algorithm to
+    // a simple moving average over the window so the next-period forecast
+    // equals the average monthly velocity within that window.
+    if (momentumWindowMonths != null && momentumWindowMonths > 0) {
+      final sorted = [...records]
+        ..sort((a, b) => a.periodStart.compareTo(b.periodStart));
+      if (sorted.length > momentumWindowMonths) {
+        records = sorted.sublist(sorted.length - momentumWindowMonths);
+      } else {
+        records = sorted;
+      }
+      algorithm = 'SMA';
+      smaWindow = records.length;
     }
 
     String effectiveAlgorithm = algorithm;
@@ -1245,6 +1511,9 @@ class AppState extends ChangeNotifier {
 
     // Try backend first — but with a short timeout so we don't block the user
     // when no backend is reachable. On any failure we fall back to local.
+    // Skip the backend entirely in momentum-window mode so the velocity is
+    // computed from the user-chosen window of records, not the full history.
+    if (momentumWindowMonths == null) {
     try {
       final result = await _backendApi
           .runForecast(
@@ -1264,6 +1533,7 @@ class AppState extends ChangeNotifier {
       return;
     } catch (_) {
       // Backend unavailable / slow / errored — fall back to local pure-Dart impl.
+    }
     }
 
     // Resolve lead time: product-level > supplier > 0
@@ -1844,12 +2114,24 @@ class AppState extends ChangeNotifier {
     if (_shopifyService == null || _shopifyConnection?.isConnected != true) {
       return;
     }
+    if (_shopifySyncInProgress) return;
+    _shopifySyncInProgress = true;
+    _lastShopifySyncError = null;
+    notifyListeners();
     try {
-      await _shopifyService!.importOrderHistory();
+      final result = await _shopifyService!.importOrderHistory();
+      _lastShopifySyncResult = result;
+      _lastShopifySyncAt = DateTime.now();
+      debugPrint('[shopify] auto-sync ok: $result');
       // No need to reload demand here — the Firestore listener will pick
       // up any new records and refresh the UI automatically.
     } catch (e) {
+      _lastShopifySyncError = e.toString();
+      _lastShopifySyncAt = DateTime.now();
       debugPrint('[shopify] auto-sync failed: $e');
+    } finally {
+      _shopifySyncInProgress = false;
+      notifyListeners();
     }
   }
 

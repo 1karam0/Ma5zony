@@ -2,10 +2,12 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:ma5zony/providers/app_state.dart';
+import 'package:ma5zony/models/raw_material.dart';
 import 'package:ma5zony/models/supplier.dart';
 import 'package:ma5zony/utils/constants.dart';
 import 'package:ma5zony/widgets/shared_widgets.dart';
 import 'package:ma5zony/widgets/zoho_patterns.dart';
+import 'package:ma5zony/features/onboarding/tour_targets.dart';
 
 class SuppliersScreen extends StatelessWidget {
   const SuppliersScreen({super.key});
@@ -27,13 +29,16 @@ class SuppliersScreen extends StatelessWidget {
           SectionHeader(
             title: 'Supplier Management',
             actions: [
-              ElevatedButton.icon(
-                onPressed: () => _showAddSupplierDialog(context),
-                icon: const Icon(Icons.add),
-                label: const Text('Add Supplier'),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: AppColors.primary,
-                  foregroundColor: Colors.white,
+              KeyedSubtree(
+                key: TourTargets.instance.keyFor('page:suppliers.add'),
+                child: ElevatedButton.icon(
+                  onPressed: () => _showAddSupplierDialog(context),
+                  icon: const Icon(Icons.add),
+                  label: const Text('Add Supplier'),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppColors.primary,
+                    foregroundColor: Colors.white,
+                  ),
                 ),
               ),
             ],
@@ -829,18 +834,11 @@ class _RawMaterialsPicker extends StatelessWidget {
       collapsible: true,
       initiallyExpanded: selectedIds.isNotEmpty,
       children: [
-        if (rawMaterials.isEmpty)
-          Text(
-            'No raw materials defined yet. Add them in the Raw Materials '
-            'screen, then come back to link them here.',
-            style: AppTextStyles.bodySmall
-                .copyWith(color: AppColors.textSecondary),
-          )
-        else
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: rawMaterials.map((rm) {
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            ...rawMaterials.map((rm) {
               final isSelected = selectedIds.contains(rm.id);
               return FilterChip(
                 label: Text(rm.name),
@@ -855,8 +853,27 @@ class _RawMaterialsPicker extends StatelessWidget {
                   onChanged(next);
                 },
               );
-            }).toList(),
-          ),
+            }),
+            // "+ New material" chip — creates a raw material inline and
+            // auto-selects it so the user never has to leave this form.
+            ActionChip(
+              avatar: const Icon(Icons.add, size: 14, color: AppColors.primary),
+              label: const Text('New material\u2026',
+                  style: TextStyle(
+                      color: AppColors.primary, fontWeight: FontWeight.w600)),
+              backgroundColor: AppColors.primaryLight.withValues(alpha: 0.15),
+              side: BorderSide(color: AppColors.primary.withValues(alpha: 0.3)),
+              onPressed: () async {
+                final newId =
+                    await _showQuickMaterialDialog(context);
+                if (newId != null) {
+                  final next = Set<String>.from(selectedIds)..add(newId);
+                  onChanged(next);
+                }
+              },
+            ),
+          ],
+        ),
         if (selectedIds.isNotEmpty) ...[
           const SizedBox(height: 8),
           Text('${selectedIds.length} material(s) selected',
@@ -864,6 +881,102 @@ class _RawMaterialsPicker extends StatelessWidget {
                   .copyWith(color: AppColors.textSecondary)),
         ],
       ],
+    );
+  }
+
+  /// Shows a compact dialog to create a new raw material.
+  /// Returns the newly created material's ID, or null if cancelled.
+  Future<String?> _showQuickMaterialDialog(BuildContext context) {
+    final nameCtrl = TextEditingController();
+    final costCtrl = TextEditingController();
+    final formKey = GlobalKey<FormState>();
+    String uom = 'units';
+
+    return showDialog<String>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) => AlertDialog(
+          title: const Text('New Raw Material'),
+          content: SizedBox(
+            width: 380,
+            child: Form(
+              key: formKey,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  TextFormField(
+                    controller: nameCtrl,
+                    autofocus: true,
+                    decoration:
+                        const InputDecoration(labelText: 'Material Name *'),
+                    validator: (v) =>
+                        v == null || v.trim().isEmpty ? 'Required' : null,
+                  ),
+                  const SizedBox(height: 12),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: TextFormField(
+                          controller: costCtrl,
+                          decoration: const InputDecoration(
+                              labelText: 'Unit Cost', prefixText: 'EGP '),
+                          keyboardType: const TextInputType.numberWithOptions(
+                              decimal: true),
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: DropdownButtonFormField<String>(
+                          value: uom,
+                          decoration:
+                              const InputDecoration(labelText: 'Unit'),
+                          items: ['units', 'g', 'kg', 'm', 'cm', 'L', 'mL', 'pcs']
+                              .map((u) =>
+                                  DropdownMenuItem(value: u, child: Text(u)))
+                              .toList(),
+                          onChanged: (v) =>
+                              setDialogState(() => uom = v ?? 'units'),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () async {
+                if (!formKey.currentState!.validate()) return;
+                final appState = ctx.read<AppState>();
+                final rm = RawMaterial(
+                  id: '',
+                  name: nameCtrl.text.trim(),
+                  sku: '',
+                  unit: uom,
+                  unitOfMeasure: uom,
+                  unitCost:
+                      double.tryParse(costCtrl.text.trim()) ?? 0,
+                  currentStock: 0,
+                  safetyStock: 0,
+                  leadTimeDays: 0,
+                );
+                await appState.addRawMaterial(rm);
+                // Find the just-added material by name to get its ID.
+                final saved = appState.rawMaterials
+                    .where((m) => m.name == rm.name)
+                    .lastOrNull;
+                if (ctx.mounted) Navigator.pop(ctx, saved?.id);
+              },
+              child: const Text('Add'),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }

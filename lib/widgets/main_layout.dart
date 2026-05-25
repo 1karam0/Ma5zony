@@ -3,14 +3,15 @@ import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
 import 'package:provider/provider.dart';
 
+import 'package:ma5zony/features/onboarding/tour_targets.dart';
 import 'package:ma5zony/models/app_notification.dart';
 import 'package:ma5zony/models/app_user.dart';
 import 'package:ma5zony/models/manufacturing_recommendation.dart';
 import 'package:ma5zony/models/production_order.dart';
 import 'package:ma5zony/providers/app_state.dart';
+import 'package:ma5zony/services/settings_service.dart';
 import 'package:ma5zony/utils/constants.dart';
 import 'package:ma5zony/widgets/command_palette.dart';
-import 'package:ma5zony/widgets/onboarding_phase_bar.dart';
 import 'package:ma5zony/widgets/zoho_patterns.dart';
 
 // ── Nav data ──────────────────────────────────────────────────────────────────
@@ -31,6 +32,13 @@ class _NavGroup {
     required this.entries,
     this.section,
   });
+
+  _NavGroup withEntries(List<NavRouteEntry> newEntries) => _NavGroup(
+        label: label,
+        icon: icon,
+        entries: newEntries,
+        section: section,
+      );
 }
 
 // All nav groups (role filtering applied at runtime via _visibleGroupsForUser)
@@ -39,7 +47,6 @@ const _kGroupDashboard = _NavGroup(
   icon: Icons.space_dashboard_outlined,
   entries: [
     NavRouteEntry(icon: Icons.space_dashboard_outlined, label: 'Dashboard', path: '/dashboard'),
-    NavRouteEntry(icon: Icons.inbox_outlined, label: 'Action Center', path: '/inbox'),
   ],
 );
 
@@ -67,19 +74,17 @@ const _kGroupSupplyChain = _NavGroup(
   ],
 );
 
-// Operational: demand analysis, forecasting, and all order types
+// Operational: the simplified single-screen reorder plan + order history.
+// (Demand Data, Material Orders, Production Orders, Replenishment, and
+// Product Analysis are still accessible via direct routes — just hidden from
+// the sidebar to keep the SME owner journey simple.)
 const _kGroupDemandOrders = _NavGroup(
-  label: 'Demand & Orders',
+  label: 'Orders',
   icon: Icons.trending_up_outlined,
   section: 'OPERATIONS',
   entries: [
-    NavRouteEntry(icon: Icons.query_stats, label: 'Forecasts', path: '/forecasts'),
-    NavRouteEntry(icon: Icons.show_chart, label: 'Demand Data', path: '/demand-data'),
-    NavRouteEntry(icon: Icons.receipt_long_outlined, label: 'Purchase Orders', path: '/orders'),
-    NavRouteEntry(icon: Icons.inventory_outlined, label: 'Material Orders', path: '/orders/raw-materials'),
-    NavRouteEntry(icon: Icons.precision_manufacturing_outlined, label: 'Production Orders', path: '/production-orders'),
-    NavRouteEntry(icon: Icons.auto_awesome_motion_outlined, label: 'Replenishment', path: '/replenishment'),
-    NavRouteEntry(icon: Icons.grid_view_outlined, label: 'Product Analysis', path: '/classification'),
+    NavRouteEntry(icon: Icons.query_stats, label: 'Reorder Plan', path: '/forecasts'),
+    NavRouteEntry(icon: Icons.receipt_long_outlined, label: 'Order History', path: '/orders'),
   ],
 );
 
@@ -148,6 +153,51 @@ List<_NavGroup> _visibleGroupsForUser(AppUser? user) {
       ],
     _ => [_kGroupDashboard, _kGroupProducts, _kGroupSupplyChain, _kGroupDemandOrders, _kGroupFinance, _kGroupSettings],
   };
+}
+
+/// Phase 1.2 — Trim sidebar entries based on the owner's business profile.
+///
+/// We only filter; we never add. So the role-based set above is the upper
+/// bound, and the wizard answers shrink it to what the user actually does.
+/// Empty groups are dropped. Non-owner roles bypass this filter so their
+/// focused workspaces are unaffected.
+List<_NavGroup> _applyBusinessProfile(
+    List<_NavGroup> groups, AppUser? user, BusinessProfile? profile) {
+  if (profile == null) return groups;
+  if (user != null &&
+      user.role != AppUser.roleSmeOwner &&
+      user.role != AppUser.roleInventoryManager) {
+    return groups;
+  }
+
+  // Routes to hide for each profile dimension.
+  final hidden = <String>{};
+  if (!profile.manufactures) {
+    hidden.addAll([
+      '/raw-materials',
+      '/bom',
+      '/manufacturers',
+      '/production-orders',
+      '/recommendations',
+      '/orders/raw-materials',
+    ]);
+  }
+  if (!profile.purchases) {
+    // Pure-make businesses still need suppliers (for raw materials) so we
+    // do NOT hide /suppliers here. Nothing else is exclusively purchase-only
+    // at the moment.
+  }
+  if (profile.isDropship) {
+    hidden.add('/warehouses');
+  }
+
+  final result = <_NavGroup>[];
+  for (final g in groups) {
+    final kept = g.entries.where((e) => !hidden.contains(e.path)).toList();
+    if (kept.isEmpty) continue;
+    result.add(g.withEntries(kept));
+  }
+  return result;
 }
 
 // ── Route → page title ────────────────────────────────────────────────────────
@@ -229,8 +279,12 @@ class _MainLayoutState extends State<MainLayout> {
 
   void _openCommandPalette() {
     if (!mounted) return;
-    final user = context.read<AppState>().currentUser;
-    final entries = _visibleGroupsForUser(user).expand((g) => g.entries).toList();
+    final appState = context.read<AppState>();
+    final user = appState.currentUser;
+    final entries = _applyBusinessProfile(
+            _visibleGroupsForUser(user), user, appState.settings.businessProfile)
+        .expand((g) => g.entries)
+        .toList();
     showDialog<void>(
       context: context,
       barrierColor: Colors.black45,
@@ -268,7 +322,8 @@ class _MainLayoutState extends State<MainLayout> {
     if (isMobile) return _buildMobileLayout(state);
 
     final user = state.currentUser;
-    final groups = _visibleGroupsForUser(user);
+    final groups = _applyBusinessProfile(
+        _visibleGroupsForUser(user), user, state.settings.businessProfile);
     final badges = _buildBadges(state);
 
     return Scaffold(
@@ -287,10 +342,6 @@ class _MainLayoutState extends State<MainLayout> {
             child: Column(
               children: [
                 _TopBar(isMobile: false, onOpenPalette: _openCommandPalette),
-                OnboardingPhaseBar(
-                  state: state,
-                  currentRoute: GoRouterState.of(context).uri.toString(),
-                ),
                 Expanded(child: widget.child),
               ],
             ),
@@ -302,7 +353,8 @@ class _MainLayoutState extends State<MainLayout> {
 
   Widget _buildMobileLayout(AppState state) {
     final user = state.currentUser;
-    final groups = _visibleGroupsForUser(user);
+    final groups = _applyBusinessProfile(
+        _visibleGroupsForUser(user), user, state.settings.businessProfile);
     final badges = _buildBadges(state);
     final loc = GoRouterState.of(context).uri.toString();
 
@@ -343,10 +395,6 @@ class _MainLayoutState extends State<MainLayout> {
       body: Column(
         children: [
           _TopBar(isMobile: true, onOpenPalette: _openCommandPalette),
-          OnboardingPhaseBar(
-            state: state,
-            currentRoute: loc,
-          ),
           Expanded(child: widget.child),
         ],
       ),
@@ -391,22 +439,7 @@ class _MainLayoutState extends State<MainLayout> {
   }
 
   Map<String, int> _buildBadges(AppState state) {
-    final totalInboxCount = (state.hasUrgentStockAlerts
-            ? state.criticalStockProducts.length
-            : 0) +
-        state.openRecommendations +
-        state.purchaseOrders
-            .where((o) => o.status.name == 'draft')
-            .length +
-        state.mfgRecommendations
-            .where((r) => r.status == RecommendationStatus.pending)
-            .length +
-        state.supplierOrders
-            .where((o) => o.status == 'acknowledged' && o.response != null)
-            .length;
-
     return {
-      '/inbox': totalInboxCount,
       '/dashboard': state.hasUrgentStockAlerts ? state.criticalStockProducts.length : 0,
       '/replenishment': state.openRecommendations,
       '/orders': state.purchaseOrders
@@ -616,6 +649,7 @@ class _SidebarGroup extends StatelessWidget {
       children: [
         // Category header
         InkWell(
+          key: TourTargets.instance.keyFor('sidebar.group:${group.label}'),
           onTap: isSingle ? () => onNavigate(group.entries.first.path) : onToggle,
           hoverColor: AppColors.sidebarBgHover,
           splashColor: Colors.transparent,
@@ -709,6 +743,7 @@ class _SidebarGroup extends StatelessWidget {
                 children: [
                   for (final entry in group.entries)
                     _FlyoutItem(
+                      key: TourTargets.instance.keyFor('sidebar:${entry.path}'),
                       entry: entry,
                       badge: badges[entry.path] ?? 0,
                       onTap: () => onNavigate(entry.path),
@@ -734,6 +769,7 @@ class _FlyoutItem extends StatelessWidget {
   final bool indented;
 
   const _FlyoutItem({
+    super.key,
     required this.entry,
     required this.onTap,
     this.badge = 0,

@@ -145,13 +145,13 @@ service cloud.firestore {
       match /purchaseOrders/{orderId} {
         allow read: if isOwner(userId);
         allow delete: if isOwner(userId) && hasInventoryRole();
+        // supplierId is intentionally NOT required here: POs can be
+        // multi-supplier (supplierId lives on each item, not the header).
         allow create, update: if isOwner(userId)
           && hasInventoryRole()
-          && request.resource.data.supplierId is string
-          && request.resource.data.supplierId.size() > 0
           && request.resource.data.status is string
           && request.resource.data.status in ['draft', 'pending', 'confirmed',
-               'shipped', 'received', 'cancelled'];
+               'shipped', 'received', 'cancelled', 'sent'];
       }
 
       // ── Raw Materials ────────────────────────────────────────────────

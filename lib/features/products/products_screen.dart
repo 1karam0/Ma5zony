@@ -7,8 +7,128 @@ import 'package:ma5zony/providers/app_state.dart';
 import 'package:ma5zony/utils/constants.dart';
 import 'package:ma5zony/widgets/shared_widgets.dart';
 import 'package:ma5zony/widgets/zoho_patterns.dart';
+import 'package:ma5zony/features/onboarding/tour_targets.dart';
 
 /// Opens the product Add/Edit dialog pre-filled for [product]. The dialog
+/// Quick inline dialog to set / edit just the supplier price (unit cost) of
+/// a *purchased* product. Saves without touching any other field.
+///
+/// **Don't call this for manufactured products** — their cost is rolled up
+/// from BOM materials + production fee, never typed manually. Use
+/// [showProductCostFixDialog] which dispatches to the correct flow.
+Future<void> showQuickCostDialog(
+    BuildContext context, Product product) async {
+  final ctrl = TextEditingController(
+      text: product.unitCost > 0
+          ? product.unitCost.toStringAsFixed(2)
+          : '');
+  final formKey = GlobalKey<FormState>();
+  await showDialog(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      title: const Text('Set Supplier Price'),
+      content: Form(
+        key: formKey,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'How much does your supplier charge you per unit of '
+              '"${product.name}"?',
+              style: AppTextStyles.bodySmall
+                  .copyWith(color: AppColors.textSecondary),
+            ),
+            const SizedBox(height: 12),
+            TextFormField(
+              controller: ctrl,
+              autofocus: true,
+              keyboardType:
+                  const TextInputType.numberWithOptions(decimal: true),
+              decoration: const InputDecoration(
+                labelText: 'Supplier price per unit (EGP)',
+                prefixText: 'EGP ',
+                helperText: 'Cost basis — used in inventory cost, COGS & margin.',
+              ),
+              validator: (v) {
+                if (v == null || v.trim().isEmpty) return 'Enter a price';
+                if (double.tryParse(v.trim()) == null) {
+                  return 'Enter a valid number';
+                }
+                return null;
+              },
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(ctx),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          onPressed: () async {
+            if (!formKey.currentState!.validate()) return;
+            final newCost = double.parse(ctrl.text.trim());
+            final updated = Product(
+              id: product.id,
+              sku: product.sku,
+              name: product.name,
+              category: product.category,
+              unitCost: newCost,
+              currentStock: product.currentStock,
+              supplierId: product.supplierId,
+              manufacturerId: product.manufacturerId,
+              warehouseId: product.warehouseId,
+              isActive: product.isActive,
+              leadTimeDays: product.leadTimeDays,
+              averageDailySales: product.averageDailySales,
+              minimumStock: product.minimumStock,
+              shopifyVariantId: product.shopifyVariantId,
+              shopifyProductId: product.shopifyProductId,
+              sellingPrice: product.sellingPrice,
+              productionFee: product.productionFee,
+              shopifyUnitCost: product.shopifyUnitCost,
+              isBundle: product.isBundle,
+              bundleComponents: product.bundleComponents,
+              sourcingOptions: product.sourcingOptions,
+              stockByWarehouse: product.stockByWarehouse,
+            );
+            if (ctx.mounted) {
+              await ctx.read<AppState>().updateProduct(updated);
+              Navigator.pop(ctx);
+            }
+          },
+          child: const Text('Save'),
+        ),
+      ],
+    ),
+  );
+  ctrl.dispose();
+}
+
+/// Smart entry point used by the products table "needs cost" cell. Routes
+/// the user to the correct flow based on whether the product is purchased
+/// or manufactured:
+///
+///   • **Purchased** (no manufacturerId) → opens the quick supplier-price
+///     dialog above. The user just types what the supplier charges.
+///   • **Manufactured** (manufacturerId set) → opens the full product edit
+///     dialog so the user can build/edit the BOM. Cost is auto-derived from
+///     materials + production fee — typing a manual figure would silently
+///     contradict the BOM rollup and break downstream KPIs.
+Future<void> showProductCostFixDialog(
+    BuildContext context, Product product) async {
+  final isManufactured =
+      product.manufacturerId != null && product.manufacturerId!.isNotEmpty;
+  if (isManufactured) {
+    await showProductEditDialog(context, product);
+  } else {
+    await showQuickCostDialog(context, product);
+  }
+}
+
+/// Opens the full product edit form for an existing product. The full form
 /// includes Supplier and Manufacturer pickers, lead time, unit cost, etc.
 /// Used by other screens (e.g. the Forecasts readiness gate) to jump straight
 /// to the form where supplier / manufacturer are linked to a product.
@@ -38,7 +158,7 @@ class ProductsScreen extends StatefulWidget {
 
 class _ProductsScreenState extends State<ProductsScreen> {
   String _search = '';
-  String _statusFilter = 'All'; // All | OK | Low | Critical
+  String _statusFilter = 'All'; // All | OK | Low | Critical | Needs Setup
 
   @override
   Widget build(BuildContext context) {
@@ -48,6 +168,18 @@ class _ProductsScreenState extends State<ProductsScreen> {
     final bomMap = {for (final b in state.boms) b.finalProductId: b};
 
     final recs = {for (final r in state.recommendations) r.productId: r};
+
+    // Build a set of product IDs that fail the setup-health check. A product
+    // is "needs setup" if any of: zero effective unit cost, no supplier (and
+    // not manufactured), or manufactured-but-no-BOM.
+    final missingCostIds = {for (final p in state.productsMissingCost) p.id};
+    final missingSupplierIds = {
+      for (final p in state.productsMissingSupplier) p.id
+    };
+    final missingBomIds = {
+      for (final p in state.manufacturedProductsMissingBom) p.id
+    };
+    final needsSetupIds = {...missingCostIds, ...missingSupplierIds, ...missingBomIds};
 
     final products = state.products.where((p) {
       // Text search filter
@@ -60,7 +192,9 @@ class _ProductsScreenState extends State<ProductsScreen> {
         }
       }
       // Status filter
-      if (_statusFilter != 'All') {
+      if (_statusFilter == 'Needs Setup') {
+        if (!needsSetupIds.contains(p.id)) return false;
+      } else if (_statusFilter != 'All') {
         final status = p.currentStock == 0
             ? 'Critical'
             : (recs.containsKey(p.id) ? 'Low' : 'OK');
@@ -99,6 +233,43 @@ class _ProductsScreenState extends State<ProductsScreen> {
             );
           }),
 
+          // Product setup-health banner. Shown when any active product is
+          // missing the data the rest of the system depends on (cost,
+          // supplier, or BOM for manufactured items). Without this, every
+          // KPI silently lies — so we make the fix one click away.
+          Builder(builder: (context) {
+            final missingCost = state.productsMissingCost.length;
+            final missingSupplier = state.productsMissingSupplier.length;
+            final missingBom = state.manufacturedProductsMissingBom.length;
+            final totalGaps = missingCost + missingSupplier + missingBom;
+            if (totalGaps == 0 || state.products.isEmpty) {
+              return const SizedBox.shrink();
+            }
+            final parts = <String>[
+              if (missingCost > 0)
+                '$missingCost missing unit cost',
+              if (missingSupplier > 0)
+                '$missingSupplier missing supplier',
+              if (missingBom > 0)
+                '$missingBom missing BOM',
+            ];
+            return Padding(
+              padding: const EdgeInsets.only(bottom: 16),
+              child: AlertBanner(
+                severity: AlertSeverity.warning,
+                title: 'Finish product setup to trust your KPIs',
+                message:
+                    '${parts.join(' · ')}. Inventory cost, COGS and margin are '
+                    'calculated from these fields — leave them blank and the '
+                    'dashboard numbers will be wrong.',
+                action: TextButton(
+                  onPressed: () =>
+                      setState(() => _statusFilter = 'Needs Setup'),
+                  child: const Text('Show items'),
+                ),
+              ),
+            );
+          }),
           SectionHeader(
             title: 'Product Inventory',
             actions: [
@@ -117,19 +288,25 @@ class _ProductsScreenState extends State<ProductsScreen> {
                 ),
               ),
               const SizedBox(width: 16),
-              OutlinedButton.icon(
-                onPressed: () => _showImportDialog(context),
-                icon: const Icon(Icons.cloud_download),
-                label: const Text('Import from Shopify'),
+              KeyedSubtree(
+                key: TourTargets.instance.keyFor('page:products.import'),
+                child: OutlinedButton.icon(
+                  onPressed: () => _showImportDialog(context),
+                  icon: const Icon(Icons.cloud_download),
+                  label: const Text('Import from Shopify'),
+                ),
               ),
               const SizedBox(width: 16),
-              ElevatedButton.icon(
-                onPressed: () => _showAddProductDialog(context, state),
-                icon: const Icon(Icons.add),
-                label: const Text('Add Product'),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: AppColors.primary,
-                  foregroundColor: Colors.white,
+              KeyedSubtree(
+                key: TourTargets.instance.keyFor('page:products.add'),
+                child: ElevatedButton.icon(
+                  onPressed: () => _showAddProductDialog(context, state),
+                  icon: const Icon(Icons.add),
+                  label: const Text('Add Product'),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppColors.primary,
+                    foregroundColor: Colors.white,
+                  ),
                 ),
               ),
             ],
@@ -140,7 +317,7 @@ class _ProductsScreenState extends State<ProductsScreen> {
             padding: const EdgeInsets.only(bottom: 12),
             child: Wrap(
               spacing: 8,
-              children: ['All', 'OK', 'Low', 'Critical'].map((filter) {
+              children: ['All', 'Needs Setup', 'OK', 'Low', 'Critical'].map((filter) {
                 final isActive = _statusFilter == filter;
                 final chipColor = filter == 'Critical'
                     ? AppColors.error
@@ -148,7 +325,9 @@ class _ProductsScreenState extends State<ProductsScreen> {
                         ? AppColors.warning
                         : filter == 'OK'
                             ? AppColors.success
-                            : AppColors.primary;
+                            : filter == 'Needs Setup'
+                                ? AppColors.warning
+                                : AppColors.primary;
                 return FilterChip(
                   label: Text(filter),
                   selected: isActive,
@@ -217,6 +396,7 @@ class _ProductsScreenState extends State<ProductsScreen> {
                   DataColumn(label: Text('CATEGORY', style: AppTextStyles.tableHeader)),
                   DataColumn(label: Text('STOCK', style: AppTextStyles.tableHeader), numeric: true),
                   DataColumn(label: Text('UNIT COST', style: AppTextStyles.tableHeader), numeric: true),
+                  DataColumn(label: Text('SELLING PRICE', style: AppTextStyles.tableHeader), numeric: true),
                   DataColumn(label: Text('SUPPLY CHAIN', style: AppTextStyles.tableHeader)),
                   DataColumn(label: Text('STATUS', style: AppTextStyles.tableHeader)),
                   DataColumn(label: Text('ACTIONS', style: AppTextStyles.tableHeader)),
@@ -331,12 +511,94 @@ class _ProductDataSource extends DataTableSource {
           style: AppTextStyles.tableNum,
           textAlign: TextAlign.right,
         )),
-        // Unit Cost
-        DataCell(Text(
-          'EGP ${p.unitCost.toStringAsFixed(2)}',
-          style: AppTextStyles.tableNum,
-          textAlign: TextAlign.right,
-        )),
+        // Unit Cost — what it COSTS you to get/make this product.
+        //
+        // Purchased products → manual `unitCost` field (what the supplier
+        // charges per unit).
+        // Manufactured products → ROLLED UP from BOM materials + production
+        // fee via AppState.effectiveUnitCost. Never typed directly; doing so
+        // would silently disagree with the BOM and break every KPI.
+        //
+        // Legacy: a few products from before sellingPrice existed have their
+        // Shopify selling price stored in unitCost. Detect that and prompt
+        // the user to set a real cost.
+        DataCell(
+          () {
+            final appState = context.read<AppState>();
+            final effective = appState.effectiveUnitCost(p);
+            final isManufactured =
+                p.manufacturerId != null && p.manufacturerId!.isNotEmpty;
+            final hasBom = appState.boms
+                .any((b) => b.finalProductId == p.id && b.isActive);
+            final sp = p.sellingPrice ?? 0;
+            final isLegacy = !isManufactured &&
+                p.unitCost > 0 &&
+                (sp == 0 || (sp - p.unitCost).abs() < 0.01);
+
+            // Needs-fix states. Manufactured = no BOM (or BOM materials cost
+            // out to 0). Purchased = unitCost 0 OR legacy.
+            if (effective <= 0 || isLegacy) {
+              final label = isManufactured
+                  ? (hasBom ? 'Fix BOM' : 'Set up BOM')
+                  : 'Set supplier price';
+              return Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(
+                    isManufactured
+                        ? Icons.account_tree_outlined
+                        : Icons.warning_amber_rounded,
+                    size: 14,
+                    color: AppColors.warning,
+                  ),
+                  const SizedBox(width: 4),
+                  Text(label,
+                      style: AppTextStyles.bodySmall
+                          .copyWith(color: AppColors.warning)),
+                ],
+              );
+            }
+            return Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  'EGP ${effective.toStringAsFixed(2)}',
+                  style: AppTextStyles.tableNum,
+                  textAlign: TextAlign.right,
+                ),
+                const SizedBox(width: 4),
+                Icon(
+                  isManufactured
+                      ? Icons.account_tree_outlined
+                      : Icons.edit_outlined,
+                  size: 12,
+                  color: AppColors.textSubdued,
+                ),
+              ],
+            );
+          }(),
+          onTap: () => showProductCostFixDialog(context, p),
+        ),
+        // Selling Price — what the customer pays.
+        // For legacy products where sellingPrice was never stored separately,
+        // fall back to displaying unitCost (which IS the selling price).
+        DataCell(
+          () {
+            final sp = p.sellingPrice ?? 0;
+            final displayPrice = sp > 0 ? sp : p.unitCost;
+            if (displayPrice == 0) {
+              return Text('—',
+                  style: AppTextStyles.tableNum
+                      .copyWith(color: AppColors.textSubdued),
+                  textAlign: TextAlign.right);
+            }
+            return Text(
+              'EGP ${displayPrice.toStringAsFixed(2)}',
+              style: AppTextStyles.tableNum,
+              textAlign: TextAlign.right,
+            );
+          }(),
+        ),
         // Supply Chain Health
         DataCell(_SupplyChainCell(
           product: p,
@@ -440,35 +702,93 @@ class _SupplyChainCell extends StatelessWidget {
 
   @override
   Widget build(BuildContext ctx) {
-    final bom = bomMap[product.id];
-    final hasBom = bom != null;
-
-    // Supplier: at least one material in BOM has a supplier
-    final hasSupplier = bom != null &&
-        bom.materials.any((m) => rawMaterials.any(
-            (r) => r.id == m.rawMaterialId &&
-                r.supplierId != null &&
-                (r.supplierId as String).isNotEmpty));
+    final isManufactured = product.manufacturerId != null &&
+        product.manufacturerId!.isNotEmpty;
+    final isFromSupplier = !isManufactured &&
+        product.supplierId != null &&
+        product.supplierId!.isNotEmpty;
 
     final hasWarehouse =
         product.warehouseId != null && product.warehouseId!.isNotEmpty;
 
-    // Determine the first missing step to direct user to
-    String? fixPath;
-    String? fixLabel;
-    if (!hasBom) {
-      fixPath = '/bom';
-      fixLabel = 'Set up BOM';
-    } else if (!hasSupplier) {
-      fixPath = '/suppliers';
-      fixLabel = 'Add Supplier';
-    } else if (!hasWarehouse) {
-      fixPath = '/warehouses';
-      fixLabel = 'Assign Warehouse';
+    // ── Manufactured path: needs BOM + at least one material has a supplier ──
+    if (isManufactured) {
+      final bom = bomMap[product.id];
+      final hasBom = bom != null;
+      final hasSupplier = bom != null &&
+          bom.materials.any((m) => rawMaterials.any(
+              (r) =>
+                  r.id == m.rawMaterialId &&
+                  r.supplierId != null &&
+                  (r.supplierId as String).isNotEmpty));
+
+      String? fixPath;
+      String? fixLabel;
+      if (!hasBom) {
+        fixPath = '/bom';
+        fixLabel = 'Set up BOM';
+      } else if (!hasSupplier) {
+        fixPath = '/raw-materials';
+        fixLabel = 'Add Supplier to material';
+      } else if (!hasWarehouse) {
+        fixPath = '/warehouses';
+        fixLabel = 'Assign Warehouse';
+      }
+      final allGood = hasBom && hasSupplier && hasWarehouse;
+
+      return SizedBox(
+        width: 220,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Row(
+              children: [
+                _ChainBadge(label: 'BOM', ok: hasBom),
+                const SizedBox(width: 4),
+                _ChainBadge(label: 'Supplier', ok: hasSupplier),
+                const SizedBox(width: 4),
+                _ChainBadge(label: 'Warehouse', ok: hasWarehouse),
+              ],
+            ),
+            if (!allGood && fixPath != null)
+              _FixLink(label: fixLabel!, path: fixPath, context: context),
+          ],
+        ),
+      );
     }
 
-    final allGood = hasBom && hasSupplier && hasWarehouse;
+    // ── From-supplier path: no BOM needed — just supplier + warehouse ────────
+    if (isFromSupplier) {
+      String? fixPath;
+      String? fixLabel;
+      if (!hasWarehouse) {
+        fixPath = '/warehouses';
+        fixLabel = 'Assign Warehouse';
+      }
+      final allGood = hasWarehouse;
 
+      return SizedBox(
+        width: 220,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Row(
+              children: [
+                _ChainBadge(label: 'Supplier', ok: true),
+                const SizedBox(width: 4),
+                _ChainBadge(label: 'Warehouse', ok: hasWarehouse),
+              ],
+            ),
+            if (!allGood && fixPath != null)
+              _FixLink(label: fixLabel!, path: fixPath, context: context),
+          ],
+        ),
+      );
+    }
+
+    // ── Sourcing type not yet set ─────────────────────────────────────────────
     return SizedBox(
       width: 220,
       child: Column(
@@ -477,33 +797,52 @@ class _SupplyChainCell extends StatelessWidget {
         children: [
           Row(
             children: [
-              _ChainBadge(label: 'BOM', ok: hasBom),
-              const SizedBox(width: 4),
-              _ChainBadge(label: 'Supplier', ok: hasSupplier),
+              _ChainBadge(label: 'Supplier', ok: false),
               const SizedBox(width: 4),
               _ChainBadge(label: 'Warehouse', ok: hasWarehouse),
             ],
           ),
-          if (!allGood && fixPath != null)
-            InkWell(
-              onTap: () => context.go(fixPath!),
-              child: Padding(
-                padding: const EdgeInsets.only(top: 3),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Text(fixLabel!,
-                        style: const TextStyle(
-                            fontSize: 10,
-                            color: AppColors.primary,
-                            fontWeight: FontWeight.w600)),
-                    const Icon(Icons.arrow_forward_ios,
-                        size: 8, color: AppColors.primary),
-                  ],
-                ),
-              ),
-            ),
+          _FixLink(
+            label: 'Set sourcing type',
+            path: null,
+            context: context,
+            onTap: () => showProductEditDialog(context, product),
+          ),
         ],
+      ),
+    );
+  }
+}
+
+class _FixLink extends StatelessWidget {
+  final String label;
+  final String? path;
+  final BuildContext context;
+  final VoidCallback? onTap;
+  const _FixLink(
+      {required this.label,
+      required this.path,
+      required this.context,
+      this.onTap});
+
+  @override
+  Widget build(BuildContext ctx) {
+    return InkWell(
+      onTap: onTap ?? (path != null ? () => context.go(path!) : null),
+      child: Padding(
+        padding: const EdgeInsets.only(top: 3),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(label,
+                style: const TextStyle(
+                    fontSize: 10,
+                    color: AppColors.primary,
+                    fontWeight: FontWeight.w600)),
+            const Icon(Icons.arrow_forward_ios,
+                size: 8, color: AppColors.primary),
+          ],
+        ),
       ),
     );
   }
@@ -721,15 +1060,62 @@ class _AddProductDialog extends StatefulWidget {
 
 enum _ProductSourceType { purchased, manufactured }
 
+/// State for one alternative (non-default) sourcing option row.
+/// Always "purchase" kind — manufacture alternatives share the product BOM.
+class _AltSourceRow {
+  String? supplierId;
+  final TextEditingController costCtrl;
+  final TextEditingController leadTimeCtrl;
+  final TextEditingController moqCtrl;
+  _AltSourceRow({this.supplierId, double cost = 0, int leadTime = 0, int? moq})
+      : costCtrl =
+            TextEditingController(text: cost > 0 ? cost.toStringAsFixed(2) : ''),
+        leadTimeCtrl =
+            TextEditingController(text: leadTime > 0 ? '$leadTime' : ''),
+        moqCtrl = TextEditingController(text: moq != null ? '$moq' : '');
+  void dispose() {
+    costCtrl.dispose();
+    leadTimeCtrl.dispose();
+    moqCtrl.dispose();
+  }
+}
+
 class _BomRowState {
+  /// Holds either a raw-material id or a sub-product id depending on [kind].
   String? rawMaterialId;
   final TextEditingController qtyCtrl;
+  final TextEditingController yieldCtrl;
   String uom;
-  _BomRowState({this.rawMaterialId, double qty = 1, this.uom = 'pcs'})
-      : qtyCtrl = TextEditingController(text: qty == qty.truncate()
-            ? qty.toStringAsFixed(0)
-            : qty.toString());
-  void dispose() => qtyCtrl.dispose();
+  BomComponentKind kind;
+  _BomRowState({
+    this.rawMaterialId,
+    double qty = 1,
+    this.uom = 'pcs',
+    this.kind = BomComponentKind.rawMaterial,
+    double? yieldPercent,
+  })  : qtyCtrl = TextEditingController(
+            text: qty == qty.truncate()
+                ? qty.toStringAsFixed(0)
+                : qty.toString()),
+        yieldCtrl = TextEditingController(
+            text: (yieldPercent == null || yieldPercent == 100)
+                ? ''
+                : yieldPercent.toStringAsFixed(
+                    yieldPercent == yieldPercent.truncate() ? 0 : 1));
+  void dispose() {
+    qtyCtrl.dispose();
+    yieldCtrl.dispose();
+  }
+
+  /// Effective qty consumed once yield loss is applied. Mirrors
+  /// [BomMaterial.effectiveQuantityPerUnit] so the cost preview matches the
+  /// final persisted value.
+  double get effectiveQty {
+    final base = double.tryParse(qtyCtrl.text) ?? 0;
+    final y = double.tryParse(yieldCtrl.text);
+    if (y == null || y >= 100 || y <= 0) return base;
+    return base / (y / 100.0);
+  }
 }
 
 class _AddProductDialogState extends State<_AddProductDialog> {
@@ -747,20 +1133,36 @@ class _AddProductDialogState extends State<_AddProductDialog> {
   String? _selectedWarehouseId;
   _ProductSourceType _sourceType = _ProductSourceType.purchased;
   final List<_BomRowState> _bomRows = [];
+  final List<_AltSourceRow> _altSourcingOptions = [];
+  /// Controllers for per-warehouse stock counts. Keyed by [Warehouse.id].
+  /// Populated in initState from the existing product; empty = not yet
+  /// populated (single-location fallback).
+  final Map<String, TextEditingController> _whStockCtrls = {};
 
   bool get _isEdit => widget.existingProduct != null;
 
-  /// Sum of (qty × raw material unit cost) across all BOM rows.
-  /// Used as the read-only material cost for manufactured products.
+  /// Sum of (effective qty × component unit cost) across all BOM rows.
+  /// "Effective qty" applies yield loss so a 15% scrap recipe consumes more
+  /// input than the typed amount. Sub-assembly rows pull cost from
+  /// AppState.effectiveUnitCost so nested BOMs roll up correctly.
   double get _computedMaterialCost {
     double total = 0;
+    final appState = context.read<AppState>();
     for (final row in _bomRows) {
-      if (row.rawMaterialId == null) continue;
-      final qty = double.tryParse(row.qtyCtrl.text) ?? 0;
-      final rm = widget.rawMaterials
-          .where((m) => m.id == row.rawMaterialId)
-          .firstOrNull;
-      if (rm != null) total += qty * (rm.unitCost as double);
+      if (row.rawMaterialId == null || row.rawMaterialId!.isEmpty) continue;
+      final qty = row.effectiveQty;
+      if (qty <= 0) continue;
+      if (row.kind == BomComponentKind.product) {
+        final sub = appState.products
+            .where((p) => p.id == row.rawMaterialId)
+            .firstOrNull;
+        if (sub != null) total += qty * appState.effectiveUnitCost(sub);
+      } else {
+        final rm = widget.rawMaterials
+            .where((m) => m.id == row.rawMaterialId)
+            .firstOrNull;
+        if (rm != null) total += qty * (rm.unitCost as double);
+      }
     }
     return total;
   }
@@ -808,10 +1210,48 @@ class _AddProductDialogState extends State<_AddProductDialog> {
     if (bom != null) {
       for (final m in bom.materials) {
         _bomRows.add(_BomRowState(
-          rawMaterialId: m.rawMaterialId,
+          rawMaterialId: m.refId,
           qty: m.quantityPerUnit,
           uom: m.unitOfMeasure,
+          kind: m.kind,
+          yieldPercent: m.yieldPercent,
         ));
+      }
+    }
+    // Seed alternative sourcing options (non-default entries only).
+    if (p != null) {
+      for (final opt in p.sourcingOptions.where((o) => !o.isDefault)) {
+        final supplier = widget.suppliers.any((s) => s.id == opt.supplierId)
+            ? opt.supplierId
+            : null;
+        _altSourcingOptions.add(_AltSourceRow(
+          supplierId: supplier,
+          cost: opt.unitCost,
+          leadTime: opt.leadTimeDays,
+          moq: opt.moq,
+        ));
+      }
+    }
+    // Seed per-warehouse stock controllers from the existing product. One
+    // controller is created for EVERY warehouse in the passed list so the
+    // table always shows all locations (even if stock is 0 there).
+    // For Shopify-imported products the per-warehouse breakdown may be empty
+    // even though currentStock > 0 — in that case, seed the first warehouse
+    // (or the one already assigned) with the flat total so the user doesn't
+    // have to re-enter the existing stock manually.
+    final profile = context.read<AppState>().settings.businessProfile;
+    if (profile != null && profile.isMultiLocation) {
+      final hasBreakdown = p != null && p.stockByWarehouse.isNotEmpty;
+      final fallbackWarehouseId = p?.warehouseId ?? widget.warehouses.firstOrNull?.id;
+      for (final w in widget.warehouses) {
+        int qty = p?.stockAtWarehouse(w.id) ?? 0;
+        if (!hasBreakdown &&
+            p != null &&
+            p.currentStock > 0 &&
+            w.id == fallbackWarehouseId) {
+          qty = p.currentStock;
+        }
+        _whStockCtrls[w.id] = TextEditingController(text: '$qty');
       }
     }
   }
@@ -1067,21 +1507,23 @@ class _AddProductDialogState extends State<_AddProductDialog> {
                           const SizedBox(width: 16),
                         ],
                         Expanded(
-                          child: TextFormField(
-                            controller: _stockCtrl,
-                            decoration: const InputDecoration(
-                              labelText: 'Current Stock *',
-                              suffixText: 'units',
-                            ),
-                            keyboardType: TextInputType.number,
-                            validator: (v) {
-                              final val = int.tryParse(v ?? '');
-                              if (val == null || val < 0) {
-                                return 'Enter a valid stock count';
-                              }
-                              return null;
-                            },
-                          ),
+                          child: _whStockCtrls.isNotEmpty
+                              ? _buildStockByWarehouseField()
+                              : TextFormField(
+                                  controller: _stockCtrl,
+                                  decoration: const InputDecoration(
+                                    labelText: 'Current Stock *',
+                                    suffixText: 'units',
+                                  ),
+                                  keyboardType: TextInputType.number,
+                                  validator: (v) {
+                                    final val = int.tryParse(v ?? '');
+                                    if (val == null || val < 0) {
+                                      return 'Enter a valid stock count';
+                                    }
+                                    return null;
+                                  },
+                                ),
                         ),
                       ],
                     ),
@@ -1206,8 +1648,11 @@ class _AddProductDialogState extends State<_AddProductDialog> {
                           child: TextFormField(
                             controller: _leadTimeCtrl,
                             decoration: const InputDecoration(
-                              labelText: 'Lead Time (Days)',
-                              helperText: '0 = use supplier default',
+                              labelText: 'Lead Time Override (Days)',
+                              hintText: 'e.g. 14',
+                              helperText:
+                                  'How long restocking takes for this product specifically. Leave 0 to inherit from the supplier.',
+                              helperMaxLines: 2,
                             ),
                             keyboardType: TextInputType.number,
                             validator: (v) {
@@ -1247,6 +1692,161 @@ class _AddProductDialogState extends State<_AddProductDialog> {
                         ),
                       ],
                     ),
+                    // ── Alternative Sources (backup suppliers) ─────────
+                    // Only purchase-type alternatives make sense here since
+                    // manufactured alternatives share the same BOM.
+                    if (_sourceType == _ProductSourceType.purchased) ...[
+                      const SizedBox(height: 16),
+                      const Divider(),
+                      const SizedBox(height: 8),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text('Alternative Sources',
+                                  style: AppTextStyles.bodySmall.copyWith(
+                                      fontWeight: FontWeight.w600)),
+                              Text(
+                                'Backup suppliers used when the primary is unavailable.',
+                                style: AppTextStyles.bodySmall
+                                    .copyWith(color: AppColors.textSecondary),
+                              ),
+                            ],
+                          ),
+                          TextButton.icon(
+                            onPressed: widget.suppliers.isEmpty
+                                ? null
+                                : () => setState(() =>
+                                    _altSourcingOptions.add(_AltSourceRow())),
+                            icon: const Icon(Icons.add, size: 16),
+                            label: const Text('Add'),
+                          ),
+                        ],
+                      ),
+                      if (_altSourcingOptions.isEmpty)
+                        Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 8),
+                          child: Text(
+                            'No alternatives added.',
+                            style: AppTextStyles.bodySmall
+                                .copyWith(color: AppColors.textSecondary),
+                          ),
+                        )
+                      else
+                        ..._altSourcingOptions.asMap().entries.map((e) {
+                          final i = e.key;
+                          final alt = e.value;
+                          return Padding(
+                            padding: const EdgeInsets.only(top: 12),
+                            child: Row(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Expanded(
+                                  flex: 3,
+                                  child: DropdownButtonFormField<String>(
+                                    decoration: const InputDecoration(
+                                        labelText: 'Alt. Supplier'),
+                                    initialValue: alt.supplierId,
+                                    items: widget.suppliers
+                                        .map<DropdownMenuItem<String>>(
+                                          (s) => DropdownMenuItem<String>(
+                                            value: s.id as String,
+                                            child: Text(s.name as String),
+                                          ),
+                                        )
+                                        .toList(),
+                                    onChanged: (v) => setState(
+                                        () => alt.supplierId = v),
+                                    validator: (v) =>
+                                        (v == null || v.isEmpty)
+                                            ? 'Pick a supplier'
+                                            : null,
+                                  ),
+                                ),
+                                const SizedBox(width: 8),
+                                Expanded(
+                                  flex: 2,
+                                  child: TextFormField(
+                                    controller: alt.costCtrl,
+                                    decoration: const InputDecoration(
+                                      labelText: 'Unit Cost',
+                                      prefixText: 'EGP ',
+                                    ),
+                                    keyboardType: const TextInputType
+                                        .numberWithOptions(decimal: true),
+                                    validator: (v) {
+                                      if (v == null || v.trim().isEmpty) {
+                                        return null;
+                                      }
+                                      final n = double.tryParse(v.trim());
+                                      if (n == null || n < 0) {
+                                        return 'Invalid cost';
+                                      }
+                                      return null;
+                                    },
+                                  ),
+                                ),
+                                const SizedBox(width: 8),
+                                Expanded(
+                                  flex: 2,
+                                  child: TextFormField(
+                                    controller: alt.leadTimeCtrl,
+                                    decoration: const InputDecoration(
+                                      labelText: 'Lead Time',
+                                      suffixText: 'd',
+                                    ),
+                                    keyboardType: TextInputType.number,
+                                    validator: (v) {
+                                      if (v == null || v.trim().isEmpty) {
+                                        return null;
+                                      }
+                                      final n = int.tryParse(v.trim());
+                                      if (n == null || n < 0) {
+                                        return 'Invalid';
+                                      }
+                                      return null;
+                                    },
+                                  ),
+                                ),
+                                const SizedBox(width: 8),
+                                Expanded(
+                                  flex: 2,
+                                  child: TextFormField(
+                                    controller: alt.moqCtrl,
+                                    decoration: const InputDecoration(
+                                      labelText: 'MOQ',
+                                      suffixText: 'units',
+                                    ),
+                                    keyboardType: TextInputType.number,
+                                    validator: (v) {
+                                      if (v == null || v.trim().isEmpty) {
+                                        return null;
+                                      }
+                                      final n = int.tryParse(v.trim());
+                                      if (n == null || n < 0) {
+                                        return 'Invalid';
+                                      }
+                                      return null;
+                                    },
+                                  ),
+                                ),
+                                IconButton(
+                                  tooltip: 'Remove',
+                                  icon: const Icon(
+                                      Icons.remove_circle_outline,
+                                      color: AppColors.error),
+                                  onPressed: () => setState(() {
+                                    _altSourcingOptions[i].dispose();
+                                    _altSourcingOptions.removeAt(i);
+                                  }),
+                                ),
+                              ],
+                            ),
+                          );
+                        }),
+                    ],
                   ],
                 ),
 
@@ -1279,76 +1879,185 @@ class _AddProductDialogState extends State<_AddProductDialog> {
                         ..._bomRows.asMap().entries.map((e) {
                           final i = e.key;
                           final row = e.value;
+                          // Available sub-assemblies: manufactured products
+                          // OTHER than the one being edited (prevents an
+                          // obvious self-reference; the cycle guard in
+                          // effectiveUnitCost catches transitive loops).
+                          final subAssemblies = context
+                              .read<AppState>()
+                              .products
+                              .where((p) =>
+                                  p.manufacturerId != null &&
+                                  p.manufacturerId!.isNotEmpty &&
+                                  p.id != widget.existingProduct?.id)
+                              .toList();
                           return Padding(
                             padding: const EdgeInsets.only(bottom: 12),
-                            child: Row(
+                            child: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                Expanded(
-                                  flex: 3,
-                                  child: DropdownButtonFormField<String>(
-                                    decoration: const InputDecoration(
-                                      labelText: 'Raw Material *',
+                                // Kind toggle: raw material vs sub-assembly
+                                // (Phase 2.3 nesting).
+                                Row(
+                                  children: [
+                                    ChoiceChip(
+                                      label: const Text('Raw material'),
+                                      selected: row.kind ==
+                                          BomComponentKind.rawMaterial,
+                                      onSelected: (s) {
+                                        if (!s) return;
+                                        setState(() {
+                                          row.kind =
+                                              BomComponentKind.rawMaterial;
+                                          row.rawMaterialId = null;
+                                        });
+                                      },
                                     ),
-                                    initialValue: row.rawMaterialId,
-                                    items: widget.rawMaterials
-                                        .map<DropdownMenuItem<String>>(
-                                          (rm) => DropdownMenuItem<String>(
-                                            value: rm.id as String,
-                                            child: Text(
-                                              '${rm.name} (${rm.sku})',
-                                              overflow: TextOverflow.ellipsis,
+                                    const SizedBox(width: 8),
+                                    ChoiceChip(
+                                      label: const Text('Sub-assembly'),
+                                      selected: row.kind ==
+                                          BomComponentKind.product,
+                                      onSelected: subAssemblies.isEmpty
+                                          ? null
+                                          : (s) {
+                                              if (!s) return;
+                                              setState(() {
+                                                row.kind =
+                                                    BomComponentKind.product;
+                                                row.rawMaterialId = null;
+                                                row.uom = 'pcs';
+                                              });
+                                            },
+                                    ),
+                                  ],
+                                ),
+                                const SizedBox(height: 8),
+                                Row(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Expanded(
+                                      flex: 3,
+                                      child: row.kind ==
+                                              BomComponentKind.rawMaterial
+                                          ? DropdownButtonFormField<String>(
+                                              decoration: const InputDecoration(
+                                                labelText: 'Raw Material *',
+                                              ),
+                                              initialValue: row.rawMaterialId,
+                                              items: widget.rawMaterials
+                                                  .map<DropdownMenuItem<String>>(
+                                                    (rm) =>
+                                                        DropdownMenuItem<String>(
+                                                      value: rm.id as String,
+                                                      child: Text(
+                                                        '${rm.name} (${rm.sku})',
+                                                        overflow: TextOverflow
+                                                            .ellipsis,
+                                                      ),
+                                                    ),
+                                                  )
+                                                  .toList(),
+                                              onChanged: (v) => setState(() {
+                                                row.rawMaterialId = v;
+                                                final rm = widget.rawMaterials
+                                                    .where((m) => m.id == v)
+                                                    .firstOrNull;
+                                                if (rm != null) {
+                                                  row.uom = (rm.unitOfMeasure
+                                                              as String?) ??
+                                                          row.uom;
+                                                }
+                                              }),
+                                              validator: (v) =>
+                                                  (v == null || v.isEmpty)
+                                                      ? 'Pick a raw material'
+                                                      : null,
+                                            )
+                                          : DropdownButtonFormField<String>(
+                                              decoration: const InputDecoration(
+                                                labelText: 'Sub-assembly *',
+                                              ),
+                                              initialValue: row.rawMaterialId,
+                                              items: subAssemblies
+                                                  .map<DropdownMenuItem<String>>(
+                                                    (p) =>
+                                                        DropdownMenuItem<String>(
+                                                      value: p.id,
+                                                      child: Text(
+                                                        '${p.name} (${p.sku})',
+                                                        overflow: TextOverflow
+                                                            .ellipsis,
+                                                      ),
+                                                    ),
+                                                  )
+                                                  .toList(),
+                                              onChanged: (v) => setState(
+                                                  () => row.rawMaterialId = v),
+                                              validator: (v) =>
+                                                  (v == null || v.isEmpty)
+                                                      ? 'Pick a sub-assembly'
+                                                      : null,
                                             ),
-                                          ),
-                                        )
-                                        .toList(),
-                                    onChanged: (v) => setState(() {
-                                      row.rawMaterialId = v;
-                                      // Auto-fill UoM from the selected material.
-                                      final rm = widget.rawMaterials
-                                          .where((m) => m.id == v)
-                                          .firstOrNull;
-                                      if (rm != null) {
-                                        row.uom =
-                                            (rm.unitOfMeasure as String?) ??
-                                                row.uom;
-                                      }
-                                    }),
-                                    validator: (v) => (v == null || v.isEmpty)
-                                        ? 'Pick a raw material'
-                                        : null,
-                                  ),
-                                ),
-                                const SizedBox(width: 12),
-                                Expanded(
-                                  flex: 2,
-                                  child: TextFormField(
-                                    controller: row.qtyCtrl,
-                                    decoration: InputDecoration(
-                                      labelText: 'Qty per Unit *',
-                                      suffixText: row.uom,
                                     ),
-                                    keyboardType:
-                                        const TextInputType.numberWithOptions(
-                                            decimal: true),
-                                    onChanged: (_) => setState(() {}),
-                                    validator: (v) {
-                                      final n = double.tryParse(v ?? '');
-                                      if (n == null || n <= 0) {
-                                        return 'Enter qty > 0';
-                                      }
-                                      return null;
-                                    },
-                                  ),
-                                ),
-                                IconButton(
-                                  tooltip: 'Remove row',
-                                  icon: const Icon(Icons.remove_circle_outline,
-                                      color: AppColors.error),
-                                  onPressed: () => setState(() {
-                                    _bomRows[i].dispose();
-                                    _bomRows.removeAt(i);
-                                  }),
+                                    const SizedBox(width: 12),
+                                    Expanded(
+                                      flex: 2,
+                                      child: TextFormField(
+                                        controller: row.qtyCtrl,
+                                        decoration: InputDecoration(
+                                          labelText: 'Qty per Unit *',
+                                          suffixText: row.uom,
+                                        ),
+                                        keyboardType: const TextInputType
+                                            .numberWithOptions(decimal: true),
+                                        onChanged: (_) => setState(() {}),
+                                        validator: (v) {
+                                          final n = double.tryParse(v ?? '');
+                                          if (n == null || n <= 0) {
+                                            return 'Enter qty > 0';
+                                          }
+                                          return null;
+                                        },
+                                      ),
+                                    ),
+                                    const SizedBox(width: 12),
+                                    Expanded(
+                                      flex: 2,
+                                      child: TextFormField(
+                                        controller: row.yieldCtrl,
+                                        decoration: const InputDecoration(
+                                          labelText: 'Yield %',
+                                          hintText: '100',
+                                          helperText: '15% loss = 85',
+                                          suffixText: '%',
+                                        ),
+                                        keyboardType: const TextInputType
+                                            .numberWithOptions(decimal: true),
+                                        onChanged: (_) => setState(() {}),
+                                        validator: (v) {
+                                          if (v == null || v.trim().isEmpty) {
+                                            return null;
+                                          }
+                                          final n = double.tryParse(v.trim());
+                                          if (n == null || n <= 0 || n > 100) {
+                                            return '1\u2013100';
+                                          }
+                                          return null;
+                                        },
+                                      ),
+                                    ),
+                                    IconButton(
+                                      tooltip: 'Remove row',
+                                      icon: const Icon(
+                                          Icons.remove_circle_outline,
+                                          color: AppColors.error),
+                                      onPressed: () => setState(() {
+                                        _bomRows[i].dispose();
+                                        _bomRows.removeAt(i);
+                                      }),
+                                    ),
+                                  ],
                                 ),
                               ],
                             ),
@@ -1357,18 +2066,40 @@ class _AddProductDialogState extends State<_AddProductDialog> {
                       const SizedBox(height: 4),
                       Align(
                         alignment: Alignment.centerLeft,
-                        child: OutlinedButton.icon(
-                          onPressed: widget.rawMaterials.isEmpty
-                              ? null
-                              : () => setState(() => _bomRows.add(
-                                    _BomRowState(
-                                        uom: (widget.rawMaterials.first
-                                                .unitOfMeasure as String?) ??
-                                            'pcs'),
-                                  )),
-                          icon: const Icon(Icons.add, size: 18),
-                          label: const Text('Add Material'),
-                        ),
+                        child: Builder(builder: (ctx) {
+                          // Either inputs are valid starting points for a BOM
+                          // row. If neither exists, the Add button is disabled.
+                          final hasSubAssemblies = ctx
+                              .read<AppState>()
+                              .products
+                              .any((p) =>
+                                  p.manufacturerId != null &&
+                                  p.manufacturerId!.isNotEmpty &&
+                                  p.id != widget.existingProduct?.id);
+                          final canAdd = widget.rawMaterials.isNotEmpty ||
+                              hasSubAssemblies;
+                          return OutlinedButton.icon(
+                            onPressed: !canAdd
+                                ? null
+                                : () => setState(() {
+                                      final preferRaw =
+                                          widget.rawMaterials.isNotEmpty;
+                                      _bomRows.add(_BomRowState(
+                                        kind: preferRaw
+                                            ? BomComponentKind.rawMaterial
+                                            : BomComponentKind.product,
+                                        uom: preferRaw
+                                            ? (widget.rawMaterials.first
+                                                        .unitOfMeasure
+                                                    as String?) ??
+                                                'pcs'
+                                            : 'pcs',
+                                      ));
+                                    }),
+                            icon: const Icon(Icons.add, size: 18),
+                            label: const Text('Add Material'),
+                          );
+                        }),
                       ),
                     ],
                   ),
@@ -1396,8 +2127,145 @@ class _AddProductDialogState extends State<_AddProductDialog> {
     );
   }
 
+  /// Per-warehouse stock table. Shows one row per warehouse with an editable
+  /// count and a computed total at the bottom. Replaces the single "Current
+  /// Stock" field when [BusinessProfile.isMultiLocation] is true.
+  Widget _buildStockByWarehouseField() {
+    final warehouses = widget.warehouses;
+    int total = 0;
+    for (final ctrl in _whStockCtrls.values) {
+      total += int.tryParse(ctrl.text) ?? 0;
+    }
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text('Stock by Location',
+            style: AppTextStyles.bodySmall
+                .copyWith(fontWeight: FontWeight.w600)),
+        const SizedBox(height: 8),
+        ...warehouses.map((w) {
+          final ctrl = _whStockCtrls[w.id];
+          if (ctrl == null) return const SizedBox.shrink();
+          return Padding(
+            padding: const EdgeInsets.only(bottom: 8),
+            child: Row(
+              children: [
+                Expanded(
+                  flex: 3,
+                  child: Text(
+                    '${w.name} — ${w.city}',
+                    style: AppTextStyles.bodySmall,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+                const SizedBox(width: 8),
+                SizedBox(
+                  width: 90,
+                  child: TextFormField(
+                    controller: ctrl,
+                    decoration: const InputDecoration(
+                      suffixText: 'units',
+                      isDense: true,
+                    ),
+                    keyboardType: TextInputType.number,
+                    onChanged: (_) => setState(() {}),
+                    validator: (v) {
+                      final val = int.tryParse(v ?? '');
+                      if (val == null || val < 0) return 'Invalid';
+                      return null;
+                    },
+                  ),
+                ),
+              ],
+            ),
+          );
+        }),
+        const Divider(height: 16),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Text('Total', style: AppTextStyles.bodySmall.copyWith(
+                fontWeight: FontWeight.w600)),
+            Text('$total units',
+                style: AppTextStyles.bodySmall
+                    .copyWith(fontWeight: FontWeight.w600)),
+          ],
+        ),
+      ],
+    );
+  }
+
   Future<void> _save() async {
     if (!_formKey.currentState!.validate()) return;
+
+    // ── Manufactured-product preconditions (Phase 1.4) ───────────────────
+    // Cost for a manufactured product is derived from its BOM materials and
+    // the per-unit production fee. Saving without a BOM produces a $0 cost
+    // that silently pollutes every downstream KPI (inventory cost, margin,
+    // EOQ). Catch it at the source instead of letting the user discover it
+    // on the dashboard.
+    if (_sourceType == _ProductSourceType.manufactured) {
+      final appState = context.read<AppState>();
+      // A manufactured product needs SOMETHING to build from: either raw
+      // materials or sub-assembly products. With neither, the BOM picker is
+      // empty and any saved product would have $0 cost.
+      final hasSubAssemblies = appState.products.any((p) =>
+          p.manufacturerId != null &&
+          p.manufacturerId!.isNotEmpty &&
+          p.id != widget.existingProduct?.id);
+      if (appState.rawMaterials.isEmpty && !hasSubAssemblies) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: const Text(
+              'Add raw materials first — manufactured products need a BOM. '
+              'Open Raw Materials, add the inputs, then come back here.',
+            ),
+            backgroundColor: AppColors.warning,
+            duration: const Duration(seconds: 5),
+            action: SnackBarAction(
+              label: 'Open Raw Materials',
+              textColor: Colors.white,
+              onPressed: () {
+                Navigator.pop(context);
+                context.go('/raw-materials');
+              },
+            ),
+          ),
+        );
+        return;
+      }
+      final hasUsableBomRow = _bomRows.any((r) =>
+          r.rawMaterialId != null &&
+          r.rawMaterialId!.isNotEmpty &&
+          (double.tryParse(r.qtyCtrl.text.trim()) ?? 0) > 0);
+      if (!hasUsableBomRow) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'A manufactured product needs at least one BOM material with a '
+              'quantity greater than 0. Add a row in "Bill of Materials".',
+            ),
+            backgroundColor: AppColors.error,
+            duration: Duration(seconds: 4),
+          ),
+        );
+        return;
+      }
+      if (_selectedManufacturerId == null ||
+          _selectedManufacturerId!.isEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Pick a manufacturer — production orders need someone to send '
+              'the work to.',
+            ),
+            backgroundColor: AppColors.error,
+          ),
+        );
+        return;
+      }
+    }
+
     // Enforce mutual exclusion on save: a product is either purchased from a
     // supplier OR manufactured by a manufacturer, never both. This drives the
     // replenishment branching downstream (PO vs ProductionOrder).
@@ -1407,6 +2275,51 @@ class _AddProductDialogState extends State<_AddProductDialog> {
     final manufacturerId = _sourceType == _ProductSourceType.manufactured
         ? _selectedManufacturerId
         : null;
+    final primaryCost = _sourceType == _ProductSourceType.manufactured
+        ? _computedTotalCost
+        : (double.tryParse(_costCtrl.text) ?? 0);
+    final primaryLeadTime = int.tryParse(_leadTimeCtrl.text) ?? 0;
+
+    // Build the full sourcing options list: primary (isDefault=true) + alts.
+    final sourcingOptions = <SourcingOption>[
+      SourcingOption(
+        kind: _sourceType == _ProductSourceType.manufactured
+            ? 'manufacture'
+            : 'purchase',
+        supplierId: supplierId,
+        manufacturerId: manufacturerId,
+        unitCost: primaryCost,
+        leadTimeDays: primaryLeadTime,
+        isDefault: true,
+      ),
+      ..._altSourcingOptions.map((alt) => SourcingOption(
+            kind: 'purchase',
+            supplierId: alt.supplierId,
+            unitCost: double.tryParse(alt.costCtrl.text.trim()) ?? 0,
+            leadTimeDays: int.tryParse(alt.leadTimeCtrl.text.trim()) ?? 0,
+            moq: int.tryParse(alt.moqCtrl.text.trim()),
+            isDefault: false,
+          )),
+    ];
+
+    // Build stockByWarehouse from per-warehouse controllers (multi-location).
+    // currentStock is the sum so legacy code keeps working unchanged.
+    Map<String, int> stockByWarehouse = {};
+    int currentStock;
+    if (_whStockCtrls.isNotEmpty) {
+      for (final entry in _whStockCtrls.entries) {
+        final qty = int.tryParse(entry.value.text.trim()) ?? 0;
+        if (qty > 0) stockByWarehouse[entry.key] = qty;
+      }
+      currentStock = stockByWarehouse.isEmpty
+          ? 0
+          : stockByWarehouse.values.fold(0, (a, b) => a + b);
+      // Keep the legacy _stockCtrl in sync so validators don't fire.
+      _stockCtrl.text = '$currentStock';
+    } else {
+      currentStock = int.tryParse(_stockCtrl.text) ?? 0;
+    }
+
     final product = Product(
       id: widget.existingProduct?.id ?? '',
       sku: _skuCtrl.text.trim(),
@@ -1414,18 +2327,18 @@ class _AddProductDialogState extends State<_AddProductDialog> {
       category: _categoryCtrl.text.trim(),
       // For manufactured products the persisted unitCost is the computed
       // (materials + fee) total so downstream EOQ/replenishment math is correct.
-      unitCost: _sourceType == _ProductSourceType.manufactured
-          ? _computedTotalCost
-          : (double.tryParse(_costCtrl.text) ?? 0),
-      currentStock: int.tryParse(_stockCtrl.text) ?? 0,
+      unitCost: primaryCost,
+      currentStock: currentStock,
       supplierId: supplierId,
       manufacturerId: manufacturerId,
       warehouseId: _selectedWarehouseId,
-      leadTimeDays: int.tryParse(_leadTimeCtrl.text) ?? 0,
+      leadTimeDays: primaryLeadTime,
       sellingPrice: double.tryParse(_sellingPriceCtrl.text.trim()),
       productionFee: _sourceType == _ProductSourceType.manufactured
           ? (double.tryParse(_productionFeeCtrl.text.trim()))
           : null,
+      sourcingOptions: sourcingOptions,
+      stockByWarehouse: stockByWarehouse,
     );
     final appState = context.read<AppState>();
     try {
@@ -1448,12 +2361,18 @@ class _AddProductDialogState extends State<_AddProductDialog> {
         final materials = _bomRows
             .where((r) =>
                 r.rawMaterialId != null && r.rawMaterialId!.isNotEmpty)
-            .map((r) => BomMaterial(
-                  rawMaterialId: r.rawMaterialId!,
-                  quantityPerUnit:
-                      double.tryParse(r.qtyCtrl.text.trim()) ?? 0,
-                  unitOfMeasure: r.uom,
-                ))
+            .map((r) {
+              final yp = double.tryParse(r.yieldCtrl.text.trim());
+              return BomMaterial(
+                rawMaterialId: r.rawMaterialId!,
+                quantityPerUnit:
+                    double.tryParse(r.qtyCtrl.text.trim()) ?? 0,
+                unitOfMeasure: r.uom,
+                kind: r.kind,
+                yieldPercent:
+                    (yp != null && yp > 0 && yp < 100) ? yp : null,
+              );
+            })
             .where((m) => m.quantityPerUnit > 0)
             .toList();
         if (materials.isNotEmpty) {
@@ -1502,6 +2421,12 @@ class _AddProductDialogState extends State<_AddProductDialog> {
     _leadTimeCtrl.dispose();
     for (final r in _bomRows) {
       r.dispose();
+    }
+    for (final r in _altSourcingOptions) {
+      r.dispose();
+    }
+    for (final ctrl in _whStockCtrls.values) {
+      ctrl.dispose();
     }
     super.dispose();
   }

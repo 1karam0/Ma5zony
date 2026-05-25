@@ -4,6 +4,7 @@ import 'package:ma5zony/models/warehouse.dart';
 import 'package:ma5zony/providers/app_state.dart';
 import 'package:ma5zony/utils/constants.dart';
 import 'package:ma5zony/widgets/shared_widgets.dart';
+import 'package:ma5zony/features/onboarding/tour_targets.dart';
 
 class WarehousesScreen extends StatelessWidget {
   const WarehousesScreen({super.key});
@@ -70,13 +71,16 @@ class WarehousesScreen extends StatelessWidget {
           SectionHeader(
             title: 'Warehouses',
             actions: [
-              ElevatedButton.icon(
-                onPressed: () => _showAddWarehouseDialog(context),
-                icon: const Icon(Icons.add),
-                label: const Text('Add Warehouse'),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: AppColors.primary,
-                  foregroundColor: Colors.white,
+              KeyedSubtree(
+                key: TourTargets.instance.keyFor('page:warehouses.add'),
+                child: ElevatedButton.icon(
+                  onPressed: () => _showAddWarehouseDialog(context),
+                  icon: const Icon(Icons.add),
+                  label: const Text('Add Warehouse'),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppColors.primary,
+                    foregroundColor: Colors.white,
+                  ),
                 ),
               ),
             ],

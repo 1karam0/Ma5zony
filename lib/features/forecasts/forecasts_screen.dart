@@ -108,9 +108,10 @@ class _ForecastsScreenState extends State<ForecastsScreen> {
   bool _autoRanForPreSelected = false;
   bool _showManualAlgorithms = false;
 
-  /// Length of Shopify sales history to import (months). Independent of the
-  /// SMA window — this is "how far back to pull", not "smoothing length".
-  int _importWindowMonths = 3;
+  /// User-chosen "momentum" window in months — how many of the most recent
+  /// monthly sales buckets to use when measuring how fast the product sells.
+  /// Drives the velocity estimate that feeds the production recommendation.
+  int _momentumWindowMonths = 3;
 
   /// User override for the coverage horizon (days of stock the product
   /// should cover). Null means "derive from latest cash-flow snapshot, else
@@ -202,6 +203,7 @@ class _ForecastsScreenState extends State<ForecastsScreen> {
         gamma: _gamma,
         wmaWeights: _wmaWeights,
         seasonLength: _seasonLength,
+        momentumWindowMonths: _momentumWindowMonths,
       ).timeout(
         const Duration(seconds: 30),
         onTimeout: () => throw Exception('Forecast timed out. Ensure this product has demand data.'),
@@ -387,15 +389,8 @@ class _ForecastsScreenState extends State<ForecastsScreen> {
                                     if (readiness != null)
                                       _ReadinessGate(
                                         readiness: readiness,
-                                        windowMonths: _importWindowMonths,
                                       ),
                                     const SizedBox(height: 16),
-                                    _SalesWindowPicker(
-                                      months: _importWindowMonths,
-                                      onChanged: (v) =>
-                                          setState(() => _importWindowMonths = v),
-                                    ),
-                                    const SizedBox(height: 12),
                                     _CoveragePeriodPicker(
                                       effectiveDays:
                                           _effectiveCoverageDays(state),
@@ -407,70 +402,15 @@ class _ForecastsScreenState extends State<ForecastsScreen> {
                                           () => _coverageDaysOverride = v),
                                     ),
                                     const SizedBox(height: 16),
-                                    Text('Forecasting Algorithm',
-                                        style: AppTextStyles.label.copyWith(
-                                            fontWeight: FontWeight.w600)),
-                                    const SizedBox(height: 10),
-                                    _AutoAlgorithmCard(
-                                      selected: _algorithm == 'Auto',
-                                      onTap: () => setState(() {
-                                        _algorithm = 'Auto';
-                                        _showManualAlgorithms = false;
-                                      }),
-                                    ),
-                                    const SizedBox(height: 8),
-                                    _ManualAlgorithmExpander(
-                                      expanded: _showManualAlgorithms,
-                                      currentAlgo: _algorithm,
-                                      onToggle: () => setState(() =>
-                                          _showManualAlgorithms =
-                                              !_showManualAlgorithms),
-                                      onPick: (code) => setState(() {
-                                        _algorithm = code;
-                                        _showManualAlgorithms = true;
-                                      }),
-                                    ),
-                                    const SizedBox(height: 10),
-                                    Container(
-                                      padding: const EdgeInsets.all(10),
-                                      decoration: BoxDecoration(
-                                        color: AppColors.primaryLight,
-                                        borderRadius: BorderRadius.circular(8),
-                                        border: Border.all(color: AppColors.primary.withValues(alpha: 0.25)),
-                                      ),
-                                      child: Row(
-                                        crossAxisAlignment: CrossAxisAlignment.start,
-                                        children: [
-                                          Icon(algoMeta.icon, size: 14, color: AppColors.primary),
-                                          const SizedBox(width: 6),
-                                          Expanded(
-                                            child: Text(
-                                              algoMeta.description,
-                                              style: AppTextStyles.bodySmall.copyWith(
-                                                color: AppColors.primary,
-                                                fontSize: 11,
-                                              ),
-                                            ),
-                                          ),
-                                        ],
-                                      ),
-                                    ),
-                                    const SizedBox(height: 20),
-                                    if (_algorithm != 'Auto')
-                                      _AlgorithmParams(
-                                      algorithm: _algorithm,
-                                      smaWindow: _smaWindow,
-                                      wmaWeightCount: _wmaWeightCount,
-                                      alpha: _alpha,
-                                      beta: _beta,
-                                      gamma: _gamma,
-                                      seasonLength: _seasonLength,
-                                      onSmaWindowChanged: (v) => setState(() => _smaWindow = v),
-                                      onWmaWeightCountChanged: (v) => setState(() => _wmaWeightCount = v),
-                                      onAlphaChanged: (v) => setState(() => _alpha = v),
-                                      onBetaChanged: (v) => setState(() => _beta = v),
-                                      onGammaChanged: (v) => setState(() => _gamma = v),
-                                      onSeasonLengthChanged: (v) => setState(() => _seasonLength = v),
+                                    _MomentumWindowPicker(
+                                      months: _momentumWindowMonths,
+                                      onChanged: (v) => setState(
+                                          () => _momentumWindowMonths = v),
+                                      availableMonths: safeSelectedId == null
+                                          ? 0
+                                          : (state.demandByProduct[safeSelectedId]
+                                                  ?.length ??
+                                              0),
                                     ),
                                     const SizedBox(height: 28),
                                     SizedBox(
@@ -520,6 +460,14 @@ class _ForecastsScreenState extends State<ForecastsScreen> {
                                         ),
                                       if (widget.preSelectedProductId != null)
                                         const SizedBox(height: 12),
+                                      if (_selectedProductId != null)
+                                        _PastSalesSummaryCard(
+                                          productId: _selectedProductId!,
+                                          windowMonths: _momentumWindowMonths,
+                                          state: state,
+                                        ),
+                                      if (_selectedProductId != null)
+                                        const SizedBox(height: 16),
                                       _ForecastKpiRow(forecast: forecast),
                                       const SizedBox(height: 16),
                                       if (forecast.leadTimeDays != null && forecast.leadTimeDays! > 0)
@@ -535,23 +483,14 @@ class _ForecastsScreenState extends State<ForecastsScreen> {
                                           state: state,
                                         ),
                                       const SizedBox(height: 20),
-                                      AlgorithmBreakdownPanel(result: forecast),
-                                      const SizedBox(height: 20),
                                       _InventoryPolicyPanel(
                                         forecast: forecast,
                                         settings: context.read<AppState>().settings,
                                         selectedProductId: _selectedProductId,
                                         state: context.read<AppState>(),
+                                        coverageDays: _effectiveCoverageDays(state),
                                       ),
                                       const SizedBox(height: 20),
-                                      if (readiness != null && readiness.canDispatch)
-                                        _GoToReplenishmentCard(
-                                          productId: _selectedProductId!,
-                                          forecast: forecast,
-                                          readiness: readiness,
-                                        ),
-                                      if (readiness != null && readiness.canDispatch)
-                                        const SizedBox(height: 20),
                                       _ForecastDataTable(forecast: forecast),
                                       // RM Order CTA
                                       if (_selectedProductId != null &&
@@ -808,70 +747,6 @@ class _ManualAlgorithmExpander extends StatelessWidget {
           ],
         ],
       ),
-    );
-  }
-}
-
-// ── Sales History Window Picker ────────────────────────────────────────────
-// How many months of Shopify history to import for this product. Separate
-// from the SMA smoothing window — this controls "how far back to pull".
-
-class _SalesWindowPicker extends StatelessWidget {
-  final int months;
-  final ValueChanged<int> onChanged;
-  const _SalesWindowPicker({required this.months, required this.onChanged});
-
-  static const _options = [1, 3, 6, 12, 24];
-
-  String _label(int m) {
-    if (m == 1) return 'Last 1 month';
-    if (m < 12) return 'Last $m months';
-    if (m == 12) return 'Last 12 months (1 year)';
-    return 'Last $m months';
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Row(
-          children: [
-            const Icon(Icons.history, size: 14, color: AppColors.textSecondary),
-            const SizedBox(width: 6),
-            Text('Sales History Window',
-                style: AppTextStyles.label
-                    .copyWith(fontWeight: FontWeight.w600)),
-          ],
-        ),
-        const SizedBox(height: 6),
-        DropdownButtonFormField<int>(
-          initialValue: months,
-          isDense: true,
-          decoration: const InputDecoration(
-            isDense: true,
-            contentPadding:
-                EdgeInsets.symmetric(horizontal: 10, vertical: 10),
-            border: OutlineInputBorder(),
-          ),
-          items: _options
-              .map((m) => DropdownMenuItem(
-                    value: m,
-                    child: Text(_label(m),
-                        style: const TextStyle(fontSize: 12)),
-                  ))
-              .toList(),
-          onChanged: (v) {
-            if (v != null) onChanged(v);
-          },
-        ),
-        const SizedBox(height: 4),
-        Text(
-          'Controls how far back Shopify sales are pulled when importing.',
-          style: AppTextStyles.bodySmall.copyWith(
-              fontSize: 10.5, color: AppColors.textSecondary),
-        ),
-      ],
     );
   }
 }
@@ -1342,213 +1217,348 @@ class _ForecastChartCard extends StatelessWidget {
   }
 }
 
-// ── Inventory Policy Panel ──────────────────────────────────────────────────
+// ── Reorder Recommendation Panel ────────────────────────────────────────────
+// Replaces the old EOQ/Safety-Stock/ROP panel.
+//
+// Core logic:
+//   velocity        = nextPeriodForecast   (units per month from momentum window)
+//   coverage months = coverageDays / 30
+//   order quantity  = ceil(velocity × coverage months)
+//   suggested order date   = today
+//   expected receipt date  = today + lead time days
+//   total cost             = order quantity × unit cost
 
-class _InventoryPolicyPanel extends StatelessWidget {
+class _InventoryPolicyPanel extends StatefulWidget {
   final ForecastResult forecast;
   final UserSettings settings;
   final String? selectedProductId;
   final AppState state;
+  final int coverageDays;
 
   const _InventoryPolicyPanel({
     required this.forecast,
     required this.settings,
     required this.selectedProductId,
     required this.state,
+    required this.coverageDays,
   });
 
   @override
-  Widget build(BuildContext context) {
-    // Pull product + demand data
-    final product = selectedProductId != null
-        ? state.products.where((p) => p.id == selectedProductId).firstOrNull
-        : null;
+  State<_InventoryPolicyPanel> createState() => _InventoryPolicyPanelState();
+}
 
+class _InventoryPolicyPanelState extends State<_InventoryPolicyPanel> {
+  bool _approving = false;
+  bool _approved = false;
+
+  Product? get _product => widget.selectedProductId != null
+      ? widget.state.products
+          .where((p) => p.id == widget.selectedProductId)
+          .firstOrNull
+      : null;
+
+  int get _orderQty {
+    final velocity = widget.forecast.nextPeriodForecast; // units / month
+    final months = widget.coverageDays / 30.0;
+    return (velocity * months).ceil().clamp(1, 999999);
+  }
+
+  int get _leadTimeDays =>
+      widget.forecast.leadTimeDays ??
+      _product?.leadTimeDays ??
+      widget.settings.defaultLeadTimeDays?.round() ??
+      0;
+
+  DateTime get _orderDate => DateTime.now();
+  DateTime get _receiptDate =>
+      _orderDate.add(Duration(days: _leadTimeDays));
+
+  double get _totalCost {
+    final p = _product;
+    if (p == null || p.unitCost <= 0) return 0;
+    return _orderQty * p.unitCost;
+  }
+
+  Future<void> _approve() async {
+    setState(() => _approving = true);
+    try {
+      // Navigate to replenishment / create order flow, pre-filled with qty.
+      if (mounted) context.go('/replenishment');
+    } finally {
+      if (mounted) setState(() { _approving = false; _approved = true; });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final product = _product;
     if (product == null) return const SizedBox.shrink();
 
+    final qty = _orderQty;
+    final velocity = widget.forecast.nextPeriodForecast;
+    final coverageMonths = widget.coverageDays / 30.0;
     final unitCost = product.unitCost;
-    final orderingCost = settings.orderingCost;
-    final holdingRate = settings.holdingRate;
-    final holdingCostPerUnit = unitCost * holdingRate;
-
-    // Annual demand from forecast next period × 12
-    final monthlyDemand = forecast.nextPeriodForecast;
-    final annualDemand = monthlyDemand * 12;
-
-    // EOQ = √(2DS/H)
-    final eoq = holdingCostPerUnit > 0 && annualDemand > 0
-        ? (2 * annualDemand * orderingCost / holdingCostPerUnit)
-        : 0.0;
-    final eoqRounded = eoq > 0 ? eoq.ceil() : 0;
-
-    final safetyStock = forecast.safetyStockForecast ?? 0;
-    final rop = forecast.reorderPointForecast ?? 0;
-
-    final serviceLevelZ = settings.serviceLevelTarget == 99
-        ? 2.33
-        : settings.serviceLevelTarget == 97
-            ? 1.96
-            : 1.65;
-    final serviceLevelLabel = '${settings.serviceLevelTarget.toInt()}%';
+    final total = _totalCost;
+    final hasPrice = unitCost > 0;
+    final orderDateFmt = DateFormat('dd MMM yyyy').format(_orderDate);
+    final receiptDateFmt = _leadTimeDays > 0
+        ? DateFormat('dd MMM yyyy').format(_receiptDate)
+        : 'Set lead time in Settings';
 
     return Container(
       decoration: BoxDecoration(
-        color: AppColors.surface,
-        borderRadius: AppRadius.md,
-        boxShadow: AppShadows.card,
-        border: Border.all(color: AppColors.border),
-      ),
-      child: Theme(
-        data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
-        child: ExpansionTile(
-          initiallyExpanded: true,
-          tilePadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 4),
-          childrenPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 0),
-          leading: Container(
-            width: 36, height: 36,
-            decoration: BoxDecoration(
-              color: AppColors.warning.withValues(alpha: 0.15),
-              borderRadius: BorderRadius.circular(8),
-            ),
-            child: const Icon(Icons.calculate, color: AppColors.warning, size: 20),
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.06),
+            blurRadius: 8,
+            offset: const Offset(0, 2),
           ),
-          title: Text('Inventory Policy', style: AppTextStyles.h3),
-          children: [
-            const Divider(),
-            const SizedBox(height: 16),
-
-            // Three formula cards in a row
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
+        ],
+        border: Border.all(color: Colors.grey.shade200),
+      ),
+      child: Column(
+        children: [
+          // ── Header ──────────────────────────────────────────────────────
+          Padding(
+            padding: const EdgeInsets.fromLTRB(18, 16, 18, 12),
+            child: Row(
               children: [
-                Expanded(
-                  child: _FormulaResultCard(
-                    icon: Icons.shopping_cart,
-                    color: AppColors.success,
-                    title: 'Order Quantity (EOQ)',
-                    subtitle: 'Recommended units per order',
-                    result: '$eoqRounded units',
-                    explanation: 'Order this quantity each time to minimise total ordering + holding cost.',
+                Container(
+                  width: 36,
+                  height: 36,
+                  decoration: BoxDecoration(
+                    color: AppColors.success.withValues(alpha: 0.12),
+                    borderRadius: BorderRadius.circular(8),
                   ),
+                  child: const Icon(Icons.inventory_2_outlined,
+                      color: AppColors.success, size: 20),
                 ),
                 const SizedBox(width: 12),
-                Expanded(
-                  child: _FormulaResultCard(
-                    icon: Icons.shield,
-                    color: AppColors.info,
-                    title: 'Safety Stock',
-                    subtitle: 'Buffer for demand variability',
-                    result: '$safetyStock units',
-                    explanation: 'Keep this buffer on hand to meet demand during unexpected delays.',
-                  ),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: _FormulaResultCard(
-                    icon: Icons.notification_important,
-                    color: AppColors.warning,
-                    title: 'Reorder Point',
-                    subtitle: 'Place a new order when stock hits this level',
-                    result: '$rop units',
-                    explanation: 'Order when your stock drops to this level to avoid running out.',
-                  ),
+                const Expanded(
+                  child: Text('Order Recommendation',
+                      style: TextStyle(
+                          fontSize: 15, fontWeight: FontWeight.w700)),
                 ),
               ],
             ),
+          ),
+          const Divider(height: 1),
 
-            const SizedBox(height: 16),
+          // ── Main recommendation row ──────────────────────────────────────
+          Padding(
+            padding: const EdgeInsets.all(18),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // How it was calculated — transparent to the user
+                Container(
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                    color: AppColors.primaryLight.withValues(alpha: 0.5),
+                    borderRadius: BorderRadius.circular(6),
+                    border: Border.all(
+                      color: AppColors.primary.withValues(alpha: 0.2),
+                    ),
+                  ),
+                  child: Text(
+                    'Based on ${velocity.toStringAsFixed(1)} units/month average '
+                    '× ${coverageMonths.toStringAsFixed(1)} months coverage '
+                    '(${widget.coverageDays} days)',
+                    style: const TextStyle(
+                        fontSize: 11, color: AppColors.textSecondary),
+                  ),
+                ),
+                const SizedBox(height: 16),
 
-            // Settings note
-            Container(
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: AppColors.background,
-                borderRadius: AppRadius.sm,
-                border: Border.all(color: AppColors.borderLight),
-              ),
-              child: Row(
-                children: [
-                  const Icon(Icons.tune, size: 14, color: AppColors.textSubdued),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      'Parameters: Ordering cost = EGP ${orderingCost.toStringAsFixed(0)}/order  •  '
-                      'Holding rate = ${(holdingRate * 100).toStringAsFixed(0)}% of unit cost  •  '
-                      'Unit cost = EGP ${unitCost.toStringAsFixed(2)}  •  '
-                      'Service level = $serviceLevelLabel  •  '
-                      'Adjust in Settings → Global Parameters',
-                      style: AppTextStyles.bodySmall.copyWith(
-                        color: AppColors.textSubdued,
-                        fontSize: 11,
+                // The two key numbers
+                IntrinsicHeight(
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: _RecoTile(
+                          icon: Icons.add_box_outlined,
+                          iconColor: AppColors.success,
+                          label: 'Quantity to Order',
+                          value: '$qty units',
+                          valueColor: AppColors.success,
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: _RecoTile(
+                          icon: Icons.calendar_today_outlined,
+                          iconColor: AppColors.primary,
+                          label: 'Place Order By',
+                          value: orderDateFmt,
+                          valueColor: AppColors.primary,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+
+                const SizedBox(height: 20),
+
+                // ── Approve / Cost & Delivery ────────────────────────────
+                if (!_approved) ...[
+                  SizedBox(
+                    width: double.infinity,
+                    child: ElevatedButton.icon(
+                      onPressed: _approving ? null : _approve,
+                      icon: _approving
+                          ? const SizedBox(
+                              width: 16,
+                              height: 16,
+                              child: CircularProgressIndicator(
+                                  color: Colors.white, strokeWidth: 2),
+                            )
+                          : const Icon(Icons.check_circle_outline, size: 18),
+                      label: Text(_approving
+                          ? 'Processing…'
+                          : 'Approve & Create Order'),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: AppColors.success,
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(vertical: 13),
+                        shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(8)),
                       ),
                     ),
                   ),
+                ] else ...[
+                  // Cost + receipt summary shown after approval
+                  Container(
+                    padding: const EdgeInsets.all(14),
+                    decoration: BoxDecoration(
+                      color: AppColors.success.withValues(alpha: 0.05),
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(
+                          color: AppColors.success.withValues(alpha: 0.25)),
+                    ),
+                    child: Column(
+                      children: [
+                        const Row(
+                          children: [
+                            Icon(Icons.check_circle,
+                                size: 16, color: AppColors.success),
+                            SizedBox(width: 6),
+                            Text('Order approved',
+                                style: TextStyle(
+                                    fontWeight: FontWeight.w700,
+                                    color: AppColors.success,
+                                    fontSize: 13)),
+                          ],
+                        ),
+                        const SizedBox(height: 12),
+                        const Divider(height: 1),
+                        const SizedBox(height: 12),
+                        IntrinsicHeight(
+                          child: Row(
+                            children: [
+                              Expanded(
+                                child: _RecoTile(
+                                  icon: Icons.payments_outlined,
+                                  iconColor: AppColors.primary,
+                                  label: 'Total Cost',
+                                  value: hasPrice
+                                      ? 'EGP ${total.toStringAsFixed(2)}'
+                                      : 'Set unit cost in product',
+                                  valueColor: AppColors.primary,
+                                  small: true,
+                                ),
+                              ),
+                              const SizedBox(width: 12),
+                              Expanded(
+                                child: _RecoTile(
+                                  icon: Icons.local_shipping_outlined,
+                                  iconColor: AppColors.info,
+                                  label: 'Expected Receipt',
+                                  value: receiptDateFmt,
+                                  valueColor: AppColors.info,
+                                  small: true,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        if (!hasPrice || _leadTimeDays == 0)
+                          Padding(
+                            padding: const EdgeInsets.only(top: 10),
+                            child: Text(
+                              [
+                                if (!hasPrice)
+                                  '• Set unit cost on this product to calculate total cost.',
+                                if (_leadTimeDays == 0)
+                                  '• Set a lead time to see expected receipt date.',
+                              ].join('\n'),
+                              style: const TextStyle(
+                                  fontSize: 10,
+                                  color: AppColors.textSecondary,
+                                  fontStyle: FontStyle.italic),
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
                 ],
-              ),
+              ],
             ),
-            const SizedBox(height: 20),
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }
 }
 
-class _FormulaResultCard extends StatelessWidget {
+class _RecoTile extends StatelessWidget {
   final IconData icon;
-  final Color color;
-  final String title;
-  final String subtitle;
-  final String result;
-  final String explanation;
+  final Color iconColor;
+  final String label;
+  final String value;
+  final Color valueColor;
+  final bool small;
 
-  const _FormulaResultCard({
+  const _RecoTile({
     required this.icon,
-    required this.color,
-    required this.title,
-    required this.subtitle,
-    required this.result,
-    required this.explanation,
+    required this.iconColor,
+    required this.label,
+    required this.value,
+    required this.valueColor,
+    this.small = false,
   });
 
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.all(14),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
       decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.05),
-        borderRadius: AppRadius.sm,
-        border: Border.all(color: color.withValues(alpha: 0.2)),
+        color: iconColor.withValues(alpha: 0.06),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: iconColor.withValues(alpha: 0.2)),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
             children: [
-              Icon(icon, color: color, size: 16),
-              const SizedBox(width: 6),
-              Text(title, style: AppTextStyles.label.copyWith(fontWeight: FontWeight.w700, color: color)),
+              Icon(icon, size: 13, color: iconColor),
+              const SizedBox(width: 5),
+              Text(label,
+                  style: const TextStyle(
+                      fontSize: 10, color: AppColors.textSecondary)),
             ],
           ),
-          Text(subtitle, style: AppTextStyles.bodySmall.copyWith(color: AppColors.textSubdued, fontSize: 10)),
-          const SizedBox(height: 10),
-          Container(
-            width: double.infinity,
-            padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 10),
-            decoration: BoxDecoration(
-              color: color,
-              borderRadius: BorderRadius.circular(6),
-            ),
-            child: Text(
-              result,
-              style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 16),
-              textAlign: TextAlign.center,
+          const SizedBox(height: 6),
+          Text(
+            value,
+            style: TextStyle(
+              fontSize: small ? 13 : 18,
+              fontWeight: FontWeight.w800,
+              color: valueColor,
             ),
           ),
-          const SizedBox(height: 6),
-          Text(explanation,
-              style: AppTextStyles.bodySmall.copyWith(
-                  color: AppColors.textSubdued, fontSize: 10, fontStyle: FontStyle.italic)),
         ],
       ),
     );
@@ -3078,128 +3088,19 @@ class _RmOrderCta extends StatelessWidget {
 
 class _ReadinessGate extends StatefulWidget {
   final ProductForecastReadiness readiness;
-  final int windowMonths;
-  const _ReadinessGate({required this.readiness, required this.windowMonths});
+  const _ReadinessGate({required this.readiness});
 
   @override
   State<_ReadinessGate> createState() => _ReadinessGateState();
 }
 
 class _ReadinessGateState extends State<_ReadinessGate> {
-  bool _importing = false;
-
   ProductForecastReadiness get readiness => widget.readiness;
 
   Future<void> _openProductEditor({String? hintSku}) async {
     final product = readiness.product;
     if (product == null) return;
     await showProductEditDialog(context, product, hintSku: hintSku);
-  }
-
-  Future<void> _importSalesForProduct() async {
-    final product = readiness.product;
-    if (product == null) return;
-    final state = context.read<AppState>();
-    final messenger = ScaffoldMessenger.of(context);
-
-    if (state.shopifyConnection?.isConnected != true) {
-      // No Shopify — offer to connect, or fall back to the manual demand-data screen.
-      final choice = await showDialog<String>(
-        context: context,
-        builder: (ctx) => AlertDialog(
-          title: const Text('Where should sales data come from?'),
-          content: Text(
-            'To automatically import the last ${widget.windowMonths} months of '
-            'real sales for "${product.name}", connect your Shopify store. '
-            'Otherwise you can enter sales manually or import a CSV.',
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(ctx, 'manual'),
-              child: const Text('Enter manually'),
-            ),
-            ElevatedButton(
-              style: ElevatedButton.styleFrom(
-                backgroundColor: AppColors.primary,
-                foregroundColor: Colors.white,
-              ),
-              onPressed: () => Navigator.pop(ctx, 'shopify'),
-              child: const Text('Connect Shopify'),
-            ),
-          ],
-        ),
-      );
-      if (!mounted) return;
-      if (choice == 'shopify') {
-        context.go('/integrations');
-      } else if (choice == 'manual') {
-        context.go('/demand-data');
-      }
-      return;
-    }
-
-    setState(() => _importing = true);
-    messenger.showSnackBar(SnackBar(
-      content: Text(
-          'Importing last ${widget.windowMonths} months of Shopify sales for "${product.name}"…'),
-      duration: const Duration(seconds: 60),
-    ));
-    try {
-      final importResult = await state.importShopifyOrders();
-      // Count how many records now fall within the requested window for this product.
-      final cutoff = DateTime.now()
-          .subtract(Duration(days: widget.windowMonths * 30));
-      final updated = state.productReadinessForForecast(product.id);
-      final recsForProduct = (state.demandByProduct[product.id] ?? const [])
-          .where((r) => r.periodStart.isAfter(cutoff))
-          .length;
-
-      messenger.clearSnackBars();
-      if (!mounted) return;
-
-      if (recsForProduct > 0) {
-        messenger.showSnackBar(SnackBar(
-          backgroundColor: updated.hasDemandData
-              ? AppColors.success
-              : AppColors.warning,
-          content: Text(
-              '$recsForProduct sales record(s) for "${product.name}" in the last ${widget.windowMonths} months are now available.'),
-          duration: const Duration(seconds: 6),
-        ));
-      } else {
-        // No match for this product — build a helpful diagnostic using the
-        // cloud function's unmatchedSamples list (if any).
-        String? firstMatchingSku;
-        final samples = importResult?['unmatchedSamples'];
-        if (samples is List && samples.isNotEmpty) {
-          final firstSku = (samples.first as Map)['sku']?.toString() ?? '';
-          if (firstSku.isNotEmpty) firstMatchingSku = firstSku;
-        }
-        messenger.showSnackBar(SnackBar(
-          backgroundColor: AppColors.warning,
-          content: Text(
-              'No Shopify sales found for "${product.name}" in the last ${widget.windowMonths} months. Ensure the product SKU matches a variant in your Shopify store.'),
-          duration: const Duration(seconds: 5),
-          action: SnackBarAction(
-            label: 'Edit SKU',
-            textColor: Colors.white,
-            onPressed: () {
-              _openProductEditor(hintSku: firstMatchingSku);
-            },
-          ),
-        ));
-      }
-    } catch (e) {
-      messenger.clearSnackBars();
-      if (!mounted) return;
-      messenger.showSnackBar(SnackBar(
-        backgroundColor: AppColors.error,
-        content: Text('Shopify import failed: $e'),
-        duration: const Duration(seconds: 5),
-      ));
-    } finally {
-      if (mounted) setState(() => _importing = false);
-    }
   }
 
   @override
@@ -3340,24 +3241,7 @@ class _ReadinessGateState extends State<_ReadinessGate> {
                   ),
                 ),
               if (readiness.missing.contains('demandData'))
-                OutlinedButton.icon(
-                  onPressed: _importing ? null : _importSalesForProduct,
-                  icon: _importing
-                      ? const SizedBox(
-                          width: 12,
-                          height: 12,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        )
-                      : const Icon(Icons.cloud_download_outlined, size: 14),
-                  label: Text(_importing
-                      ? 'Importing…'
-                      : 'Import last ${widget.windowMonths} months of sales'),
-                  style: OutlinedButton.styleFrom(
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 10, vertical: 4),
-                    visualDensity: VisualDensity.compact,
-                  ),
-                ),
+                _DemandDataHint(product: readiness.product!),
             ],
           ),
         ],
@@ -3415,6 +3299,500 @@ class _ReadinessGateState extends State<_ReadinessGate> {
       ),
     );
   }
+}
+
+// ── Demand Data Hint ─────────────────────────────────────────────────────────
+// Shown inside the readiness gate when a product has no sales records yet.
+// Replaces the old manual "Import sales" button — sales now sync automatically
+// from Shopify, so this just explains the situation and offers a relevant CTA.
+
+class _DemandDataHint extends StatelessWidget {
+  final Product product;
+  const _DemandDataHint({required this.product});
+
+  String _formatSyncTime(DateTime t) {
+    final diff = DateTime.now().difference(t);
+    if (diff.inSeconds < 60) return 'just now';
+    if (diff.inMinutes < 60) return '${diff.inMinutes} min ago';
+    if (diff.inHours < 24) return '${diff.inHours} h ago';
+    return '${diff.inDays} d ago';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final state = context.watch<AppState>();
+    final connected = state.shopifyConnection?.isConnected == true;
+
+    if (!connected) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              color: AppColors.primaryLight.withValues(alpha: 0.4),
+              borderRadius: BorderRadius.circular(6),
+              border: Border.all(
+                color: AppColors.primary.withValues(alpha: 0.25),
+              ),
+            ),
+            child: const Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Icon(Icons.sync, size: 14, color: AppColors.primary),
+                SizedBox(width: 6),
+                Expanded(
+                  child: Text(
+                    'Connect your Shopify store to sync sales automatically, '
+                    'or add sales manually.',
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: AppColors.textSecondary,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 8),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              OutlinedButton.icon(
+                onPressed: () => context.go('/integrations'),
+                icon: const Icon(Icons.link, size: 14),
+                label: const Text('Connect Shopify'),
+                style: OutlinedButton.styleFrom(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                  visualDensity: VisualDensity.compact,
+                ),
+              ),
+              OutlinedButton.icon(
+                onPressed: () => context.go('/demand-data'),
+                icon: const Icon(Icons.edit_outlined, size: 14),
+                label: const Text('Add sales manually'),
+                style: OutlinedButton.styleFrom(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                  visualDensity: VisualDensity.compact,
+                ),
+              ),
+            ],
+          ),
+        ],
+      );
+    }
+
+    // Connected: show sync status diagnostic so user can see what's happening.
+    final inProgress = state.shopifySyncInProgress;
+    final lastAt = state.lastShopifySyncAt;
+    final lastErr = state.lastShopifySyncError;
+    final lastResult = state.lastShopifySyncResult;
+
+    String statusLine;
+    Color statusColor = AppColors.textSecondary;
+    IconData statusIcon = Icons.sync;
+    if (inProgress) {
+      statusLine = 'Syncing sales from Shopify\u2026';
+      statusIcon = Icons.sync;
+    } else if (lastErr != null) {
+      statusLine = 'Last sync failed: $lastErr';
+      statusColor = Colors.red.shade700;
+      statusIcon = Icons.error_outline;
+    } else if (lastResult != null && lastAt != null) {
+      final r = lastResult['result'] as Map<String, dynamic>? ?? lastResult;
+      final orders = r['totalOrders'] ?? 0;
+      final lines = r['totalLineItems'] ?? 0;
+      final matched = r['matchedLineItems'] ?? 0;
+      final imported = r['newRecordsImported'] ?? 0;
+      statusLine =
+          'Last sync ${_formatSyncTime(lastAt)} \u2014 $orders orders, '
+          '$lines line items, $matched matched, $imported buckets written.';
+      if (orders == 0) {
+        statusLine =
+            'Last sync ${_formatSyncTime(lastAt)} \u2014 Shopify returned '
+            '0 orders. Make sure your store has paid orders.';
+        statusColor = Colors.orange.shade700;
+        statusIcon = Icons.warning_amber_outlined;
+      } else if (matched == 0 && lines > 0) {
+        statusLine =
+            'Last sync ${_formatSyncTime(lastAt)} \u2014 $lines line items '
+            'fetched but 0 matched your products. Check SKUs / product names.';
+        statusColor = Colors.orange.shade700;
+        statusIcon = Icons.warning_amber_outlined;
+      }
+    } else {
+      statusLine = 'No sync has run yet. Tap \u201CSync now\u201D.';
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Container(
+          padding: const EdgeInsets.all(10),
+          decoration: BoxDecoration(
+            color: AppColors.primaryLight.withValues(alpha: 0.4),
+            borderRadius: BorderRadius.circular(6),
+            border: Border.all(
+              color: AppColors.primary.withValues(alpha: 0.25),
+            ),
+          ),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              if (inProgress)
+                const SizedBox(
+                  width: 14,
+                  height: 14,
+                  child: CircularProgressIndicator(
+                      strokeWidth: 2, color: AppColors.primary),
+                )
+              else
+                Icon(statusIcon, size: 14, color: statusColor),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Text(
+                  statusLine,
+                  style: TextStyle(fontSize: 12, color: statusColor),
+                ),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 8),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            OutlinedButton.icon(
+              onPressed: inProgress
+                  ? null
+                  : () async {
+                      final messenger = ScaffoldMessenger.of(context);
+                      final result = await context
+                          .read<AppState>()
+                          .syncShopifyNow();
+                      if (!context.mounted) return;
+                      final r = (result?['result'] as Map<String, dynamic>?) ??
+                          result;
+                      if (r == null) {
+                        messenger.showSnackBar(const SnackBar(
+                          content: Text('Sync failed. See message above.'),
+                          duration: Duration(seconds: 3),
+                        ));
+                      } else {
+                        final orders = r['totalOrders'] ?? 0;
+                        final imported = r['newRecordsImported'] ?? 0;
+                        messenger.showSnackBar(SnackBar(
+                          content: Text(
+                              'Synced $orders Shopify orders \u2014 $imported records written.'),
+                          duration: const Duration(seconds: 3),
+                        ));
+                      }
+                    },
+              icon: const Icon(Icons.sync, size: 14),
+              label: Text(inProgress ? 'Syncing\u2026' : 'Sync now'),
+              style: OutlinedButton.styleFrom(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                visualDensity: VisualDensity.compact,
+              ),
+            ),
+            OutlinedButton.icon(
+              onPressed: () => context.go('/demand-data'),
+              icon: const Icon(Icons.edit_outlined, size: 14),
+              label: const Text('Add sales manually'),
+              style: OutlinedButton.styleFrom(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                visualDensity: VisualDensity.compact,
+              ),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+}
+
+// ── Momentum Window Picker ───────────────────────────────────────────────────
+// Lets the user choose how many recent months of sales should drive the
+// velocity estimate. "How fast did this product sell over the chosen period?"
+// drives the production recommendation.
+
+class _MomentumWindowPicker extends StatelessWidget {
+  final int months;
+  final ValueChanged<int> onChanged;
+  final int availableMonths;
+  const _MomentumWindowPicker({
+    required this.months,
+    required this.onChanged,
+    required this.availableMonths,
+  });
+
+  static const _presets = <_MomentumPreset>[
+    _MomentumPreset(label: 'Last 1 mo', months: 1),
+    _MomentumPreset(label: 'Last 3 mo', months: 3),
+    _MomentumPreset(label: 'Last 6 mo', months: 6),
+    _MomentumPreset(label: 'Last 12 mo', months: 12),
+  ];
+
+  Future<void> _editCustom(BuildContext context) async {
+    final controller = TextEditingController(text: months.toString());
+    final result = await showDialog<int>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Custom sales window'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+                'How many months of past sales should we use to measure how fast this product sells?',
+                style: TextStyle(fontSize: 13)),
+            const SizedBox(height: 12),
+            TextField(
+              controller: controller,
+              keyboardType: TextInputType.number,
+              decoration: const InputDecoration(
+                labelText: 'Months',
+                border: OutlineInputBorder(),
+                isDense: true,
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+          FilledButton(
+            onPressed: () {
+              final v = int.tryParse(controller.text.trim());
+              if (v != null && v > 0) Navigator.pop(ctx, v);
+            },
+            child: const Text('Apply'),
+          ),
+        ],
+      ),
+    );
+    if (result != null) onChanged(result);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final isPreset = _presets.any((p) => p.months == months);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Text('Sales Window',
+                style: AppTextStyles.label
+                    .copyWith(fontWeight: FontWeight.w600)),
+            const SizedBox(width: 6),
+            Tooltip(
+              message:
+                  'How many recent months of sales we use to measure how '
+                  'fast this product sells. The recommended production amount '
+                  'will match this momentum over your chosen coverage period.',
+              child: Icon(Icons.info_outline,
+                  size: 14, color: Colors.grey.shade600),
+            ),
+          ],
+        ),
+        const SizedBox(height: 6),
+        Text(
+          availableMonths == 0
+              ? 'No sales data yet for this product.'
+              : 'You have $availableMonths month${availableMonths == 1 ? '' : 's'} of sales available.',
+          style: const TextStyle(fontSize: 11, color: AppColors.textSecondary),
+        ),
+        const SizedBox(height: 10),
+        Wrap(
+          spacing: 6,
+          runSpacing: 6,
+          children: [
+            ..._presets.map((p) {
+              final selected = p.months == months;
+              return ChoiceChip(
+                label: Text(p.label, style: const TextStyle(fontSize: 12)),
+                selected: selected,
+                onSelected: (_) => onChanged(p.months),
+                selectedColor: AppColors.primary.withValues(alpha: 0.18),
+                labelStyle: TextStyle(
+                  color: selected ? AppColors.primary : AppColors.textPrimary,
+                  fontWeight:
+                      selected ? FontWeight.w600 : FontWeight.normal,
+                ),
+                visualDensity: VisualDensity.compact,
+                materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              );
+            }),
+            ChoiceChip(
+              label: Text(
+                isPreset ? 'Custom…' : 'Custom: $months mo',
+                style: const TextStyle(fontSize: 12),
+              ),
+              selected: !isPreset,
+              onSelected: (_) => _editCustom(context),
+              selectedColor: AppColors.primary.withValues(alpha: 0.18),
+              labelStyle: TextStyle(
+                color: !isPreset ? AppColors.primary : AppColors.textPrimary,
+                fontWeight:
+                    !isPreset ? FontWeight.w600 : FontWeight.normal,
+              ),
+              visualDensity: VisualDensity.compact,
+              materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+}
+
+class _MomentumPreset {
+  final String label;
+  final int months;
+  const _MomentumPreset({required this.label, required this.months});
+}
+
+// ── Past Sales Summary Card ──────────────────────────────────────────────────
+// Shows a mini bar chart + total units + average per month for the selected
+// momentum window. Lets the user verify how the product actually sold during
+// the chosen period before trusting the production recommendation.
+
+class _PastSalesSummaryCard extends StatelessWidget {
+  final String productId;
+  final int windowMonths;
+  final AppState state;
+  const _PastSalesSummaryCard({
+    required this.productId,
+    required this.windowMonths,
+    required this.state,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final all = state.demandByProduct[productId] ?? [];
+    if (all.isEmpty) return const SizedBox.shrink();
+
+    final sorted = [...all]
+      ..sort((a, b) => a.periodStart.compareTo(b.periodStart));
+    final window = sorted.length > windowMonths
+        ? sorted.sublist(sorted.length - windowMonths)
+        : sorted;
+    if (window.isEmpty) return const SizedBox.shrink();
+
+    final total = window.fold<int>(0, (s, r) => s + r.quantity);
+    final avgPerMonth = total / window.length;
+    final fmt = DateFormat('MMM yy');
+
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: Colors.grey.shade300),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.show_chart, size: 16, color: AppColors.primary),
+              const SizedBox(width: 6),
+              Text(
+                'Past Sales — Last ${window.length} month${window.length == 1 ? '' : 's'}',
+                style: AppTextStyles.label
+                    .copyWith(fontWeight: FontWeight.w700, fontSize: 13),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              _miniStat('Total sold', '$total units'),
+              const SizedBox(width: 20),
+              _miniStat(
+                  'Average / month', '${avgPerMonth.toStringAsFixed(1)} units'),
+              const SizedBox(width: 20),
+              _miniStat('Months observed', '${window.length}'),
+            ],
+          ),
+          const SizedBox(height: 16),
+          SizedBox(
+            height: 120,
+            child: BarChart(
+              BarChartData(
+                alignment: BarChartAlignment.spaceAround,
+                maxY: window
+                        .map((r) => r.quantity.toDouble())
+                        .reduce((a, b) => a > b ? a : b) *
+                    1.2,
+                barGroups: [
+                  for (var i = 0; i < window.length; i++)
+                    BarChartGroupData(x: i, barRods: [
+                      BarChartRodData(
+                        toY: window[i].quantity.toDouble(),
+                        color: AppColors.primary,
+                        width: 14,
+                        borderRadius:
+                            const BorderRadius.vertical(top: Radius.circular(3)),
+                      ),
+                    ]),
+                ],
+                gridData: const FlGridData(show: false),
+                borderData: FlBorderData(show: false),
+                titlesData: FlTitlesData(
+                  topTitles: const AxisTitles(
+                      sideTitles: SideTitles(showTitles: false)),
+                  rightTitles: const AxisTitles(
+                      sideTitles: SideTitles(showTitles: false)),
+                  leftTitles: const AxisTitles(
+                      sideTitles: SideTitles(showTitles: false)),
+                  bottomTitles: AxisTitles(
+                    sideTitles: SideTitles(
+                      showTitles: true,
+                      reservedSize: 22,
+                      getTitlesWidget: (v, meta) {
+                        final i = v.toInt();
+                        if (i < 0 || i >= window.length) {
+                          return const SizedBox.shrink();
+                        }
+                        return Padding(
+                          padding: const EdgeInsets.only(top: 4),
+                          child: Text(fmt.format(window[i].periodStart),
+                              style: const TextStyle(fontSize: 9)),
+                        );
+                      },
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _miniStat(String label, String value) => Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(label,
+              style: const TextStyle(
+                  fontSize: 10, color: AppColors.textSecondary)),
+          const SizedBox(height: 2),
+          Text(value,
+              style: const TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w700,
+                  color: AppColors.textPrimary)),
+        ],
+      );
 }
 
 // ── Order Email Actions ──────────────────────────────────────────────────────

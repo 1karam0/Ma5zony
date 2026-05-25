@@ -1,5 +1,8 @@
+import 'dart:ui';
+
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
+import 'package:google_fonts/google_fonts.dart';
 import 'package:ma5zony/utils/constants.dart';
 
 /// Breadcrumb navigation row for detail screens.
@@ -140,6 +143,7 @@ class KPICard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final accent = isAlert ? AppColors.error : color;
     return Card(
       elevation: 0,
       shape: RoundedRectangleBorder(
@@ -149,7 +153,13 @@ class KPICard extends StatelessWidget {
       clipBehavior: Clip.antiAlias,
       child: InkWell(
         onTap: onTap,
-        child: Padding(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            // Finance-app style top accent stripe — gives the card visual
+            // identity and lets the user scan colour-coded KPIs at a glance.
+            Container(height: 3, color: accent.withValues(alpha: 0.85)),
+            Padding(
         padding: const EdgeInsets.all(16.0),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -162,13 +172,12 @@ class KPICard extends StatelessWidget {
                   width: 36,
                   height: 36,
                   decoration: BoxDecoration(
-                    color: (isAlert ? AppColors.error : color)
-                        .withValues(alpha: 0.1),
+                    color: accent.withValues(alpha: 0.1),
                     borderRadius: BorderRadius.circular(8),
                   ),
                   child: Icon(
                     icon,
-                    color: isAlert ? AppColors.error : color,
+                    color: accent,
                     size: 20,
                   ),
                 ),
@@ -183,22 +192,32 @@ class KPICard extends StatelessWidget {
                   ),
               ],
             ),
-            const SizedBox(height: 12),
+            const SizedBox(height: 14),
             Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
                   value,
-                  style: AppTextStyles.h2.copyWith(
+                  style: GoogleFonts.inter(
+                    fontSize: 26,
+                    fontWeight: FontWeight.w700,
+                    height: 1.1,
+                    letterSpacing: -0.5,
                     color: isAlert ? AppColors.error : AppColors.textPrimary,
-                    fontWeight: FontWeight.bold,
+                    fontFeatures: const [FontFeature.tabularFigures()],
                   ),
                 ),
-                const SizedBox(height: 2),
+                const SizedBox(height: 4),
                 Row(
                   children: [
                     Expanded(
-                      child: Text(title, style: AppTextStyles.label),
+                      child: Text(
+                        title,
+                        style: AppTextStyles.label.copyWith(
+                          fontSize: 12,
+                          color: AppColors.textSecondary,
+                        ),
+                      ),
                     ),
                     if (trend != null) _TrendBadge(trend: trend!, isGood: trendIsGood),
                   ],
@@ -212,6 +231,8 @@ class KPICard extends StatelessWidget {
           ],
         ),
       ),
+          ],
+        ),
       ),
     );
   }

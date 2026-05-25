@@ -1,10 +1,12 @@
 import 'package:flutter/material.dart';
+import 'package:go_router/go_router.dart';
 import 'package:provider/provider.dart';
 import 'package:ma5zony/models/bill_of_materials.dart';
 import 'package:ma5zony/providers/app_state.dart';
 import 'package:ma5zony/utils/constants.dart';
 import 'package:ma5zony/widgets/shared_widgets.dart';
 import 'package:ma5zony/widgets/zoho_patterns.dart';
+import 'package:ma5zony/features/onboarding/tour_targets.dart';
 
 const _kUomOptions = ['units', 'g', 'kg', 'm', 'cm', 'L', 'mL', 'pcs'];
 
@@ -34,19 +36,86 @@ class _BomScreenState extends State<BomScreen> {
           SectionHeader(
             title: 'Bill of Materials',
             actions: [
-              ElevatedButton.icon(
-                icon: const Icon(Icons.add, size: 18),
-                label: const Text('Add BOM'),
-                onPressed: () => _showFormDialog(context, state),
+              KeyedSubtree(
+                key: TourTargets.instance.keyFor('page:bom.add'),
+                child: ElevatedButton.icon(
+                  icon: const Icon(Icons.add, size: 18),
+                  label: const Text('Add BOM'),
+                  onPressed: () => _showFormDialog(context, state),
+                ),
               ),
             ],
           ),
           const SizedBox(height: 8),
+          // Products that come directly from a supplier — shown as a
+          // read-only summary. They don't need a BOM.
+          () {
+            final supplierProducts = state.products
+                .where((p) =>
+                    (p.manufacturerId == null || p.manufacturerId!.isEmpty) &&
+                    p.supplierId != null &&
+                    p.supplierId!.isNotEmpty)
+                .toList();
+            if (supplierProducts.isEmpty) return const SizedBox.shrink();
+            return Padding(
+              padding: const EdgeInsets.only(bottom: 16),
+              child: Container(
+                padding: const EdgeInsets.all(14),
+                decoration: BoxDecoration(
+                  color: AppColors.infoBg.withValues(alpha: 0.4),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(
+                      color: AppColors.info.withValues(alpha: 0.3)),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        const Icon(Icons.local_shipping_outlined,
+                            size: 16, color: AppColors.info),
+                        const SizedBox(width: 8),
+                        Text(
+                          'Supplier-sourced products (no BOM needed)',
+                          style: AppTextStyles.body
+                              .copyWith(fontWeight: FontWeight.w600, color: AppColors.info),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      'These products arrive as finished goods from your supplier. '  
+                      'No raw materials or manufacturing step — just set a unit cost and link a supplier.',
+                      style: AppTextStyles.bodySmall
+                          .copyWith(color: AppColors.textSecondary),
+                    ),
+                    const SizedBox(height: 10),
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 6,
+                      children: supplierProducts
+                          .map((p) => Chip(
+                                avatar: const Icon(
+                                    Icons.check_circle_outline,
+                                    size: 14,
+                                    color: AppColors.info),
+                                label: Text(p.name,
+                                    style: AppTextStyles.bodySmall),
+                                backgroundColor:
+                                    AppColors.surface,
+                              ))
+                          .toList(),
+                    ),
+                  ],
+                ),
+              ),
+            );
+          }(),
           if (state.boms.isEmpty)
             EmptyStateWidget(
               icon: Icons.account_tree_outlined,
               title: 'No Bills of Materials yet',
-              description: 'Create BOMs to define the raw materials needed for each product.',
+              description: 'Create BOMs to define the raw materials needed for each manufactured product.',
               primaryLabel: 'Add BOM',
               onPrimary: () => _showFormDialog(context, state),
             )
@@ -275,6 +344,40 @@ class _ActiveBadge extends StatelessWidget {
 
 // ─── BOM Form Dialog ──────────────────────────────────────────────────────────
 
+class _SourcingBadge extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final Color color;
+  final Color bg;
+  const _SourcingBadge(
+      {required this.icon,
+      required this.label,
+      required this.color,
+      required this.bg});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      decoration: BoxDecoration(
+        color: bg,
+        borderRadius: BorderRadius.circular(6),
+        border: Border.all(color: color.withValues(alpha: 0.35)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 13, color: color),
+          const SizedBox(width: 5),
+          Text(label,
+              style: TextStyle(
+                  fontSize: 11, fontWeight: FontWeight.w600, color: color)),
+        ],
+      ),
+    );
+  }
+}
+
 class _BomFormDialog extends StatefulWidget {
   final AppState state;
   final BillOfMaterials? existing;
@@ -288,7 +391,9 @@ class _BomFormDialog extends StatefulWidget {
 class _BomFormDialogState extends State<_BomFormDialog> {
   final _formKey = GlobalKey<FormState>();
   String? _productId;
-  final List<_MaterialLine> _lines = [];
+  /// One row per raw material — initialised in initState once we have access
+  /// to widget.state.rawMaterials.
+  late List<_MaterialLine> _lines;
   bool _saving = false;
 
   bool get _isEdit => widget.existing != null;
@@ -296,19 +401,28 @@ class _BomFormDialogState extends State<_BomFormDialog> {
   @override
   void initState() {
     super.initState();
-    if (_isEdit) {
-      _productId = widget.existing!.finalProductId;
-      for (final m in widget.existing!.materials) {
-        final uom = _kUomOptions.contains(m.unitOfMeasure)
-            ? m.unitOfMeasure
-            : 'units';
-        _lines.add(_MaterialLine(
-          materialId: m.rawMaterialId,
-          qtyCtrl: TextEditingController(text: '${m.quantityPerUnit}'),
-          uom: uom,
-        ));
-      }
-    }
+    _productId = widget.existing?.finalProductId;
+
+    // Build one row for every raw material, pre-ticking those that are
+    // already in the BOM (edit mode) and prefilling their qty/uom.
+    final existingByMaterialId = <String, BomMaterial>{
+      if (widget.existing != null)
+        for (final m in widget.existing!.materials) m.rawMaterialId: m,
+    };
+    _lines = widget.state.rawMaterials.map((rm) {
+      final existing = existingByMaterialId[rm.id];
+      final uom = existing != null && _kUomOptions.contains(existing.unitOfMeasure)
+          ? existing.unitOfMeasure
+          : 'units';
+      return _MaterialLine(
+        materialId: rm.id,
+        materialName: rm.name,
+        included: existing != null,
+        qtyCtrl: TextEditingController(
+            text: existing != null ? '${existing.quantityPerUnit}' : '1'),
+        uom: uom,
+      );
+    }).toList();
   }
 
   @override
@@ -322,7 +436,6 @@ class _BomFormDialogState extends State<_BomFormDialog> {
   @override
   Widget build(BuildContext context) {
     final products = widget.state.products;
-    final rawMaterials = widget.state.rawMaterials;
     return AlertDialog(
       titlePadding: const EdgeInsets.fromLTRB(24, 20, 24, 0),
       contentPadding: const EdgeInsets.fromLTRB(24, 16, 24, 0),
@@ -371,111 +484,284 @@ class _BomFormDialogState extends State<_BomFormDialog> {
               children: [
                 ZohoFormSection(
                   title: 'Final Product',
-                  subtitle: 'Pick the manufactured product this recipe builds.',
+                  subtitle: 'Only manufactured products are shown here. Supplier-sourced products (like grips) arrive ready-made and don\'t need a BOM.',
                   children: [
-                    DropdownButtonFormField<String>(
-                      initialValue: _productId,
-                      decoration: const InputDecoration(
-                          labelText: 'Final Product *'),
-                      items: products
-                          .map((p) => DropdownMenuItem(
-                              value: p.id, child: Text(p.name)))
-                          .toList(),
-                      onChanged: (v) => setState(() => _productId = v),
-                      validator: (v) =>
-                          v == null || v.isEmpty ? 'Select a product' : null,
+                    // Sourcing-route legend
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 12),
+                      child: Row(
+                        children: [
+                          _SourcingBadge(
+                            icon: Icons.precision_manufacturing_outlined,
+                            label: 'Manufactured',
+                            color: AppColors.primary,
+                            bg: AppColors.primaryLight,
+                          ),
+                          const SizedBox(width: 8),
+                          const Icon(Icons.arrow_forward,
+                              size: 14, color: AppColors.textSubdued),
+                          const SizedBox(width: 8),
+                          Text('needs BOM + raw materials',
+                              style: AppTextStyles.bodySmall
+                                  .copyWith(color: AppColors.textSecondary)),
+                          const SizedBox(width: 20),
+                          _SourcingBadge(
+                            icon: Icons.local_shipping_outlined,
+                            label: 'From supplier',
+                            color: AppColors.info,
+                            bg: AppColors.infoBg,
+                          ),
+                          const SizedBox(width: 8),
+                          const Icon(Icons.arrow_forward,
+                              size: 14, color: AppColors.textSubdued),
+                          const SizedBox(width: 8),
+                          Text('no BOM needed',
+                              style: AppTextStyles.bodySmall
+                                  .copyWith(color: AppColors.textSecondary)),
+                        ],
+                      ),
                     ),
+                    () {
+                      // Only manufactured products belong in a BOM.
+                      final mfgProducts = products
+                          .where((p) =>
+                              p.manufacturerId != null &&
+                              p.manufacturerId!.isNotEmpty)
+                          .toList();
+                      if (mfgProducts.isEmpty) {
+                        return Container(
+                          padding: const EdgeInsets.all(12),
+                          decoration: BoxDecoration(
+                            color: AppColors.warningBg,
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(
+                                color: AppColors.warning
+                                    .withValues(alpha: 0.4)),
+                          ),
+                          child: Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const Icon(Icons.warning_amber_rounded,
+                                  size: 16, color: AppColors.warning),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      'No manufactured products found. Set a Manufacturer on the products that go through production.',
+                                      style: AppTextStyles.bodySmall,
+                                    ),
+                                    const SizedBox(height: 8),
+                                    TextButton.icon(
+                                      onPressed: () {
+                                        Navigator.pop(context);
+                                        context.go('/products');
+                                      },
+                                      icon: const Icon(
+                                          Icons.open_in_new,
+                                          size: 14),
+                                      label: const Text('Go to Products'),
+                                      style: TextButton.styleFrom(
+                                        padding: EdgeInsets.zero,
+                                        minimumSize: Size.zero,
+                                        tapTargetSize:
+                                            MaterialTapTargetSize.shrinkWrap,
+                                        foregroundColor: AppColors.primary,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          ),
+                        );
+                      }
+                      return DropdownButtonFormField<String>(
+                        initialValue: _productId,
+                        decoration: const InputDecoration(
+                            labelText: 'Final Product *'),
+                        items: mfgProducts
+                            .map((p) => DropdownMenuItem(
+                                  value: p.id,
+                                  child: Row(
+                                    children: [
+                                      const Icon(
+                                          Icons
+                                              .precision_manufacturing_outlined,
+                                          size: 14,
+                                          color: AppColors.primary),
+                                      const SizedBox(width: 8),
+                                      Text(p.name),
+                                    ],
+                                  ),
+                                ))
+                            .toList(),
+                        onChanged: _isEdit
+                            ? null // can't change product on existing BOM
+                            : (v) => setState(() => _productId = v),
+                        validator: (v) =>
+                            v == null || v.isEmpty ? 'Select a product' : null,
+                      );
+                    }(),
                   ],
                 ),
                 ZohoFormSection(
                   title: 'Materials',
-                  subtitle:
-                      'Quantity per unit + unit of measure. Used to generate raw-material orders.',
+                  subtitle: 'Tick every raw material this product needs. '  
+                      'Fill in how much of each is used per unit produced.',
                   children: [
-                    ..._lines.asMap().entries.map((entry) {
-                      final i = entry.key;
-                      final line = entry.value;
-                      return Padding(
-                        padding: const EdgeInsets.only(bottom: 8),
+                    if (_lines.isEmpty)
+                      Container(
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: AppColors.warningBg,
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(
+                              color: AppColors.warning.withValues(alpha: 0.4)),
+                        ),
                         child: Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Expanded(
-                              flex: 3,
-                              child: DropdownButtonFormField<String>(
-                                initialValue: line.materialId,
-                                decoration: const InputDecoration(
-                                    labelText: 'Material', isDense: true),
-                                items: rawMaterials
-                                    .map((m) => DropdownMenuItem(
-                                        value: m.id, child: Text(m.name)))
-                                    .toList(),
-                                onChanged: (v) =>
-                                    setState(() => line.materialId = v),
-                                validator: (v) =>
-                                    v == null ? 'Required' : null,
-                              ),
-                            ),
+                            const Icon(Icons.warning_amber_rounded,
+                                size: 16, color: AppColors.warning),
                             const SizedBox(width: 8),
                             Expanded(
-                              flex: 2,
-                              child: TextFormField(
-                                controller: line.qtyCtrl,
-                                decoration: const InputDecoration(
-                                    labelText: 'Qty/Unit', isDense: true),
-                                keyboardType: TextInputType.number,
-                                validator: (v) {
-                                  if (v == null || v.isEmpty) return 'Required';
-                                  if (double.tryParse(v) == null) {
-                                    return 'Invalid';
-                                  }
-                                  return null;
-                                },
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  const Text(
+                                    'No raw materials added yet. Add the materials this product is built from.',
+                                  ),
+                                  const SizedBox(height: 8),
+                                  TextButton.icon(
+                                    onPressed: () {
+                                      Navigator.pop(context);
+                                      context.go('/raw-materials');
+                                    },
+                                    icon: const Icon(
+                                        Icons.open_in_new,
+                                        size: 14),
+                                    label: const Text('Go to Raw Materials'),
+                                    style: TextButton.styleFrom(
+                                      padding: EdgeInsets.zero,
+                                      minimumSize: Size.zero,
+                                      tapTargetSize:
+                                          MaterialTapTargetSize.shrinkWrap,
+                                      foregroundColor: AppColors.primary,
+                                    ),
+                                  ),
+                                ],
                               ),
+                            ),
+                          ],
+                        ),
+                      )
+                    else ...[  
+                      // Column headers
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 4),
+                        child: Row(
+                          children: [
+                            const SizedBox(width: 44), // checkbox col
+                            Expanded(
+                              flex: 4,
+                              child: Text('MATERIAL',
+                                  style: AppTextStyles.tableHeader),
+                            ),
+                            SizedBox(
+                              width: 100,
+                              child: Text('QTY / UNIT',
+                                  style: AppTextStyles.tableHeader),
                             ),
                             const SizedBox(width: 8),
                             SizedBox(
                               width: 90,
-                              child: DropdownButtonFormField<String>(
-                                initialValue: line.uom,
-                                decoration: const InputDecoration(
-                                    labelText: 'UoM', isDense: true),
-                                items: _kUomOptions
-                                    .map((u) => DropdownMenuItem(
-                                        value: u, child: Text(u)))
-                                    .toList(),
-                                onChanged: (v) =>
-                                    setState(() => line.uom = v ?? 'units'),
-                              ),
-                            ),
-                            IconButton(
-                              tooltip: 'Remove material',
-                              icon: const Icon(Icons.remove_circle_outline,
-                                  color: AppColors.error),
-                              onPressed: () =>
-                                  setState(() => _lines.removeAt(i)),
+                              child: Text('UoM',
+                                  style: AppTextStyles.tableHeader),
                             ),
                           ],
                         ),
-                      );
-                    }),
-                    if (_lines.isEmpty)
+                      ),
+                      const Divider(height: 1),
+                      // One row per raw material
+                      ..._lines.map((line) {
+                        return Padding(
+                          padding:
+                              const EdgeInsets.symmetric(vertical: 6),
+                          child: Row(
+                            crossAxisAlignment: CrossAxisAlignment.center,
+                            children: [
+                              SizedBox(
+                                width: 44,
+                                child: Checkbox(
+                                  value: line.included,
+                                  onChanged: (v) => setState(
+                                      () => line.included = v ?? false),
+                                ),
+                              ),
+                              Expanded(
+                                flex: 4,
+                                child: Text(
+                                  line.materialName,
+                                  style: AppTextStyles.tableCell.copyWith(
+                                    color: line.included
+                                        ? AppColors.textPrimary
+                                        : AppColors.textSubdued,
+                                  ),
+                                ),
+                              ),
+                              SizedBox(
+                                width: 100,
+                                child: TextFormField(
+                                  controller: line.qtyCtrl,
+                                  enabled: line.included,
+                                  decoration: const InputDecoration(
+                                      isDense: true,
+                                      hintText: '0'),
+                                  keyboardType: TextInputType.number,
+                                  validator: (v) {
+                                    if (!line.included) return null;
+                                    if (v == null || v.isEmpty) {
+                                      return 'Required';
+                                    }
+                                    if ((double.tryParse(v) ?? 0) <= 0) {
+                                      return '> 0';
+                                    }
+                                    return null;
+                                  },
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              SizedBox(
+                                width: 90,
+                                child: DropdownButtonFormField<String>(
+                                  value: line.uom,
+                                  decoration: const InputDecoration(
+                                      isDense: true),
+                                  items: _kUomOptions
+                                      .map((u) => DropdownMenuItem(
+                                          value: u, child: Text(u)))
+                                      .toList(),
+                                  onChanged: line.included
+                                      ? (v) => setState(
+                                          () => line.uom = v ?? 'units')
+                                      : null,
+                                ),
+                              ),
+                            ],
+                          ),
+                        );
+                      }),
                       Padding(
-                        padding: const EdgeInsets.symmetric(vertical: 8),
+                        padding: const EdgeInsets.only(top: 6),
                         child: Text(
-                          'No materials yet. Add one below.',
+                          '${_lines.where((l) => l.included).length} of ${_lines.length} material(s) included',
                           style: AppTextStyles.bodySmall
                               .copyWith(color: AppColors.textSecondary),
                         ),
                       ),
-                    Align(
-                      alignment: Alignment.centerLeft,
-                      child: TextButton.icon(
-                        icon: const Icon(Icons.add, size: 18),
-                        label: const Text('Add Material Line'),
-                        onPressed: () => setState(() => _lines.add(_MaterialLine(
-                            qtyCtrl: TextEditingController(text: '1')))),
-                      ),
-                    ),
+                    ],
                   ],
                 ),
               ],
@@ -510,9 +796,12 @@ class _BomFormDialogState extends State<_BomFormDialog> {
 
   Future<void> _save() async {
     if (!_formKey.currentState!.validate()) return;
-    if (_lines.isEmpty) {
+    final included = _lines.where((l) => l.included).toList();
+    if (included.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Add at least one material'), duration: Duration(seconds: 3)),
+        const SnackBar(
+            content: Text('Tick at least one material'),
+            duration: Duration(seconds: 3)),
       );
       return;
     }
@@ -522,9 +811,9 @@ class _BomFormDialogState extends State<_BomFormDialog> {
         id: widget.existing?.id ?? '',
         finalProductId: _productId!,
         isActive: widget.existing?.isActive ?? true,
-        materials: _lines
+        materials: included
             .map((l) => BomMaterial(
-                  rawMaterialId: l.materialId!,
+                  rawMaterialId: l.materialId,
                   quantityPerUnit: double.parse(l.qtyCtrl.text.trim()),
                   unitOfMeasure: l.uom,
                 ))
@@ -538,13 +827,17 @@ class _BomFormDialogState extends State<_BomFormDialog> {
       if (mounted) {
         Navigator.pop(context);
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(duration: const Duration(seconds: 3), content: Text(_isEdit ? 'BOM updated' : 'BOM created')),
+          SnackBar(
+              duration: const Duration(seconds: 3),
+              content: Text(_isEdit ? 'BOM updated' : 'BOM created')),
         );
       }
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(duration: const Duration(seconds: 3), content: Text('Error: $e')),
+          SnackBar(
+              duration: const Duration(seconds: 3),
+              content: Text('Error: $e')),
         );
       }
     } finally {
@@ -553,10 +846,20 @@ class _BomFormDialogState extends State<_BomFormDialog> {
   }
 }
 
+/// One row in the bulk-checklist. Exists for every raw material.
+/// [included] = ticked by the user; only ticked rows are saved to the BOM.
 class _MaterialLine {
-  String? materialId;
+  final String materialId;
+  final String materialName;
+  bool included;
   final TextEditingController qtyCtrl;
   String uom;
 
-  _MaterialLine({this.materialId, required this.qtyCtrl, this.uom = 'units'});
+  _MaterialLine({
+    required this.materialId,
+    required this.materialName,
+    this.included = false,
+    required this.qtyCtrl,
+    this.uom = 'units',
+  });
 }

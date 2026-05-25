@@ -240,6 +240,38 @@ class AppTextStyles {
         letterSpacing: -0.3,
       );
 
+  // ── Numeric metric styles (Inter w/ tabular figures) ────────────────────
+  /// Hero-sized metric number (dashboard hero, big KPI). Inter sans, bold,
+  /// tabular figures so commas/digits stay aligned across rows.
+  static TextStyle get metricXl => GoogleFonts.inter(
+        fontSize: 38,
+        fontWeight: FontWeight.w700,
+        color: AppColors.textPrimary,
+        height: 1.05,
+        letterSpacing: -0.8,
+        fontFeatures: const [FontFeature.tabularFigures()],
+      );
+
+  /// Sub-metric strip values (hero footer, secondary numbers).
+  static TextStyle get metricMd => GoogleFonts.inter(
+        fontSize: 18,
+        fontWeight: FontWeight.w600,
+        color: AppColors.textPrimary,
+        height: 1.2,
+        letterSpacing: -0.2,
+        fontFeatures: const [FontFeature.tabularFigures()],
+      );
+
+  /// Inline currency / unit suffix paired with a metric number.
+  static TextStyle get metricSuffix => GoogleFonts.inter(
+        fontSize: 13,
+        fontWeight: FontWeight.w500,
+        color: AppColors.textSubdued,
+        height: 1.2,
+        letterSpacing: 0.2,
+        fontFeatures: const [FontFeature.tabularFigures()],
+      );
+
   /// Tabular monospace for SKUs, IDs, counts, timestamps.
   static TextStyle get mono => GoogleFonts.jetBrainsMono(
         fontSize: 13,
