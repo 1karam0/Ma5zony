@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 
@@ -24,9 +25,11 @@ class SpotlightStep {
   /// step. Use this to detect that the user has fulfilled the task (e.g. a
   /// supplier was added, a product was created).
   ///
-  /// The predicate is called every ~400ms with the BuildContext used to start
-  /// the coach. Keep it cheap (no I/O) — just check Provider state.
-  final bool Function(BuildContext context)? completeWhen;
+  /// The predicate is called every ~400ms. Keep it cheap (no I/O) — just
+  /// check a captured state reference. Use a closure that captures AppState
+  /// (or any other object) at tour-start time rather than reading from a
+  /// BuildContext, so navigation between routes cannot invalidate it.
+  final bool Function()? completeWhen;
 
   const SpotlightStep({
     required this.anchorId,
@@ -55,7 +58,11 @@ class SpotlightCoach {
   }) async {
     if (steps.isEmpty) return;
     final overlay = Overlay.of(context, rootOverlay: true);
-    final rootContext = context;
+    // Capture the root NavigatorState early (before any route changes).
+    // This stays valid for the app lifetime and lets us dismiss open
+    // dialogs/bottom-sheets before each inter-route navigation so they
+    // don't bleed through to the next step's page.
+    final navigator = Navigator.of(context, rootNavigator: true);
 
     int index = 0;
     late OverlayEntry entry;
@@ -90,9 +97,16 @@ class SpotlightCoach {
       final step = steps[next];
       // Navigate first if requested.
       if (step.navigateTo != null) {
+        // Dismiss any open dialog / bottom-sheet before changing route.
+        // showDialog() pushes a route onto the root navigator that GoRouter's
+        // go() does NOT automatically pop, causing dialogs to bleed into
+        // the next step's page. A single pop() closes the topmost dialog.
+        try {
+          if (navigator.canPop()) navigator.pop();
+        } catch (_) {}
         onNavigate(step.navigateTo!);
-        // Give the target screen 2 frames to mount and lay out.
-        await Future<void>.delayed(const Duration(milliseconds: 350));
+        // Give the target screen time to mount and lay out its widgets.
+        await Future<void>.delayed(const Duration(milliseconds: 700));
       }
       if (removed) return;
       index = next;
@@ -100,20 +114,20 @@ class SpotlightCoach {
 
       // Poll the success predicate so the tour auto-advances the moment the
       // user fulfills the task (e.g. adds a supplier, creates a product).
-      if (step.completeWhen != null) {
+      // NOTE: predicates are plain closures that capture AppState directly —
+      // no BuildContext involved — so GoRouter navigation (which disposes the
+      // originating route's context) cannot kill the timer.
+      //
+      // We only start polling when the condition is NOT already satisfied.
+      // This prevents instant-skip on accounts that already have data (e.g.
+      // replaying the tour on an existing account that already has suppliers).
+      if (step.completeWhen != null && !step.completeWhen!()) {
         pollTimer = Timer.periodic(const Duration(milliseconds: 400), (_) {
           if (removed) return;
-          if (!rootContext.mounted) {
-            safeRemove();
-            return;
-          }
           try {
-            if (step.completeWhen!(rootContext)) {
-              goToStep(index + 1);
-            }
+            if (step.completeWhen!()) goToStep(index + 1);
           } catch (_) {
-            // Predicate threw (e.g. provider not yet wired). Ignore — try
-            // again on the next tick.
+            // Predicate threw unexpectedly. Ignore — retry on next tick.
           }
         });
       }
@@ -147,7 +161,7 @@ class SpotlightCoach {
   }
 }
 
-class _SpotlightLayer extends StatelessWidget {
+class _SpotlightLayer extends StatefulWidget {
   final SpotlightStep step;
   final Rect? targetRect;
   final int stepIndex;
@@ -165,191 +179,230 @@ class _SpotlightLayer extends StatelessWidget {
   });
 
   @override
+  State<_SpotlightLayer> createState() => _SpotlightLayerState();
+}
+
+class _SpotlightLayerState extends State<_SpotlightLayer> {
+  // User-applied drag delta from the drag handle. Reset to zero whenever the
+  // step index changes so the card snaps to the new step's best corner.
+  Offset _dragOffset = Offset.zero;
+
+  @override
+  void didUpdateWidget(covariant _SpotlightLayer oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.stepIndex != widget.stepIndex) {
+      _dragOffset = Offset.zero;
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
     final mq = MediaQuery.of(context);
     final size = mq.size;
-    final isLast = stepIndex == totalSteps - 1;
+    final isLast = widget.stepIndex == widget.totalSteps - 1;
+    final step = widget.step;
+    final targetRect = widget.targetRect;
 
-    // Padded highlight rect — null safe fallback to centre dot if anchor isn't
-    // found (e.g., navigated to a screen where the key isn't present yet).
-    final padded = (targetRect ??
-            Rect.fromCenter(
-                center: Offset(size.width / 2, size.height / 2),
-                width: 1,
-                height: 1))
-        .inflate(step.padding);
+    // ─── Non-blocking design ─────────────────────────────────────────────
+    // No dim, no cutout, no modal barrier. The entire page (and any dialogs
+    // opened during a step) is fully interactive. We render only two things:
+    //   1. A subtle pulsing ring around the spotlighted anchor (when found,
+    //      and only when its center is actually visible). Purely visual.
+    //   2. A compact card pinned to the left side of the viewport with the
+    //      step text, a Next button (always available), and a Skip control.
+    // ────────────────────────────────────────────────────────────────────
+    const cardWidth = 300.0;
+    const cardHeight = 300.0; // estimated height used only for placement scoring
+    const margin = 16.0;
 
-    // Clamp to screen bounds so the dim rects don't compute negative sizes.
-    final clamped = Rect.fromLTRB(
-      padded.left.clamp(0.0, size.width),
-      padded.top.clamp(0.0, size.height),
-      padded.right.clamp(0.0, size.width),
-      padded.bottom.clamp(0.0, size.height),
-    );
+    // ── Dynamic corner selection ──────────────────────────────────────────
+    // Evaluate 4 screen corners; pick the one that (a) does NOT overlap the
+    // highlighted anchor rect and (b) is farthest from the anchor centre.
+    // This keeps the card clear of the anchor button AND of any dialog that
+    // opens as a result (dialogs are centred, so the corner opposite the
+    // anchor trigger is almost always unobstructed).
+    Offset bestCorner() {
+      final corners = <Offset>[
+        Offset(margin, margin),                                                   // top-left
+        Offset(size.width - cardWidth - margin, margin),                          // top-right
+        Offset(margin, size.height - cardHeight - margin),                        // bottom-left
+        Offset(size.width - cardWidth - margin, size.height - cardHeight - margin), // bottom-right
+      ];
+      final tr = targetRect;
+      if (tr == null || tr.isEmpty) return corners[2]; // bottom-left default
 
-    // Compute popover position so it doesn't overlap the cutout.
-    const popoverWidth = 320.0;
-    final spaceBelow = size.height - clamped.bottom;
-    final placeBelow = spaceBelow > 220;
-    double popoverTop;
-    double popoverLeft;
-    if (placeBelow) {
-      popoverTop = clamped.bottom + 12;
-    } else {
-      popoverTop = clamped.top - 220;
-      if (popoverTop < 24) popoverTop = 24;
+      final anchorCenter = tr.center;
+      final inflated = tr.inflate(step.padding + 20.0);
+
+      Offset best = corners[0];
+      double bestScore = double.negativeInfinity;
+      for (final corner in corners) {
+        final cardRect = Rect.fromLTWH(corner.dx, corner.dy, cardWidth, cardHeight);
+        final score = (!cardRect.overlaps(inflated) ? 10000.0 : 0.0) +
+            (corner + const Offset(cardWidth / 2, cardHeight / 2) - anchorCenter).distance;
+        if (score > bestScore) {
+          bestScore = score;
+          best = corner;
+        }
+      }
+      return best;
     }
-    popoverLeft = clamped.center.dx - popoverWidth / 2;
-    if (popoverLeft < 16) popoverLeft = 16;
-    if (popoverLeft + popoverWidth > size.width - 16) {
-      popoverLeft = size.width - popoverWidth - 16;
-    }
 
-    const dimColor = Color(0x9E000000); // ~62% black
+    final pos = bestCorner();
+    // Apply user drag and clamp so the card never leaves the viewport.
+    final cardLeft = (pos.dx + _dragOffset.dx).clamp(0.0, size.width - cardWidth);
+    final cardTop = (pos.dy + _dragOffset.dy).clamp(0.0, size.height - cardHeight);
 
-    // Four dim rectangles framing the cutout so the cutout area itself
-    // receives no overlay widgets → pointer events fall straight through to
-    // the underlying app (Add Supplier, dialog fields, etc. are clickable).
-    Widget dim() => const IgnorePointer(
-          ignoring: false,
-          child: ColoredBox(color: dimColor),
-        );
+    // Detect whether the anchor is currently visible on screen. If the
+    // anchor has been covered by a dialog/modal (its center is occluded by
+    // something rendered on top), we don't draw the pulse ring — it would
+    // appear over the dialog content and confuse the user.
+    final padded = targetRect?.inflate(step.padding);
+    final showRing = padded != null &&
+        padded.left >= 0 &&
+        padded.top >= 0 &&
+        padded.right <= size.width &&
+        padded.bottom <= size.height &&
+        padded.width > 0 &&
+        padded.height > 0;
 
     return Material(
       type: MaterialType.transparency,
       child: Stack(
         children: [
-          // Top strip
-          Positioned(
-            left: 0,
-            top: 0,
-            right: 0,
-            height: clamped.top,
-            child: dim(),
-          ),
-          // Bottom strip
-          Positioned(
-            left: 0,
-            top: clamped.bottom,
-            right: 0,
-            bottom: 0,
-            child: dim(),
-          ),
-          // Left strip (between top & bottom)
-          Positioned(
-            left: 0,
-            top: clamped.top,
-            width: clamped.left,
-            height: clamped.height,
-            child: dim(),
-          ),
-          // Right strip
-          Positioned(
-            left: clamped.right,
-            top: clamped.top,
-            right: 0,
-            height: clamped.height,
-            child: dim(),
-          ),
-          // Pulsing border around the highlighted element (visual only —
-          // IgnorePointer so it doesn't block clicks on the highlighted
-          // widget underneath).
-          if (targetRect != null)
+          // Subtle pulse ring around the spotlighted anchor (visual cue only).
+          if (showRing)
             Positioned(
-              left: clamped.left - 2,
-              top: clamped.top - 2,
-              width: clamped.width + 4,
-              height: clamped.height + 4,
+              left: padded.left - 2,
+              top: padded.top - 2,
+              width: padded.width + 4,
+              height: padded.height + 4,
               child: IgnorePointer(child: _PulseRing()),
             ),
-          // Popover card (receives pointer events normally).
+          // Compact coach card — draggable by its handle at the top.
           Positioned(
-            left: popoverLeft,
-            top: popoverTop,
-            width: popoverWidth,
+            left: cardLeft,
+            top: cardTop,
+            width: cardWidth,
             child: Material(
               elevation: 12,
               borderRadius: BorderRadius.circular(12),
               color: Colors.white,
-              child: Padding(
-                padding: const EdgeInsets.all(16),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Row(
-                      children: [
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 8, vertical: 3),
-                          decoration: BoxDecoration(
-                            color: AppColors.primaryLight
-                                .withValues(alpha: 0.18),
-                            borderRadius: BorderRadius.circular(20),
-                          ),
-                          child: Text(
-                            'Step ${stepIndex + 1} of $totalSteps',
-                            style: AppTextStyles.bodySmall.copyWith(
-                                color: AppColors.primary,
-                                fontWeight: FontWeight.w600),
+              child: ConstrainedBox(
+                constraints: BoxConstraints(maxHeight: size.height * 0.7),
+                child: SingleChildScrollView(
+                  padding: const EdgeInsets.fromLTRB(14, 8, 14, 14),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      // ── Drag handle ──────────────────────────────────
+                      GestureDetector(
+                        onPanUpdate: (d) =>
+                            setState(() => _dragOffset += d.delta),
+                        child: Center(
+                          child: Container(
+                            margin: const EdgeInsets.only(bottom: 6),
+                            width: 36,
+                            height: 4,
+                            decoration: BoxDecoration(
+                              color:
+                                  AppColors.textSecondary.withValues(alpha: 0.3),
+                              borderRadius: BorderRadius.circular(2),
+                            ),
                           ),
                         ),
-                        const Spacer(),
-                        IconButton(
-                          tooltip: 'End tour',
-                          icon: const Icon(Icons.close, size: 18),
-                          onPressed: onSkip,
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 6),
-                    Text(step.title, style: AppTextStyles.h3),
-                    const SizedBox(height: 6),
-                    Text(step.description,
-                        style: AppTextStyles.body
-                            .copyWith(color: AppColors.textSecondary)),
-                    if (step.completeWhen != null) ...[
-                      const SizedBox(height: 10),
+                      ),
+                      // ── Step pill + close ─────────────────────────────
                       Row(
                         children: [
-                          Icon(Icons.touch_app_outlined,
-                              size: 14, color: AppColors.primary),
-                          const SizedBox(width: 6),
-                          Expanded(
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 8, vertical: 3),
+                            decoration: BoxDecoration(
+                              color: AppColors.primaryLight
+                                  .withValues(alpha: 0.18),
+                              borderRadius: BorderRadius.circular(20),
+                            ),
                             child: Text(
-                              'Try it — the tour will continue once you do.',
+                              'Step ${widget.stepIndex + 1} of ${widget.totalSteps}',
                               style: AppTextStyles.bodySmall.copyWith(
                                   color: AppColors.primary,
-                                  fontStyle: FontStyle.italic),
+                                  fontWeight: FontWeight.w600),
                             ),
+                          ),
+                          const Spacer(),
+                          IconButton(
+                            tooltip: 'End tour',
+                            icon: const Icon(Icons.close, size: 18),
+                            onPressed: widget.onSkip,
+                            visualDensity: VisualDensity.compact,
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 4),
+                      Text(step.title, style: AppTextStyles.h3),
+                      const SizedBox(height: 6),
+                      Text(step.description,
+                          style: AppTextStyles.body
+                              .copyWith(color: AppColors.textSecondary)),
+                      if (step.completeWhen != null) ...[
+                        const SizedBox(height: 10),
+                        Builder(builder: (ctx) {
+                          final alreadyDone = () {
+                            try {
+                              return step.completeWhen!();
+                            } catch (_) {
+                              return false;
+                            }
+                          }();
+                          return Row(
+                            children: [
+                              Icon(
+                                alreadyDone
+                                    ? Icons.check_circle
+                                    : Icons.touch_app_outlined,
+                                size: 14,
+                                color: alreadyDone
+                                    ? Colors.green
+                                    : AppColors.primary,
+                              ),
+                              const SizedBox(width: 6),
+                              Expanded(
+                                child: Text(
+                                  alreadyDone
+                                      ? 'Done — auto-advancing…'
+                                      : 'Do it on the page — or press Next to skip.',
+                                  style: AppTextStyles.bodySmall.copyWith(
+                                      color: alreadyDone
+                                          ? Colors.green
+                                          : AppColors.textSecondary,
+                                      fontStyle: FontStyle.italic),
+                                ),
+                              ),
+                            ],
+                          );
+                        }),
+                      ],
+                      const SizedBox(height: 12),
+                      Row(
+                        children: [
+                          TextButton(
+                            onPressed: widget.onSkip,
+                            child: const Text('End tour'),
+                          ),
+                          const Spacer(),
+                          FilledButton.icon(
+                            onPressed: widget.onNext,
+                            icon: Icon(
+                                isLast ? Icons.check : Icons.arrow_forward,
+                                size: 16),
+                            label: Text(isLast ? 'Done' : 'Next'),
                           ),
                         ],
                       ),
                     ],
-                    const SizedBox(height: 14),
-                    Row(
-                      children: [
-                        TextButton(
-                          onPressed: onSkip,
-                          child: const Text('Skip'),
-                        ),
-                        const Spacer(),
-                        FilledButton.icon(
-                          onPressed: onNext,
-                          icon: Icon(
-                              isLast
-                                  ? Icons.check
-                                  : Icons.arrow_forward,
-                              size: 16),
-                          label: Text(isLast
-                              ? 'Done'
-                              : (step.completeWhen != null
-                                  ? 'Skip step'
-                                  : 'Next')),
-                        ),
-                      ],
-                    ),
-                  ],
+                  ),
                 ),
               ),
             ),

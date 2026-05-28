@@ -13,9 +13,10 @@ import 'package:ma5zony/widgets/zoho_patterns.dart';
 
 /// Dashboard shown only to users with the **SME Owner** role.
 ///
-/// Includes financial KPIs (inventory value, COGS, holding costs, open order
-/// cost), operational KPIs, revenue-vs-cost chart, inventory value chart,
-/// cash-flow projection, and breakdown tables.
+/// Supply-chain & inventory focused: stock health, reorder alerts, forecast
+/// accuracy, demand vs forecast chart, and onboarding progress. No financial
+/// breakdowns (COGS / holding cost / cash flow) — Ma5zony is an inventory
+/// management system, not an accounting tool.
 class OwnerDashboardScreen extends StatefulWidget {
   const OwnerDashboardScreen({super.key});
 
@@ -65,142 +66,55 @@ class _OwnerDashboardScreenState extends State<OwnerDashboardScreen> {
     }
   }
 
-  /// Remaining onboarding tasks count (drives the tab badge).
-  int _remainingTasks(AppState state) {
-    int remaining = 0;
-    if (state.products.isEmpty) remaining++;
-    if (state.suppliers.isEmpty) remaining++;
-    if (state.warehouses.isEmpty) remaining++;
-    if (state.demandByProduct.isEmpty) remaining++;
-    if (state.currentForecast == null) remaining++;
-    if (state.settings.orderingCost == 250.0 &&
-        state.settings.holdingRate == 0.20) {
-      remaining++;
-    }
-    return remaining;
+  /// Single source of truth for the Getting Started checklist.
+  /// Exactly 6 top-level steps — no sub-tasks. Detailed nudges (missing unit
+  /// cost, unlinked products, missing BOMs, etc.) live on their dedicated
+  /// pages so this checklist stays calm and scannable.
+  List<_ChecklistStep> _setupSteps(AppState state) {
+    return [
+      _ChecklistStep(
+        label: 'Add at least one supplier',
+        route: '/suppliers',
+        isDone: state.suppliers.isNotEmpty,
+      ),
+      _ChecklistStep(
+        label: 'Add at least one warehouse',
+        route: '/warehouses',
+        isDone: state.warehouses.isNotEmpty,
+      ),
+      _ChecklistStep(
+        label: 'Add your products (Shopify import or manual)',
+        route: '/products',
+        isDone: state.products.isNotEmpty,
+      ),
+      _ChecklistStep(
+        label: 'Import sales / demand data',
+        route: '/demand-data',
+        isDone: state.demandByProduct.isNotEmpty,
+      ),
+      _ChecklistStep(
+        label: 'Run your first reorder plan',
+        route: '/forecasts',
+        isDone: state.currentForecast != null,
+      ),
+      _ChecklistStep(
+        label: 'Review reorder settings (lead-time buffer, safety stock)',
+        route: '/settings',
+        isDone: state.settings.orderingCost != 250.0 ||
+            state.settings.holdingRate != 0.20,
+      ),
+    ];
   }
+
+  /// Remaining onboarding tasks count (drives the tab badge + hero progress).
+  int _remainingTasks(AppState state) =>
+      _setupSteps(state).where((s) => !s.isDone).length;
 
   // ── Helpers ──────────────────────────────────────────────────────────────
-
-  /// Monthly COGS estimate = Σ(demand qty last 30 days × effective unit cost).
-  /// Uses [AppState.effectiveUnitCost] so manufactured products are valued at
-  /// their rolled-up BOM cost (raw materials + production fee), not the
-  /// often-zero manual unitCost field.
-  double _monthlyCOGS(AppState state) {
-    final now = DateTime.now();
-    final thirtyDaysAgo = now.subtract(const Duration(days: 30));
-    final activeIds = {for (final p in state.products) p.id};
-    double cogs = 0;
-    for (final entry in state.demandByProduct.entries) {
-      if (!activeIds.contains(entry.key)) continue;
-      final product =
-          state.products.where((p) => p.id == entry.key).firstOrNull;
-      if (product == null) continue;
-      final unitCost = state.effectiveUnitCost(product);
-      for (final d in entry.value) {
-        if (d.periodStart.isAfter(thirtyDaysAgo)) {
-          cogs += d.quantity * unitCost;
-        }
-      }
-    }
-    return cogs;
-  }
-
-  /// Estimated monthly holding cost = inventory value × annual holding rate / 12.
-  double _monthlyHoldingCost(AppState state) {
-    final annualHoldingRate = state.settings.holdingRate;
-    return state.totalStockValue * annualHoldingRate / 12;
-  }
-
-  /// Open order cost = Σ(suggestedQty × effective unit cost) for all open
-  /// recommendations. Uses [AppState.effectiveUnitCost] so manufactured items
-  /// are valued via their BOM rollup, keeping the figure consistent with the
-  /// Inventory Cost KPI shown alongside it.
-  double _openOrderCost(AppState state) {
-    double total = 0;
-    for (final rec in state.recommendations) {
-      final product =
-          state.products.where((p) => p.id == rec.productId).firstOrNull;
-      if (product != null) {
-        total += rec.suggestedOrderQty * state.effectiveUnitCost(product);
-      }
-    }
-    return total;
-  }
 
   /// Total units in stock.
   int _totalUnits(AppState state) =>
       state.products.fold<int>(0, (s, p) => s + p.currentStock);
-
-  /// Products sorted by monthly projected spend (forecast × unitCost) desc.
-  List<_ProductSpend> _topExpenseProducts(AppState state) {
-    final result = <_ProductSpend>[];
-    for (final p in state.products) {
-      final rec =
-          state.recommendations.where((r) => r.productId == p.id).firstOrNull;
-      final forecast = rec?.forecastNextPeriod ?? 0;
-      result.add(_ProductSpend(
-        name: p.name,
-        sku: p.sku,
-        monthlyForecast: forecast,
-        unitCost: p.unitCost,
-        monthlySpend: forecast * p.unitCost,
-      ));
-    }
-    result.sort((a, b) => b.monthlySpend.compareTo(a.monthlySpend));
-    return result;
-  }
-
-  /// Supplier cost breakdown.
-  List<_SupplierCost> _supplierCostBreakdown(AppState state) {
-    final map = <String, _SupplierCost>{};
-    for (final p in state.products) {
-      final supplierId = p.supplierId;
-      if (supplierId == null) continue;
-      final supplier =
-          state.suppliers.where((s) => s.id == supplierId).firstOrNull;
-      final name = supplier?.name ?? 'Unknown';
-      final leadTime = supplier?.typicalLeadTimeDays ?? 0;
-      final rec =
-          state.recommendations.where((r) => r.productId == p.id).firstOrNull;
-      final spend = (rec?.forecastNextPeriod ?? 0) * p.unitCost;
-
-      if (map.containsKey(supplierId)) {
-        map[supplierId] = _SupplierCost(
-          name: name,
-          productCount: map[supplierId]!.productCount + 1,
-          avgLeadTime: ((map[supplierId]!.avgLeadTime *
-                      map[supplierId]!.productCount) +
-                  leadTime) /
-              (map[supplierId]!.productCount + 1),
-          totalMonthlySpend: map[supplierId]!.totalMonthlySpend + spend,
-        );
-      } else {
-        map[supplierId] = _SupplierCost(
-          name: name,
-          productCount: 1,
-          avgLeadTime: leadTime.toDouble(),
-          totalMonthlySpend: spend,
-        );
-      }
-    }
-    final list = map.values.toList()
-      ..sort((a, b) => b.totalMonthlySpend.compareTo(a.totalMonthlySpend));
-    return list;
-  }
-
-  /// Cash-flow projection for next 3 months (simplified: forecast × unitCost).
-  List<double> _cashFlowProjection(AppState state) {
-    // Base monthly projected spend from all products
-    double baseSpend = 0;
-    for (final p in state.products) {
-      final rec =
-          state.recommendations.where((r) => r.productId == p.id).firstOrNull;
-      baseSpend += (rec?.forecastNextPeriod ?? 0) * p.unitCost;
-    }
-    // 3-month projection: month 1 = base, month 2 & 3 use same estimate
-    return [baseSpend, baseSpend, baseSpend];
-  }
 
   // ── Build ────────────────────────────────────────────────────────────────
 
@@ -243,14 +157,7 @@ class _OwnerDashboardScreenState extends State<OwnerDashboardScreen> {
     );
   }
 
-  Widget _buildDashboardTab(BuildContext context, AppState state) {    final cogs = _monthlyCOGS(state);
-    final holdingCost = _monthlyHoldingCost(state);
-    final openOrderCost = _openOrderCost(state);
-    final topProducts = _topExpenseProducts(state);
-    final supplierCosts = _supplierCostBreakdown(state);
-    final cashFlow = _cashFlowProjection(state);
-    final totalSpend = topProducts.fold<double>(0, (s, p) => s + p.monthlySpend);
-
+  Widget _buildDashboardTab(BuildContext context, AppState state) {
     final user = state.currentUser;
     final hour = DateTime.now().hour;
     final greeting = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening';
@@ -287,15 +194,14 @@ class _OwnerDashboardScreenState extends State<OwnerDashboardScreen> {
           ),
           const SizedBox(height: 20),
 
-          // ── Getting Started nudge banner (full checklist lives in the
-          //    "Getting Started" tab now) ─────────────────────────────────
+          // ── Getting Started nudge banner ─────────────────────────────
           if (_showChecklist) _buildOnboardingNudge(state),
 
           // ── Pending Actions (consolidated to-do) ─────────────────────
           _buildPendingActions(context, state),
 
-          // ── Hero metric card ─────────────────────────────────────────
-          _buildHeroCard(state, cogs, holdingCost, openOrderCost),
+          // ── Inventory snapshot hero ──────────────────────────────────
+          _buildHeroCard(state),
 
           const SizedBox(height: 24),
 
@@ -311,10 +217,9 @@ class _OwnerDashboardScreenState extends State<OwnerDashboardScreen> {
                       o.status != ProductionOrderStatus.completed &&
                       o.status != ProductionOrderStatus.draft)
                   .length;
-              final budgetRemaining =
-                  state.latestCashFlow?.totalAvailable ?? 0;
-              final allocatedBudget =
-                  state.latestCashFlow?.allocatedToProduction ?? 0;
+              final completedProductions = state.productionOrders
+                  .where((o) => o.status == ProductionOrderStatus.completed)
+                  .length;
 
               final opPanel = Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -378,18 +283,18 @@ class _OwnerDashboardScreenState extends State<OwnerDashboardScreen> {
                       onTap: () => context.go('/production-orders'),
                     ),
                     KPICard(
-                      title: 'Budget Remaining',
-                      value:
-                          'EGP ${(budgetRemaining - allocatedBudget).toStringAsFixed(0)}',
-                      icon: Icons.account_balance,
-                      isAlert: (budgetRemaining - allocatedBudget) < 0,
+                      title: 'Completed Productions',
+                      value: '$completedProductions',
+                      icon: Icons.check_circle_outline,
                       color: AppColors.success,
+                      onTap: () => context.go('/production-orders'),
                     ),
                     KPICard(
-                      title: 'Allocated to Production',
-                      value: 'EGP ${allocatedBudget.toStringAsFixed(0)}',
-                      icon: Icons.payments,
+                      title: 'Raw Materials Tracked',
+                      value: '${state.rawMaterials.length}',
+                      icon: Icons.category_outlined,
                       color: AppColors.primary,
+                      onTap: () => context.go('/raw-materials'),
                     ),
                   ]),
                 ],
@@ -414,31 +319,6 @@ class _OwnerDashboardScreenState extends State<OwnerDashboardScreen> {
 
           const SizedBox(height: 24),
 
-          // ── Charts Row ───────────────────────────────────────────────
-          LayoutBuilder(
-            builder: (context, constraints) {
-              final isWide = constraints.maxWidth > 1000;
-              return Flex(
-                direction: isWide ? Axis.horizontal : Axis.vertical,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Expanded(
-                    flex: isWide ? 3 : 0,
-                    child: _buildCostBreakdownChart(
-                        cogs, holdingCost, openOrderCost),
-                  ),
-                  SizedBox(width: isWide ? 24 : 0, height: isWide ? 0 : 24),
-                  Expanded(
-                    flex: isWide ? 2 : 0,
-                    child: _buildCashFlowChart(cashFlow),
-                  ),
-                ],
-              );
-            },
-          ),
-
-          const SizedBox(height: 24),
-
           // ── Demand vs Forecast ───────────────────────────────────────
           Card(
             elevation: 2,
@@ -456,76 +336,6 @@ class _OwnerDashboardScreenState extends State<OwnerDashboardScreen> {
                     child: _buildDemandForecastChart(state),
                   ),
                 ],
-              ),
-            ),
-          ),
-
-          const SizedBox(height: 24),
-
-          // ── Top Expense Products Table ───────────────────────────────
-          _ExpandableAnalyticsCard(
-            title: 'Top Expense Products',
-            child: SizedBox(
-              width: double.infinity,
-              child: DataTable(
-                columns: const [
-                  DataColumn(label: Text('Product')),
-                  DataColumn(label: Text('Monthly Forecast')),
-                  DataColumn(label: Text('Unit Cost')),
-                  DataColumn(label: Text('Monthly Spend')),
-                  DataColumn(label: Text('% of Total')),
-                ],
-                rows: topProducts.take(10).map((p) {
-                  final pct = totalSpend > 0
-                      ? (p.monthlySpend / totalSpend * 100)
-                      : 0.0;
-                  return DataRow(cells: [
-                    DataCell(Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Text(p.name,
-                            style: AppTextStyles.body
-                                .copyWith(fontWeight: FontWeight.w600)),
-                        Text(p.sku, style: AppTextStyles.label),
-                      ],
-                    )),
-                    DataCell(Text('${p.monthlyForecast}')),
-                    DataCell(Text('EGP ${p.unitCost.toStringAsFixed(2)}')),
-                    DataCell(Text(
-                        'EGP ${p.monthlySpend.toStringAsFixed(0)}')),
-                    DataCell(Text('${pct.toStringAsFixed(1)}%')),
-                  ]);
-                }).toList(),
-              ),
-            ),
-          ),
-
-          const SizedBox(height: 24),
-
-          // ── Supplier Cost Breakdown ──────────────────────────────────
-          _ExpandableAnalyticsCard(
-            title: 'Supplier Cost Breakdown',
-            child: HorizontallyScrollableTable(
-              child: DataTable(
-                columns: const [
-                  DataColumn(label: Text('Supplier')),
-                  DataColumn(label: Text('# Products')),
-                  DataColumn(label: Text('Avg Lead Time')),
-                  DataColumn(label: Text('Monthly Spend')),
-                ],
-                rows: supplierCosts.map((s) {
-                  return DataRow(cells: [
-                    DataCell(Text(s.name,
-                        style: AppTextStyles.body
-                            .copyWith(fontWeight: FontWeight.w600))),
-                    DataCell(Text('${s.productCount}')),
-                    DataCell(Text(
-                        '${s.avgLeadTime.toStringAsFixed(0)} days')),
-                    DataCell(Text(
-                        'EGP ${s.totalMonthlySpend.toStringAsFixed(0)}')),
-                  ]);
-                }).toList(),
               ),
             ),
           ),
@@ -584,89 +394,7 @@ class _OwnerDashboardScreenState extends State<OwnerDashboardScreen> {
   }
 
   Widget _buildOnboardingChecklist(AppState state) {
-    // Whether the user has indicated they manufacture anything. We treat the
-    // presence of *any* manufacturer / raw material / manufactured product as
-    // the signal — for purely retail SMEs the manufacturing steps stay
-    // optional and don't block setup completion.
-    final hasManufacturing = state.manufacturers.isNotEmpty ||
-        state.rawMaterials.isNotEmpty ||
-        state.products.any(
-            (p) => p.manufacturerId != null && p.manufacturerId!.isNotEmpty);
-
-    final missingCost = state.productsMissingCost.length;
-    final missingBom = state.manufacturedProductsMissingBom.length;
-    final missingSupplier = state.productsMissingSupplier.length;
-
-    // STRICT ORDER: partners first, then storage, then products. This matches
-    // the data dependencies — products link to suppliers/manufacturers, BOMs
-    // link to raw materials, and reorder plans need warehouses to make sense.
-    final steps = <_ChecklistStep>[
-      _ChecklistStep(
-        label: '1. Add at least one supplier',
-        route: '/suppliers',
-        isDone: state.suppliers.isNotEmpty,
-      ),
-      if (hasManufacturing || state.products.isEmpty)
-        _ChecklistStep(
-          label: '2. Add manufacturers (skip if you only resell)',
-          route: '/manufacturers',
-          isDone: state.manufacturers.isNotEmpty || !hasManufacturing,
-        ),
-      if (hasManufacturing || state.products.isEmpty)
-        _ChecklistStep(
-          label: '3. Add raw materials & link them to suppliers',
-          route: '/raw-materials',
-          isDone: state.rawMaterials.isNotEmpty || !hasManufacturing,
-        ),
-      _ChecklistStep(
-        label: '4. Add at least one warehouse',
-        route: '/warehouses',
-        isDone: state.warehouses.isNotEmpty,
-      ),
-      _ChecklistStep(
-        label: '5. Add products (Shopify import or manual)',
-        route: '/products',
-        isDone: state.products.isNotEmpty,
-      ),
-      _ChecklistStep(
-        label: missingCost == 0
-            ? '6. Unit cost set for every product'
-            : '6. Set unit cost for $missingCost product${missingCost == 1 ? '' : 's'}',
-        route: '/products',
-        isDone: state.products.isNotEmpty && missingCost == 0,
-      ),
-      _ChecklistStep(
-        label: missingSupplier == 0
-            ? '7. Every product is linked to a supplier'
-            : '7. Link $missingSupplier product${missingSupplier == 1 ? '' : 's'} to a supplier',
-        route: '/products',
-        isDone: state.products.isNotEmpty && missingSupplier == 0,
-      ),
-      if (hasManufacturing)
-        _ChecklistStep(
-          label: missingBom == 0
-              ? '8. BOM built for every manufactured product'
-              : '8. Build BOM for $missingBom manufactured product${missingBom == 1 ? '' : 's'}',
-          route: '/bom',
-          isDone: missingBom == 0,
-        ),
-      _ChecklistStep(
-        label: 'Import demand data (or wait for Shopify sales sync)',
-        route: '/demand-data',
-        isDone: state.demandByProduct.isNotEmpty,
-      ),
-      _ChecklistStep(
-        label: 'Run your first reorder plan',
-        route: '/forecasts',
-        isDone: state.currentForecast != null,
-      ),
-      _ChecklistStep(
-        label: 'Configure EOQ & holding cost in Settings',
-        route: '/settings',
-        isDone: state.settings.orderingCost != 250.0 ||
-            state.settings.holdingRate != 0.20,
-      ),
-    ];
+    final steps = _setupSteps(state);
     final doneCount = steps.where((s) => s.isDone).length;
     final allDone = doneCount == steps.length;
 
@@ -675,41 +403,60 @@ class _OwnerDashboardScreenState extends State<OwnerDashboardScreen> {
 
     return Container(
       margin: const EdgeInsets.only(bottom: 24),
-      padding: const EdgeInsets.all(20),
+      padding: const EdgeInsets.all(24),
       decoration: BoxDecoration(
-        gradient: LinearGradient(
-          colors: [
-            AppColors.primary.withValues(alpha: 0.05),
-            AppColors.secondary,
-          ],
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-        ),
-        border: Border.all(color: AppColors.primary.withValues(alpha: 0.2)),
+        color: Colors.white,
+        border: Border.all(color: AppColors.border),
         borderRadius: BorderRadius.circular(14),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.03),
+            blurRadius: 8,
+            offset: const Offset(0, 2),
+          ),
+        ],
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          // Header — title + progress
           Row(
             children: [
-              const Icon(Icons.rocket_launch_outlined,
-                  size: 18, color: AppColors.primary),
-              const SizedBox(width: 8),
-              Text('Get started — $doneCount of ${steps.length} complete',
-                  style: AppTextStyles.h3.copyWith(color: AppColors.primary)),
-              const Spacer(),
-              // Progress bar
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: AppColors.primary.withValues(alpha: 0.08),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: const Icon(Icons.rocket_launch_outlined,
+                    size: 18, color: AppColors.primary),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('Setup checklist', style: AppTextStyles.h3),
+                    const SizedBox(height: 2),
+                    Text(
+                      '$doneCount of ${steps.length} complete · finish to unlock forecasting',
+                      style: AppTextStyles.bodySmall
+                          .copyWith(color: AppColors.textSecondary),
+                    ),
+                  ],
+                ),
+              ),
               SizedBox(
-                width: 80,
+                width: 90,
                 child: ClipRRect(
                   borderRadius: BorderRadius.circular(4),
                   child: LinearProgressIndicator(
                     value: doneCount / steps.length,
                     minHeight: 6,
-                    backgroundColor: AppColors.primary.withValues(alpha: 0.15),
-                    valueColor:
-                        const AlwaysStoppedAnimation<Color>(AppColors.primary),
+                    backgroundColor:
+                        AppColors.primary.withValues(alpha: 0.15),
+                    valueColor: const AlwaysStoppedAnimation<Color>(
+                        AppColors.primary),
                   ),
                 ),
               ),
@@ -720,68 +467,73 @@ class _OwnerDashboardScreenState extends State<OwnerDashboardScreen> {
                 padding: EdgeInsets.zero,
                 constraints: const BoxConstraints(),
                 color: AppColors.textSecondary,
+                tooltip: 'Hide checklist',
               ),
             ],
           ),
-          const SizedBox(height: 16),
-          Wrap(
-            spacing: 12,
-            runSpacing: 8,
-            children: steps
-                .map((s) => _buildChecklistStep(context, s))
-                .toList(),
-          ),
+          const SizedBox(height: 20),
+          // Steps — clean vertical list, each numbered
+          ...List.generate(steps.length, (i) {
+            final step = steps[i];
+            return _buildChecklistStep(context, step, i + 1);
+          }),
         ],
       ),
     );
   }
 
-  Widget _buildChecklistStep(BuildContext context, _ChecklistStep step) {
+  Widget _buildChecklistStep(
+      BuildContext context, _ChecklistStep step, int number) {
     return InkWell(
       onTap: step.isDone ? null : () => context.go(step.route),
       borderRadius: BorderRadius.circular(8),
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-        decoration: BoxDecoration(
-          color: step.isDone
-              ? AppColors.success.withValues(alpha: 0.1)
-              : Colors.white,
-          border: Border.all(
-            color: step.isDone
-                ? AppColors.success.withValues(alpha: 0.4)
-                : AppColors.border,
-          ),
-          borderRadius: BorderRadius.circular(8),
-        ),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 10),
         child: Row(
-          mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(
-              step.isDone
-                  ? Icons.check_circle
-                  : Icons.radio_button_unchecked,
-              size: 16,
-              color: step.isDone
-                  ? AppColors.success
-                  : AppColors.textSecondary,
-            ),
-            const SizedBox(width: 6),
-            Text(
-              step.label,
-              style: AppTextStyles.bodySmall.copyWith(
+            // Numbered circle or checkmark
+            Container(
+              width: 28,
+              height: 28,
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
                 color: step.isDone
                     ? AppColors.success
-                    : AppColors.textPrimary,
-                decoration:
-                    step.isDone ? TextDecoration.lineThrough : null,
-                fontWeight: step.isDone ? FontWeight.normal : FontWeight.w500,
+                    : AppColors.primary.withValues(alpha: 0.08),
+                shape: BoxShape.circle,
+                border: step.isDone
+                    ? null
+                    : Border.all(
+                        color: AppColors.primary.withValues(alpha: 0.25)),
+              ),
+              child: step.isDone
+                  ? const Icon(Icons.check, size: 16, color: Colors.white)
+                  : Text(
+                      '$number',
+                      style: AppTextStyles.bodySmall.copyWith(
+                        fontWeight: FontWeight.w700,
+                        color: AppColors.primary,
+                      ),
+                    ),
+            ),
+            const SizedBox(width: 14),
+            Expanded(
+              child: Text(
+                step.label,
+                style: AppTextStyles.body.copyWith(
+                  color: step.isDone
+                      ? AppColors.textSecondary
+                      : AppColors.textPrimary,
+                  decoration:
+                      step.isDone ? TextDecoration.lineThrough : null,
+                  fontWeight:
+                      step.isDone ? FontWeight.normal : FontWeight.w500,
+                ),
               ),
             ),
-            if (!step.isDone) ...[
-              const SizedBox(width: 4),
+            if (!step.isDone)
               const Icon(Icons.arrow_forward_ios,
-                  size: 10, color: AppColors.primary),
-            ],
+                  size: 12, color: AppColors.primary),
           ],
         ),
       ),
@@ -790,12 +542,12 @@ class _OwnerDashboardScreenState extends State<OwnerDashboardScreen> {
 
   // ── Hero card ────────────────────────────────────────────────────────────
 
-  Widget _buildHeroCard(
-      AppState state, double cogs, double holdingCost, double openOrderCost) {
+  Widget _buildHeroCard(AppState state) {
     final accuracy = state.forecastAccuracy > 0
         ? '${(state.forecastAccuracy * 100).toStringAsFixed(1)}%'
         : '—';
     final nf = NumberFormat.decimalPattern();
+    final lowStock = state.lowStockItems;
 
     return Container(
       width: double.infinity,
@@ -828,60 +580,12 @@ class _OwnerDashboardScreenState extends State<OwnerDashboardScreen> {
               ),
               const SizedBox(width: 10),
               Text(
-                'Inventory Cost',
+                'Inventory Snapshot',
                 style: AppTextStyles.eyebrow.copyWith(
                   color: Colors.white.withValues(alpha: 0.55),
                   letterSpacing: 0.6,
                 ),
               ),
-              const SizedBox(width: 8),
-              Tooltip(
-                message:
-                    'Cost basis — what you paid for the stock you currently hold '
-                    '(Σ qty × unit cost). Distinct from retail value below.',
-                child: Icon(
-                  Icons.info_outline,
-                  size: 13,
-                  color: Colors.white.withValues(alpha: 0.4),
-                ),
-              ),
-              // Setup-health pill — surfaces the silent killer of KPI trust:
-              // products with no unit cost. Clicking jumps straight to the
-              // Products screen so the fix is one tap away.
-              if (state.productsMissingCost.isNotEmpty) ...[
-                const SizedBox(width: 12),
-                InkWell(
-                  onTap: () => context.go('/products'),
-                  borderRadius: BorderRadius.circular(20),
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 10, vertical: 4),
-                    decoration: BoxDecoration(
-                      color: AppColors.warning.withValues(alpha: 0.18),
-                      borderRadius: BorderRadius.circular(20),
-                      border: Border.all(
-                        color: AppColors.warning.withValues(alpha: 0.5),
-                      ),
-                    ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        const Icon(Icons.warning_amber_rounded,
-                            size: 12, color: AppColors.warning),
-                        const SizedBox(width: 6),
-                        Text(
-                          '${state.productsMissingCost.length} need cost',
-                          style: AppTextStyles.bodySmall.copyWith(
-                            color: AppColors.warning,
-                            fontSize: 11,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              ],
             ],
           ),
           const SizedBox(height: 14),
@@ -889,24 +593,27 @@ class _OwnerDashboardScreenState extends State<OwnerDashboardScreen> {
             crossAxisAlignment: CrossAxisAlignment.end,
             children: [
               Text(
-                'EGP',
-                style: AppTextStyles.metricSuffix.copyWith(
-                  color: Colors.white.withValues(alpha: 0.55),
-                  fontSize: 15,
-                ),
-              ),
-              const SizedBox(width: 8),
-              Text(
-                nf.format(state.totalStockValue.round()),
+                nf.format(_totalUnits(state)),
                 style: AppTextStyles.metricXl.copyWith(color: Colors.white),
               ),
-              const SizedBox(width: 14),
+              const SizedBox(width: 10),
               Padding(
-                padding: const EdgeInsets.only(bottom: 8),
+                padding: const EdgeInsets.only(bottom: 10),
                 child: Text(
-                  '${state.products.length} products · ${nf.format(_totalUnits(state))} units',
+                  'units on hand',
                   style: AppTextStyles.body.copyWith(
-                    color: Colors.white.withValues(alpha: 0.5),
+                    color: Colors.white.withValues(alpha: 0.55),
+                    fontSize: 14,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 18),
+              Padding(
+                padding: const EdgeInsets.only(bottom: 10),
+                child: Text(
+                  'across ${state.products.length} products · ${state.warehouses.length} warehouse${state.warehouses.length == 1 ? '' : 's'}',
+                  style: AppTextStyles.body.copyWith(
+                    color: Colors.white.withValues(alpha: 0.4),
                     fontSize: 13,
                   ),
                 ),
@@ -914,8 +621,7 @@ class _OwnerDashboardScreenState extends State<OwnerDashboardScreen> {
             ],
           ),
           const SizedBox(height: 22),
-          Divider(
-              color: Colors.white.withValues(alpha: 0.1), height: 1),
+          Divider(color: Colors.white.withValues(alpha: 0.1), height: 1),
           const SizedBox(height: 18),
           IntrinsicHeight(
             child: SingleChildScrollView(
@@ -923,44 +629,44 @@ class _OwnerDashboardScreenState extends State<OwnerDashboardScreen> {
               child: Row(
                 children: [
                   _heroSubMetric(
-                    'Retail Value',
-                    'EGP ${nf.format(state.totalRetailValue.round())}',
-                    helper: 'Σ qty × selling price',
+                    'Items Below ROP',
+                    '$lowStock',
+                    helper: lowStock > 0
+                        ? 'Need reordering'
+                        : 'All healthy',
+                    accent: lowStock > 0
+                        ? AppColors.warning
+                        : AppColors.success,
+                    isAlert: lowStock > 0,
+                  ),
+                  VerticalDivider(
+                      color: Colors.white.withValues(alpha: 0.12),
+                      width: 40),
+                  _heroSubMetric(
+                    'Open Recommendations',
+                    '${state.openRecommendations}',
+                    helper: 'Awaiting review',
                     accent: AppColors.primary,
                   ),
                   VerticalDivider(
                       color: Colors.white.withValues(alpha: 0.12),
                       width: 40),
                   _heroSubMetric(
-                    'Margin Locked',
-                    'EGP ${nf.format(state.unrealizedMargin.round())}',
-                    helper: 'Retail − Cost',
-                    accent: state.unrealizedMargin >= 0
-                        ? AppColors.success
-                        : AppColors.error,
+                    'Active Suppliers',
+                    '${state.suppliers.length}',
+                    helper: 'In your network',
                   ),
-                  VerticalDivider(
-                      color: Colors.white.withValues(alpha: 0.12),
-                      width: 40),
-                  _heroSubMetric('Monthly COGS',
-                      'EGP ${nf.format(cogs.round())}'),
-                  VerticalDivider(
-                      color: Colors.white.withValues(alpha: 0.12),
-                      width: 40),
-                  _heroSubMetric('Holding Cost',
-                      'EGP ${nf.format(holdingCost.round())}'),
                   VerticalDivider(
                       color: Colors.white.withValues(alpha: 0.12),
                       width: 40),
                   _heroSubMetric(
-                    'Open Orders',
-                    'EGP ${nf.format(openOrderCost.round())}',
-                    isAlert: openOrderCost > 0,
+                    'Forecast Accuracy',
+                    accuracy,
+                    helper: state.forecastAccuracy > 0
+                        ? 'Last forecast run'
+                        : 'Run a forecast first',
+                    accent: AppColors.success,
                   ),
-                  VerticalDivider(
-                      color: Colors.white.withValues(alpha: 0.12),
-                      width: 40),
-                  _heroSubMetric('Forecast Acc.', accuracy),
                 ],
               ),
             ),
@@ -1036,169 +742,6 @@ class _OwnerDashboardScreenState extends State<OwnerDashboardScreen> {
               .toList(),
         );
       },
-    );
-  }
-
-  Widget _buildCostBreakdownChart(
-      double cogs, double holdingCost, double openOrderCost) {
-    final total = cogs + holdingCost + openOrderCost;
-    return Card(
-      elevation: 2,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-      child: Padding(
-        padding: const EdgeInsets.all(20),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text('Monthly Cost Breakdown', style: AppTextStyles.h3),
-            const SizedBox(height: 20),
-            SizedBox(
-              height: 220,
-              child: total == 0
-                  ? const Center(child: Text('No cost data yet.'))
-                  : PieChart(PieChartData(
-                      sectionsSpace: 2,
-                      centerSpaceRadius: 40,
-                      sections: [
-                        PieChartSectionData(
-                          value: cogs,
-                          title:
-                              '${(cogs / total * 100).toStringAsFixed(0)}%',
-                          color: AppColors.primary,
-                          radius: 50,
-                          titleStyle: const TextStyle(
-                              color: Colors.white,
-                              fontWeight: FontWeight.bold,
-                              fontSize: 12),
-                        ),
-                        PieChartSectionData(
-                          value: holdingCost,
-                          title:
-                              '${(holdingCost / total * 100).toStringAsFixed(0)}%',
-                          color: AppColors.warning,
-                          radius: 50,
-                          titleStyle: const TextStyle(
-                              color: Colors.white,
-                              fontWeight: FontWeight.bold,
-                              fontSize: 12),
-                        ),
-                        PieChartSectionData(
-                          value: openOrderCost,
-                          title:
-                              '${(openOrderCost / total * 100).toStringAsFixed(0)}%',
-                          color: AppColors.error,
-                          radius: 50,
-                          titleStyle: const TextStyle(
-                              color: Colors.white,
-                              fontWeight: FontWeight.bold,
-                              fontSize: 12),
-                        ),
-                      ],
-                    )),
-            ),
-            const SizedBox(height: 12),
-            _legendItem(AppColors.primary, 'COGS',
-                'EGP ${cogs.toStringAsFixed(0)}'),
-            _legendItem(AppColors.warning, 'Holding',
-                'EGP ${holdingCost.toStringAsFixed(0)}'),
-            _legendItem(AppColors.error, 'Open Orders',
-                'EGP ${openOrderCost.toStringAsFixed(0)}'),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _legendItem(Color color, String label, String value) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 2),
-      child: Row(
-        children: [
-          Container(width: 12, height: 12, color: color),
-          const SizedBox(width: 8),
-          Text(label, style: AppTextStyles.body),
-          const Spacer(),
-          Text(value,
-              style:
-                  AppTextStyles.body.copyWith(fontWeight: FontWeight.w600)),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildCashFlowChart(List<double> cashFlow) {
-    final months = ['Month 1', 'Month 2', 'Month 3'];
-    final maxY = cashFlow.isEmpty
-        ? 100.0
-        : cashFlow.reduce((a, b) => a > b ? a : b) * 1.2;
-    return Card(
-      elevation: 2,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-      child: Padding(
-        padding: const EdgeInsets.all(20),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text('Cash Flow Projection (3M)', style: AppTextStyles.h3),
-            const SizedBox(height: 20),
-            SizedBox(
-              height: 220,
-              child: BarChart(
-                BarChartData(
-                  maxY: maxY,
-                  gridData: const FlGridData(show: false),
-                  borderData: FlBorderData(show: false),
-                  titlesData: FlTitlesData(
-                    rightTitles: const AxisTitles(
-                        sideTitles: SideTitles(showTitles: false)),
-                    topTitles: const AxisTitles(
-                        sideTitles: SideTitles(showTitles: false)),
-                    leftTitles: const AxisTitles(
-                        sideTitles: SideTitles(showTitles: false)),
-                    bottomTitles: AxisTitles(
-                      sideTitles: SideTitles(
-                        showTitles: true,
-                        getTitlesWidget: (v, _) {
-                          final i = v.toInt();
-                          if (i < 0 || i >= months.length) {
-                            return const SizedBox.shrink();
-                          }
-                          return Padding(
-                            padding: const EdgeInsets.only(top: 8),
-                            child: Text(months[i],
-                                style: AppTextStyles.label),
-                          );
-                        },
-                      ),
-                    ),
-                  ),
-                  barGroups: cashFlow.asMap().entries.map((e) {
-                    return BarChartGroupData(
-                      x: e.key,
-                      barRods: [
-                        BarChartRodData(
-                          toY: e.value,
-                          color: AppColors.accent,
-                          width: 40,
-                          borderRadius: const BorderRadius.only(
-                            topLeft: Radius.circular(6),
-                            topRight: Radius.circular(6),
-                          ),
-                        ),
-                      ],
-                    );
-                  }).toList(),
-                ),
-              ),
-            ),
-            const SizedBox(height: 8),
-            Text(
-              'Projected monthly inventory spend: EGP ${cashFlow.isNotEmpty ? cashFlow.first.toStringAsFixed(0) : 0}',
-              style: AppTextStyles.label,
-            ),
-          ],
-        ),
-      ),
     );
   }
 
@@ -1419,7 +962,9 @@ class _OwnerDashboardScreenState extends State<OwnerDashboardScreen> {
   Widget _buildGettingStartedTab(
       BuildContext context, AppState state, int remaining) {
     final user = state.currentUser;
-    final completed = 6 - remaining;
+    final steps = _setupSteps(state);
+    final total = steps.length;
+    final completed = total - remaining;
     return SingleChildScrollView(
       padding: const EdgeInsets.all(24),
       child: Column(
@@ -1431,7 +976,7 @@ class _OwnerDashboardScreenState extends State<OwnerDashboardScreen> {
             subtitle:
                 'Finish a few quick steps to get the most out of Ma5zony.',
             doneCount: completed,
-            totalCount: 6,
+            totalCount: total,
           ),
           const SizedBox(height: 24),
           // Surface the existing checklist (keeps prior logic intact)
@@ -1466,7 +1011,7 @@ class _OwnerDashboardScreenState extends State<OwnerDashboardScreen> {
             iconColor: AppColors.warning,
             title: 'Configure workspace settings',
             subtitle:
-                'Set EOQ, holding cost, currency and other business preferences.',
+                'Tune reorder rules, safety stock and other inventory preferences.',
             ctaLabel: 'Configure',
             onTap: () => context.go('/settings'),
           ),
@@ -1479,36 +1024,6 @@ class _OwnerDashboardScreenState extends State<OwnerDashboardScreen> {
 }
 
 // ── Data classes ────────────────────────────────────────────────────────────
-
-class _ProductSpend {
-  final String name;
-  final String sku;
-  final int monthlyForecast;
-  final double unitCost;
-  final double monthlySpend;
-
-  _ProductSpend({
-    required this.name,
-    required this.sku,
-    required this.monthlyForecast,
-    required this.unitCost,
-    required this.monthlySpend,
-  });
-}
-
-class _SupplierCost {
-  final String name;
-  final int productCount;
-  final double avgLeadTime;
-  final double totalMonthlySpend;
-
-  _SupplierCost({
-    required this.name,
-    required this.productCount,
-    required this.avgLeadTime,
-    required this.totalMonthlySpend,
-  });
-}
 
 class _ChecklistStep {
   final String label;

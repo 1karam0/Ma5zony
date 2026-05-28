@@ -3,6 +3,7 @@ import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'package:ma5zony/features/onboarding/tour_targets.dart';
 import 'package:ma5zony/providers/app_state.dart';
 import 'package:ma5zony/utils/constants.dart';
 import 'package:ma5zony/widgets/shared_widgets.dart';
@@ -138,7 +139,10 @@ class _IntegrationsScreenState extends State<IntegrationsScreen> {
                         ],
                         Row(
                           children: [
-                            ElevatedButton(
+                            KeyedSubtree(
+                              key: TourTargets.instance.keyFor(
+                                  'page:shopify.connect'),
+                              child: ElevatedButton(
                               onPressed: _connecting
                                   ? null
                                   : () async {
@@ -236,6 +240,7 @@ class _IntegrationsScreenState extends State<IntegrationsScreen> {
                                     : 'Connect Shopify Store',
                               ),
                             ),
+                            ), // KeyedSubtree
                             if (isConnected) ...[
                               const SizedBox(width: 12),
                               OutlinedButton.icon(

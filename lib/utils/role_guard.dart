@@ -11,10 +11,8 @@ enum Permission {
 }
 
 /// Owner-only routes that Inventory Managers cannot access.
-const ownerOnlyRoutes = <String>{
-  '/financial-analytics',
-  '/cash-flow',
-};
+/// (Currently none — the Finance section was removed from Ma5zony.)
+const ownerOnlyRoutes = <String>{};
 
 /// All roles recognised by the system.
 abstract class UserRole {

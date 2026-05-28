@@ -84,20 +84,14 @@ const _kGroupDemandOrders = _NavGroup(
   section: 'OPERATIONS',
   entries: [
     NavRouteEntry(icon: Icons.query_stats, label: 'Reorder Plan', path: '/forecasts'),
+    NavRouteEntry(icon: Icons.insights_outlined, label: 'Supply Chain Insights', path: '/supply-chain-insights'),
     NavRouteEntry(icon: Icons.receipt_long_outlined, label: 'Order History', path: '/orders'),
   ],
 );
 
-// Finance group: everything related to money flow
-const _kGroupFinance = _NavGroup(
-  label: 'Finance',
-  icon: Icons.account_balance_wallet_outlined,
-  section: 'FINANCE',
-  entries: [
-    NavRouteEntry(icon: Icons.account_balance_wallet_outlined, label: 'Cash Flow', path: '/cash-flow'),
-    NavRouteEntry(icon: Icons.bar_chart_outlined, label: 'Financial Analytics', path: '/financial-analytics'),
-  ],
-);
+// Finance group removed — Ma5zony is supply-chain & inventory focused only.
+// (Cash Flow and Financial Analytics screens are no longer linked from the
+// sidebar; their routes have also been removed from the router.)
 
 // Settings group: integrations + app configuration
 const _kGroupSettings = _NavGroup(
@@ -134,16 +128,16 @@ const _kGroupRawMaterials = _NavGroup(
 /// Returns nav groups visible to [user] based on their role.
 List<_NavGroup> _visibleGroupsForUser(AppUser? user) {
   if (user == null) {
-    return [_kGroupDashboard, _kGroupProducts, _kGroupSupplyChain, _kGroupDemandOrders, _kGroupFinance, _kGroupSettings];
+    return [_kGroupDashboard, _kGroupProducts, _kGroupSupplyChain, _kGroupDemandOrders, _kGroupSettings];
   }
   return switch (user.role) {
     AppUser.roleSmeOwner => [
         _kGroupDashboard, _kGroupProducts, _kGroupSupplyChain,
-        _kGroupDemandOrders, _kGroupFinance, _kGroupSettings,
+        _kGroupDemandOrders, _kGroupSettings,
       ],
     AppUser.roleInventoryManager => [
         _kGroupDashboard, _kGroupProducts, _kGroupSupplyChain,
-        _kGroupDemandOrders, _kGroupFinance, _kGroupSettings,
+        _kGroupDemandOrders, _kGroupSettings,
       ],
     AppUser.roleManufacturer => [
         _kGroupDashboard, _kGroupManufacturerFocused,
@@ -151,7 +145,7 @@ List<_NavGroup> _visibleGroupsForUser(AppUser? user) {
     AppUser.roleRawMaterialFactory => [
         _kGroupDashboard, _kGroupRawMaterials,
       ],
-    _ => [_kGroupDashboard, _kGroupProducts, _kGroupSupplyChain, _kGroupDemandOrders, _kGroupFinance, _kGroupSettings],
+    _ => [_kGroupDashboard, _kGroupProducts, _kGroupSupplyChain, _kGroupDemandOrders, _kGroupSettings],
   };
 }
 
@@ -219,16 +213,15 @@ const List<(String, String)> _kRouteTitles = [
   ('/warehouses', 'Warehouses'),
   ('/demand-data', 'Demand Data'),
   ('/classification', 'ABC-XYZ Classification'),
+  ('/supply-chain-insights', 'Supply Chain Insights'),
   ('/replenishment', 'Replenishment'),
   ('/inbox', 'Action Center'),
   ('/integrations', 'Integrations'),
   ('/settings', 'Settings'),
-  ('/financial-analytics', 'Financial Analytics'),
   ('/raw-materials', 'Raw Materials'),
   ('/bom', 'Bill of Materials'),
   ('/manufacturers', 'Manufacturers'),
   ('/recommendations', 'Production Recommendations'),
-  ('/cash-flow', 'Cash Flow'),
 ];
 
 String _titleForRoute(String location) {

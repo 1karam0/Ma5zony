@@ -7,6 +7,7 @@ import 'package:provider/provider.dart';
 import 'package:ma5zony/models/demand_record.dart';
 import 'package:ma5zony/providers/app_state.dart';
 import 'package:ma5zony/utils/constants.dart';
+import 'package:ma5zony/features/onboarding/tour_targets.dart';
 import 'package:ma5zony/widgets/shared_widgets.dart';
 import 'package:ma5zony/widgets/zoho_patterns.dart';
 
@@ -294,13 +295,16 @@ class DemandDataScreen extends StatelessWidget {
                       ),
                     ),
                     const SizedBox(width: 16),
-                    ElevatedButton.icon(
-                      onPressed: () => _showAddRecordDialog(context),
-                      icon: const Icon(Icons.add),
-                      label: const Text('Add Demand Record'),
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: AppColors.primary,
-                        foregroundColor: Colors.white,
+                    KeyedSubtree(
+                      key: TourTargets.instance.keyFor('page:demand.add'),
+                      child: ElevatedButton.icon(
+                        onPressed: () => _showAddRecordDialog(context),
+                        icon: const Icon(Icons.add),
+                        label: const Text('Add Demand Record'),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: AppColors.primary,
+                          foregroundColor: Colors.white,
+                        ),
                       ),
                     ),
                   ],

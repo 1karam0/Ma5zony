@@ -32,6 +32,15 @@ class WelcomeTourDialog extends StatefulWidget {
   /// again. The dashboard "Replay tour" button still calls this to re-run
   /// the spotlight on demand.
   static Future<bool> show(BuildContext context) async {
+    // Capture AppState AND GoRouter BEFORE the first navigation.
+    // AppState is used by completeWhen predicates (they don't need a context).
+    // GoRouter is used for navigation — unlike BuildContext, a GoRouter
+    // instance is NOT disposed when routes change, so it stays valid for the
+    // entire tour even after the originating dashboard widget is removed from
+    // the tree.
+    final appState = context.read<AppState>();
+    final router = GoRouter.of(context);
+
     // Wait one frame so the dashboard (and its sidebar anchors) are mounted
     // before the coach tries to locate them.
     await Future<void>.delayed(const Duration(milliseconds: 50));
@@ -40,164 +49,178 @@ class WelcomeTourDialog extends StatefulWidget {
     await SpotlightCoach.start(
       context,
       [
-        // ── Welcome ──────────────────────────────────────────────────────
+        // ── 1. Welcome ────────────────────────────────────────────────────
         const SpotlightStep(
           anchorId: 'sidebar.group:Dashboard',
           title: 'Welcome to Ma5zony 👋',
           description:
-              'I\'ll walk you through setup in the correct order — each step unlocks the next. '
-              'At every action step the highlighted button is live and the tour auto-advances once you save.',
+              'This tour walks you through the exact setup order so you can '
+              'run your first forecast and reorder plan in minutes. '
+              'Every step opens the right page automatically — just fill in the form and press Save.',
           navigateTo: '/dashboard',
         ),
 
-        // ── Step 1: Connect Shopify (optional, but do it FIRST) ──────────
+        // ── 2. Connect Shopify (do first — imports catalogue & orders) ────
         const SpotlightStep(
-          anchorId: 'sidebar.group:Settings',
-          title: 'Step 1 — Connect Shopify (if you use it)',
+          anchorId: 'page:shopify.connect',
+          title: 'Step 1 — Connect Shopify (optional)',
           description:
-              'If you sell on Shopify, connect it NOW — before adding anything else. '
-              'This lets you import your product catalogue and sales history in later steps. '
-              'Skip ahead if you don\'t use Shopify.',
+              'If you sell on Shopify, connect it NOW before adding anything else. '
+              'This lets you import your full product catalogue and sales history automatically. '
+              'Skip ahead with Next if you don\'t use Shopify.',
           navigateTo: '/integrations',
         ),
 
-        // ── Step 2: Suppliers ────────────────────────────────────────────
-        const SpotlightStep(
-          anchorId: 'sidebar.group:Supply Chain Setup',
-          title: 'Step 2 — Supply Chain Setup',
-          description:
-              'Suppliers must exist BEFORE you import or add products — '
-              'every product links to the supplier you buy it from so the reorder plan knows who to order from and their lead time.',
-          navigateTo: '/suppliers',
-        ),
+        // ── 3. Add a supplier ─────────────────────────────────────────────
         SpotlightStep(
           anchorId: 'page:suppliers.add',
-          title: 'Add your first supplier',
+          title: 'Step 2 — Add your first Supplier',
           description:
-              'Click the highlighted button and fill in the form. '
-              'The tour continues automatically the moment you save your first supplier.',
-          completeWhen: (ctx) => ctx.read<AppState>().suppliers.isNotEmpty,
+              'Every product links to the supplier you buy it from. '
+              'The lead time you enter here is what Ma5zony uses to calculate your reorder date. '
+              'Click "Add Supplier", fill in the form, then save.',
+          navigateTo: '/suppliers',
+          completeWhen: () => appState.suppliers.isNotEmpty,
         ),
 
-        // ── Step 3: Warehouses ───────────────────────────────────────────
-        const SpotlightStep(
-          anchorId: 'sidebar:/warehouses',
-          title: 'Step 3 — Warehouses',
-          description:
-              'Warehouses must also exist before you add products — '
-              'stock levels are tracked per warehouse. Add your shop, studio, or storage location.',
-          navigateTo: '/warehouses',
-        ),
+        // ── 4. Add a warehouse ────────────────────────────────────────────
         SpotlightStep(
           anchorId: 'page:warehouses.add',
-          title: 'Add your first warehouse',
+          title: 'Step 3 — Add your Warehouse',
           description:
-              'Click here and fill in the location. '
-              'Tour continues once saved.',
-          completeWhen: (ctx) => ctx.read<AppState>().warehouses.isNotEmpty,
+              'Stock levels are tracked per warehouse. '
+              'Add your shop, studio, or storage location — at least one warehouse is required before you can add products. '
+              'Click "Add Warehouse", fill in the name & location, then save.',
+          navigateTo: '/warehouses',
+          completeWhen: () => appState.warehouses.isNotEmpty,
         ),
 
-        // ── Step 4: Products ─────────────────────────────────────────────
-        const SpotlightStep(
-          anchorId: 'sidebar.group:Products',
-          title: 'Step 4 — Products',
-          description:
-              'NOW add your products — suppliers and warehouses already exist, '
-              'so you can link everything immediately. '
-              'Import from Shopify or add manually — your choice.',
-          navigateTo: '/products',
-        ),
+        // ── 5. Add products ───────────────────────────────────────────────
         SpotlightStep(
           anchorId: 'page:products.import',
-          title: 'Option A — Import from Shopify',
+          title: 'Step 4A — Import Products from Shopify',
           description:
-              'Pulls your product catalogue in one click. '
-              '⚠️ Shopify only sends the SELLING price — you must enter the unit cost (what YOU pay) for each product, otherwise COGS, margin and reorder costs are all wrong. '
-              'Hit "Skip step" if you\'ll add manually.',
-          completeWhen: (ctx) => ctx.read<AppState>().products.isNotEmpty,
+              'If connected, click "Import from Shopify" to pull your entire product catalogue in one click. '
+              'After importing, take a moment to set the unit cost for each product — this is what powers your reorder calculations. '
+              'Use Next to skip to manual entry.',
+          navigateTo: '/products',
+          completeWhen: () => appState.products.isNotEmpty,
         ),
         SpotlightStep(
           anchorId: 'page:products.add',
-          title: 'Option B — Add a product manually',
+          title: 'Step 4B — Add a Product manually',
           description:
-              'Click here, fill the form (including unit cost), save. '
-              'For manufactured items, cost is calculated from the BOM you\'ll build in a later step.',
-          completeWhen: (ctx) => ctx.read<AppState>().products.isNotEmpty,
+              'No Shopify? Click "Add Product" and fill in the name, SKU, and unit cost. '
+              'Link it to the supplier and warehouse you just created. '
+              'The tour auto-advances once the first product is saved.',
+          completeWhen: () => appState.products.isNotEmpty,
         ),
 
-        // ── Step 5: Manufacturing (optional) ─────────────────────────────
+        // ── 6. Add demand / sales data ────────────────────────────────────
+        SpotlightStep(
+          anchorId: 'page:demand.add',
+          title: 'Step 5 — Add Sales / Demand Data',
+          description:
+              'This is the fuel for forecasting. '
+              'Use "Import Shopify Orders" (green button, top-right) to pull real sales history automatically, '
+              '"Import CSV" to upload historical data, '
+              'or click "Add Demand Record" to enter a period manually. '
+              'The more history you provide, the more accurate your forecasts.',
+          navigateTo: '/demand-data',
+          completeWhen: () => appState.demandByProduct.isNotEmpty,
+        ),
+
+        // ── 7. View Reorder Plan ──────────────────────────────────────────
+        const SpotlightStep(
+          anchorId: 'sidebar:/forecasts',
+          title: 'Step 6 — Your Reorder Plan',
+          description:
+              'Ma5zony has calculated your reorder plan using your demand data, lead times, and current stock levels. '
+              'Items below their Reorder Point are highlighted — tick them and click "Create Bulk Order" to send purchase orders to your suppliers. '
+              'This page updates automatically whenever your stock or demand changes.',
+          navigateTo: '/forecasts',
+        ),
+
+        // ── 8. Replenishment recommendations ─────────────────────────────
+        const SpotlightStep(
+          anchorId: 'sidebar:/replenishment',
+          title: 'Step 7 — Replenishment Recommendations',
+          description:
+              'This screen groups the reorder suggestions by supplier so you can send bulk orders. '
+              'Approve or adjust quantities, then create purchase orders in one click. '
+              'You\'re now fully set up to run your inventory on autopilot!',
+          navigateTo: '/replenishment',
+        ),
+
+        // ── 9. Manufacturers (manufacturing SMEs only) ────────────────────
         const SpotlightStep(
           anchorId: 'sidebar:/manufacturers',
-          title: 'Step 5 — Manufacturers (skip if reseller)',
+          title: 'Bonus — Manufacturers (skip if reseller)',
           description:
-              'If you make products in-house or through partners, list them here. '
-              'Pure resellers can skip steps 5–7 entirely.',
+              'If you produce goods in-house or through partners, add them here. '
+              'Pure resellers who only buy and sell finished goods can press Next to skip steps 9–11.',
           navigateTo: '/manufacturers',
         ),
         SpotlightStep(
           anchorId: 'page:manufacturers.add',
-          title: 'Add a manufacturer',
+          title: 'Add a Manufacturer',
           description:
-              'Click here to add one. '
-              'Auto-advances when saved — or hit "Skip step" if you don\'t manufacture anything.',
-          completeWhen: (ctx) => ctx.read<AppState>().manufacturers.isNotEmpty,
-        ),
-        const SpotlightStep(
-          anchorId: 'sidebar:/raw-materials',
-          title: 'Step 6 — Raw Materials (manufacturing only)',
-          description:
-              'List every material you buy as inputs. '
-              'Each links to a supplier — that\'s how reorder math knows lead times for components.',
-          navigateTo: '/raw-materials',
-        ),
-        SpotlightStep(
-          anchorId: 'page:rawmaterials.add',
-          title: 'Add a raw material',
-          description:
-              'Click and add one — link it to its supplier. '
-              'Auto-advances when saved, or "Skip step" if reseller-only.',
-          completeWhen: (ctx) => ctx.read<AppState>().rawMaterials.isNotEmpty,
-        ),
-        const SpotlightStep(
-          anchorId: 'sidebar:/bom',
-          title: 'Step 7 — Bill of Materials (manufacturing only)',
-          description:
-              'For each manufactured product, map the raw materials it consumes and their quantities. '
-              'Ma5zony rolls this up automatically into the product\'s unit cost.',
-          navigateTo: '/bom',
-        ),
-        SpotlightStep(
-          anchorId: 'page:bom.add',
-          title: 'Build your first BOM',
-          description:
-              'Click here, pick the finished product, add materials + quantities. '
-              'Auto-advances when saved, or "Skip step" if no manufactured products.',
-          completeWhen: (ctx) => ctx.read<AppState>().boms.isNotEmpty,
+              'Click "Add Manufacturer", fill in the contact and production capacity, then save. '
+              'Auto-advances when saved, or press Next to skip.',
+          completeWhen: () => appState.manufacturers.isNotEmpty,
         ),
 
-        // ── Final: Reorder Plan ──────────────────────────────────────────
-        const SpotlightStep(
-          anchorId: 'sidebar:/forecasts',
-          title: 'Final step — Reorder Plan',
+        // ── 10. Raw materials ─────────────────────────────────────────────
+        SpotlightStep(
+          anchorId: 'page:rawmaterials.add',
+          title: 'Add Raw Materials',
           description:
-              'Import your sales history from Shopify (or upload a CSV) to give Ma5zony demand data. '
-              'It then tells you exactly what to reorder, how much, and when. '
-              'You\'re all set — replay this tour any time from the dashboard!',
-          navigateTo: '/forecasts',
+              'List every input you buy for production. '
+              'Link each material to its supplier — this is how reorder math knows the lead time for components. '
+              'Auto-advances when saved.',
+          navigateTo: '/raw-materials',
+          completeWhen: () => appState.rawMaterials.isNotEmpty,
+        ),
+
+        // ── 11. BOM ───────────────────────────────────────────────────────
+        SpotlightStep(
+          anchorId: 'page:bom.add',
+          title: 'Build your Bill of Materials',
+          description:
+              'For each manufactured product, map the raw materials it consumes and their quantities. '
+              'Ma5zony rolls this up into the product\'s unit cost automatically. '
+              'Auto-advances when saved.',
+          navigateTo: '/bom',
+          completeWhen: () => appState.boms.isNotEmpty,
+        ),
+
+        // ── 12. Done ──────────────────────────────────────────────────────
+        const SpotlightStep(
+          anchorId: 'sidebar.group:Dashboard',
+          title: 'You\'re all set! 🎉',
+          description:
+              'Your foundation is complete:\n'
+              '✓ Suppliers & warehouses\n'
+              '✓ Products with costs\n'
+              '✓ Demand / sales history\n'
+              '✓ Live reorder plan\n\n'
+              'Ma5zony will now continuously watch your stock levels and alert you when it\'s time to reorder. '
+              'Replay this tour any time from the dashboard.',
+          navigateTo: '/dashboard',
         ),
       ],
       onNavigate: (path) {
-        if (context.mounted) context.go(path);
+        // Use the router instance (captured before tour start) rather than
+        // context.go() — context becomes stale after the first route change
+        // because GoRouter replaces the originating route, disposing its
+        // BuildContext. GoRouter itself is never disposed during app lifetime.
+        router.go(path);
       },
     );
 
     // Mark tour as done only AFTER the coach exits (user finished or skipped).
-    // Doing it up-front caused the flag to be set on a mid-tour browser
-    // refresh, so the tour would never auto-restart.
-    if (context.mounted) {
-      final state = context.read<AppState>();
-      unawaited(state.saveSettings(state.settings.copyWith(tourCompleted: true)));
-    }
+    // Use the pre-captured appState — context may no longer be mounted here.
+    unawaited(appState.saveSettings(appState.settings.copyWith(tourCompleted: true)));
     return true;
   }
 
@@ -264,11 +287,6 @@ class _WelcomeTourDialogState extends State<WelcomeTourDialog> {
               icon: Icons.shopping_cart_outlined,
               label: 'Orders',
               desc: 'Reorder Plan + order history.',
-            ),
-            _SidebarRow(
-              icon: Icons.attach_money_outlined,
-              label: 'Finance',
-              desc: 'Cash flow and financial analytics.',
             ),
           ],
         ),

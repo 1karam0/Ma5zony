@@ -14,9 +14,9 @@ import 'package:ma5zony/features/forecasts/forecasts_screen.dart';
 import 'package:ma5zony/features/forecasts/forecast_comparison_screen.dart';
 import 'package:ma5zony/features/reorder_plan/reorder_plan_screen.dart';
 import 'package:ma5zony/features/classification/abc_xyz_screen.dart';
+import 'package:ma5zony/features/supply_chain_insights/supply_chain_insights_screen.dart';
 import 'package:ma5zony/features/integrations/integrations_screen.dart';
 import 'package:ma5zony/features/settings/settings_screen.dart';
-import 'package:ma5zony/features/financial_analytics/financial_analytics_screen.dart';
 import 'package:ma5zony/features/orders/orders_screen.dart';
 import 'package:ma5zony/features/orders/create_order_screen.dart';
 import 'package:ma5zony/features/orders/order_detail_screen.dart';
@@ -27,7 +27,6 @@ import 'package:ma5zony/features/manufacturers/manufacturers_screen.dart';
 import 'package:ma5zony/features/manufacturing/recommendations_screen.dart';
 import 'package:ma5zony/features/manufacturing/production_orders_screen.dart';
 import 'package:ma5zony/features/manufacturing/production_order_detail_screen.dart';
-import 'package:ma5zony/features/cash_flow/cash_flow_screen.dart';
 import 'package:ma5zony/features/manufacturer_portal/manufacturer_portal_screen.dart';
 import 'package:ma5zony/features/factory_portal/factory_portal_screen.dart';
 import 'package:ma5zony/features/legal/legal_screens.dart';
@@ -170,6 +169,11 @@ GoRouter buildAppRouter(AppState appState) {
               const NoTransitionPage(child: AbcXyzScreen()),
         ),
         GoRoute(
+          path: '/supply-chain-insights',
+          pageBuilder: (context, state) =>
+              const NoTransitionPage(child: SupplyChainInsightsScreen()),
+        ),
+        GoRoute(
           path: '/replenishment',
           pageBuilder: (context, state) =>
               const NoTransitionPage(child: ReplenishmentScreen()),
@@ -183,11 +187,6 @@ GoRouter buildAppRouter(AppState appState) {
           path: '/settings',
           pageBuilder: (context, state) =>
               const NoTransitionPage(child: SettingsScreen()),
-        ),
-        GoRoute(
-          path: '/financial-analytics',
-          pageBuilder: (context, state) =>
-              const NoTransitionPage(child: FinancialAnalyticsScreen()),
         ),
         GoRoute(
           path: '/orders',
@@ -241,11 +240,6 @@ GoRouter buildAppRouter(AppState appState) {
               child: ProductionOrderDetailScreen(orderId: id),
             );
           },
-        ),
-        GoRoute(
-          path: '/cash-flow',
-          pageBuilder: (context, state) =>
-              const NoTransitionPage(child: CashFlowScreen()),
         ),
         GoRoute(
           path: '/orders/raw-materials',
