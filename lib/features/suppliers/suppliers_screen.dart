@@ -110,7 +110,7 @@ class SuppliersScreen extends StatelessWidget {
                       .where((p) => p.supplierId == s.id)
                       .length;
                   final linkedRMs = state.rawMaterials
-                      .where((r) => r.supplierId == s.id)
+                      .where((r) => s.suppliedRawMaterialIds.contains(r.id))
                       .toList();
                   return DataRow(
                     cells: [
@@ -811,6 +811,8 @@ class _SupplierFormDialogState extends State<_SupplierFormDialog> {
   }
 }
 
+enum _ChipAction { edit, delete }
+
 /// Multi-select chip picker for the raw materials this supplier carries.
 /// A single vendor commonly delivers many materials, so we expose all of
 /// them and let the user toggle them on/off.
@@ -840,18 +842,33 @@ class _RawMaterialsPicker extends StatelessWidget {
           children: [
             ...rawMaterials.map((rm) {
               final isSelected = selectedIds.contains(rm.id);
-              return FilterChip(
-                label: Text(rm.name),
-                selected: isSelected,
-                onSelected: (val) {
-                  final next = Set<String>.from(selectedIds);
-                  if (val) {
-                    next.add(rm.id);
-                  } else {
-                    next.remove(rm.id);
+              return GestureDetector(
+                onLongPress: () async {
+                  final action = await _showChipContextMenu(context, rm);
+                  if (action == _ChipAction.edit) {
+                    await _showEditMaterialDialog(context, rm);
+                  } else if (action == _ChipAction.delete) {
+                    final confirmed = await _confirmDeleteMaterial(context, rm.name);
+                    if (confirmed == true && context.mounted) {
+                      await context.read<AppState>().deleteRawMaterial(rm.id);
+                      final next = Set<String>.from(selectedIds)..remove(rm.id);
+                      onChanged(next);
+                    }
                   }
-                  onChanged(next);
                 },
+                child: FilterChip(
+                  label: Text(rm.name),
+                  selected: isSelected,
+                  onSelected: (val) {
+                    final next = Set<String>.from(selectedIds);
+                    if (val) {
+                      next.add(rm.id);
+                    } else {
+                      next.remove(rm.id);
+                    }
+                    onChanged(next);
+                  },
+                ),
               );
             }),
             // "+ New material" chip — creates a raw material inline and
@@ -874,13 +891,238 @@ class _RawMaterialsPicker extends StatelessWidget {
             ),
           ],
         ),
-        if (selectedIds.isNotEmpty) ...[
-          const SizedBox(height: 8),
-          Text('${selectedIds.length} material(s) selected',
-              style: AppTextStyles.bodySmall
-                  .copyWith(color: AppColors.textSecondary)),
-        ],
+        const SizedBox(height: 16),
+        // ── Selected materials bar ──────────────────────────────────────
+        // Always shown; gives clear visual confirmation of what is linked.
+        Container(
+          width: double.infinity,
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: selectedIds.isEmpty
+                ? AppColors.border.withValues(alpha: 0.4)
+                : AppColors.primary.withValues(alpha: 0.06),
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(
+              color: selectedIds.isEmpty
+                  ? AppColors.divider
+                  : AppColors.primary.withValues(alpha: 0.25),
+            ),
+          ),
+          child: selectedIds.isEmpty
+              ? Row(
+                  children: [
+                    Icon(Icons.link_off,
+                        size: 14, color: AppColors.textSecondary),
+                    const SizedBox(width: 6),
+                    Text('No materials linked yet — tick chips above to link.',
+                        style: AppTextStyles.bodySmall
+                            .copyWith(color: AppColors.textSecondary)),
+                  ],
+                )
+              : Wrap(
+                  spacing: 6,
+                  runSpacing: 6,
+                  crossAxisAlignment: WrapCrossAlignment.center,
+                  children: [
+                    Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(Icons.link,
+                            size: 13, color: AppColors.primary),
+                        const SizedBox(width: 4),
+                        Text('Linked:',
+                            style: AppTextStyles.bodySmall.copyWith(
+                                color: AppColors.primary,
+                                fontWeight: FontWeight.w600)),
+                      ],
+                    ),
+                    ...rawMaterials
+                        .where((rm) => selectedIds.contains(rm.id))
+                        .map((rm) => InputChip(
+                              label: Text(rm.name,
+                                  style: AppTextStyles.bodySmall.copyWith(
+                                      fontWeight: FontWeight.w500)),
+                              backgroundColor:
+                                  AppColors.primary.withValues(alpha: 0.12),
+                              side: BorderSide(
+                                  color: AppColors.primary
+                                      .withValues(alpha: 0.35)),
+                              deleteIconColor: AppColors.primary,
+                              onDeleted: () {
+                                final next = Set<String>.from(selectedIds)
+                                  ..remove(rm.id);
+                                onChanged(next);
+                              },
+                              visualDensity: VisualDensity.compact,
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 4, vertical: 0),
+                            )),
+                  ],
+                ),
+        ),
+        const SizedBox(height: 6),
+        Text(
+          'Long-press any chip above to edit or delete that material.',
+          style: AppTextStyles.bodySmall.copyWith(
+              color: AppColors.textSecondary,
+              fontStyle: FontStyle.italic),
+        ),
       ],
+    );
+  }
+
+  /// Long-press popup: returns the chosen action (edit / delete) or null.
+  Future<_ChipAction?> _showChipContextMenu(
+      BuildContext context, RawMaterial rm) {
+    final RenderBox button = context.findRenderObject() as RenderBox;
+    final RenderBox overlay =
+        Navigator.of(context).overlay!.context.findRenderObject() as RenderBox;
+    final offset = button.localToGlobal(
+        Offset(button.size.width / 2, button.size.height / 2),
+        ancestor: overlay);
+    return showMenu<_ChipAction>(
+      context: context,
+      position: RelativeRect.fromLTRB(
+          offset.dx, offset.dy, offset.dx + 1, offset.dy + 1),
+      items: [
+        PopupMenuItem(
+          value: _ChipAction.edit,
+          child: Row(
+            children: const [
+              Icon(Icons.edit_outlined, size: 16),
+              SizedBox(width: 8),
+              Text('Edit material'),
+            ],
+          ),
+        ),
+        PopupMenuItem(
+          value: _ChipAction.delete,
+          child: Row(
+            children: [
+              Icon(Icons.delete_outline, size: 16, color: Colors.red[700]),
+              const SizedBox(width: 8),
+              Text('Delete material',
+                  style: TextStyle(color: Colors.red[700])),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  /// Pre-filled edit dialog for an existing raw material.
+  Future<void> _showEditMaterialDialog(
+      BuildContext context, RawMaterial rm) {
+    final nameCtrl = TextEditingController(text: rm.name);
+    final costCtrl = TextEditingController(
+        text: rm.unitCost > 0 ? rm.unitCost.toString() : '');
+    final formKey = GlobalKey<FormState>();
+    String uom = rm.unit.isNotEmpty ? rm.unit : 'units';
+    const uoms = ['units', 'g', 'kg', 'm', 'cm', 'L', 'mL', 'pcs'];
+
+    return showDialog<void>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) => AlertDialog(
+          title: const Text('Edit Raw Material'),
+          content: SizedBox(
+            width: 380,
+            child: Form(
+              key: formKey,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  TextFormField(
+                    controller: nameCtrl,
+                    autofocus: true,
+                    decoration:
+                        const InputDecoration(labelText: 'Material Name *'),
+                    validator: (v) =>
+                        v == null || v.trim().isEmpty ? 'Required' : null,
+                  ),
+                  const SizedBox(height: 12),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: TextFormField(
+                          controller: costCtrl,
+                          decoration: const InputDecoration(
+                              labelText: 'Unit Cost', prefixText: 'EGP '),
+                          keyboardType: const TextInputType.numberWithOptions(
+                              decimal: true),
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: DropdownButtonFormField<String>(
+                          value: uoms.contains(uom) ? uom : 'units',
+                          decoration:
+                              const InputDecoration(labelText: 'Unit'),
+                          items: uoms
+                              .map((u) => DropdownMenuItem(
+                                  value: u, child: Text(u)))
+                              .toList(),
+                          onChanged: (v) =>
+                              setDialogState(() => uom = v ?? 'units'),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () async {
+                if (!formKey.currentState!.validate()) return;
+                final updated = RawMaterial(
+                  id: rm.id,
+                  name: nameCtrl.text.trim(),
+                  sku: rm.sku,
+                  unit: uom,
+                  unitOfMeasure: uom,
+                  unitCost: double.tryParse(costCtrl.text.trim()) ?? rm.unitCost,
+                  currentStock: rm.currentStock,
+                  safetyStock: rm.safetyStock,
+                  leadTimeDays: rm.leadTimeDays,
+                );
+                await ctx.read<AppState>().updateRawMaterial(updated);
+                if (ctx.mounted) Navigator.pop(ctx);
+              },
+              child: const Text('Save'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// Confirm before deleting a material globally.
+  Future<bool?> _confirmDeleteMaterial(BuildContext context, String name) {
+    return showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Delete material?'),
+        content: Text(
+            '"$name" will be permanently removed from your inventory and '
+            'unlinked from all suppliers. This cannot be undone.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: Colors.red[700]),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
     );
   }
 

@@ -19,7 +19,8 @@ class WarehousesScreen extends StatelessWidget {
       return const Center(child: CircularProgressIndicator());
     }
 
-    final totalStock = warehouses.fold<int>(0, (sum, w) => sum + w.totalStock);
+    final totalStock =
+        warehouses.fold<int>(0, (sum, w) => sum + state.unitsStoredAt(w.id));
     final totalValue = state.totalStockValue;
 
     return SingleChildScrollView(
@@ -119,9 +120,8 @@ class WarehousesScreen extends StatelessWidget {
                   DataColumn(label: Text('Actions')),
                 ],
                 rows: warehouses.map((w) {
-                  final skuCount = products
-                      .where((p) => p.warehouseId == w.id)
-                      .length;
+                  final skuCount = state.skuCountAt(w.id);
+                  final unitsStored = state.unitsStoredAt(w.id);
                   return DataRow(
                     cells: [
                       DataCell(
@@ -156,7 +156,7 @@ class WarehousesScreen extends StatelessWidget {
                           ],
                         ),
                       ),
-                      DataCell(Text('${w.totalStock} units')),
+                      DataCell(Text('$unitsStored units')),
                       DataCell(Text('$skuCount SKUs')),
                       const DataCell(StatusChip('Active')),
                       DataCell(

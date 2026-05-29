@@ -18,6 +18,10 @@ import 'package:ma5zony/features/onboarding/tour_targets.dart';
 /// [showProductCostFixDialog] which dispatches to the correct flow.
 Future<void> showQuickCostDialog(
     BuildContext context, Product product) async {
+  // Capture the provider up-front from the (stable) screen context so the
+  // save handler never reads it through the dialog's own context, which may be
+  // deactivated by the time the mutation runs.
+  final appState = context.read<AppState>();
   final ctrl = TextEditingController(
       text: product.unitCost > 0
           ? product.unitCost.toStringAsFixed(2)
@@ -70,34 +74,14 @@ Future<void> showQuickCostDialog(
           onPressed: () async {
             if (!formKey.currentState!.validate()) return;
             final newCost = double.parse(ctrl.text.trim());
-            final updated = Product(
-              id: product.id,
-              sku: product.sku,
-              name: product.name,
-              category: product.category,
-              unitCost: newCost,
-              currentStock: product.currentStock,
-              supplierId: product.supplierId,
-              manufacturerId: product.manufacturerId,
-              warehouseId: product.warehouseId,
-              isActive: product.isActive,
-              leadTimeDays: product.leadTimeDays,
-              averageDailySales: product.averageDailySales,
-              minimumStock: product.minimumStock,
-              shopifyVariantId: product.shopifyVariantId,
-              shopifyProductId: product.shopifyProductId,
-              sellingPrice: product.sellingPrice,
-              productionFee: product.productionFee,
-              shopifyUnitCost: product.shopifyUnitCost,
-              isBundle: product.isBundle,
-              bundleComponents: product.bundleComponents,
-              sourcingOptions: product.sourcingOptions,
-              stockByWarehouse: product.stockByWarehouse,
-            );
-            if (ctx.mounted) {
-              await ctx.read<AppState>().updateProduct(updated);
-              Navigator.pop(ctx);
-            }
+            // Use copyWith so every field (including imageUrl) is preserved —
+            // manual reconstruction silently drops any field not listed.
+            final updated = product.copyWith(unitCost: newCost);
+            // Close the dialog FIRST, then mutate state. Doing the
+            // notifyListeners-driven rebuild while the dialog is still mounted
+            // can deactivate an InheritedElement that still has dependents.
+            Navigator.pop(ctx);
+            await appState.updateProduct(updated);
           },
           child: const Text('Save'),
         ),
@@ -105,6 +89,110 @@ Future<void> showQuickCostDialog(
     ),
   );
   ctrl.dispose();
+}
+
+/// Per-product warehouse picker. Lets the user pick which warehouse stores
+/// THIS product (and, if the product has on-hand stock with no per-warehouse
+/// breakdown yet, allocates that stock to the chosen warehouse). Used by the
+/// inline "Assign Warehouse ›" link in the products table, so the user can
+/// fix one product at a time without leaving the page.
+Future<void> showAssignProductWarehouseDialog(
+    BuildContext context, Product product) async {
+  final state = context.read<AppState>();
+  final warehouses = state.warehouses;
+
+  if (warehouses.isEmpty) {
+    final go = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('No warehouses yet'),
+        content: const Text(
+            'You have no warehouses set up. Add a warehouse first, then come '
+            'back here to assign this product to it.'),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.of(context).pop(false),
+              child: const Text('Cancel')),
+          FilledButton(
+              onPressed: () => Navigator.of(context).pop(true),
+              child: const Text('Go to Warehouses')),
+        ],
+      ),
+    );
+    if (go == true && context.mounted) context.go('/warehouses');
+    return;
+  }
+
+  String? selected = (product.warehouseId != null &&
+          product.warehouseId!.isNotEmpty &&
+          warehouses.any((w) => w.id == product.warehouseId))
+      ? product.warehouseId
+      : warehouses.first.id;
+
+  final saved = await showDialog<bool>(
+    context: context,
+    builder: (dialogCtx) {
+      return StatefulBuilder(
+        builder: (ctx, setLocal) => AlertDialog(
+          title: Text('Assign warehouse for "${product.name}"'),
+          content: SizedBox(
+            width: 420,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  product.currentStock > 0
+                      ? 'Current on-hand stock (${product.currentStock} units) '
+                          'will be placed at the chosen warehouse.'
+                      : 'Pick the warehouse where this product is stored.',
+                  style:
+                      const TextStyle(fontSize: 13, color: AppColors.textSecondary),
+                ),
+                const SizedBox(height: 14),
+                DropdownButtonFormField<String>(
+                  initialValue: selected,
+                  decoration: const InputDecoration(
+                    labelText: 'Warehouse',
+                    border: OutlineInputBorder(),
+                  ),
+                  items: [
+                    for (final w in warehouses)
+                      DropdownMenuItem(value: w.id, child: Text(w.name)),
+                  ],
+                  onChanged: (v) => setLocal(() => selected = v),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.of(dialogCtx).pop(false),
+                child: const Text('Cancel')),
+            FilledButton(
+              onPressed: selected == null
+                  ? null
+                  : () async {
+                      await state.assignWarehouseToProducts(
+                          [product.id], selected!);
+                      if (dialogCtx.mounted) {
+                        Navigator.of(dialogCtx).pop(true);
+                      }
+                    },
+              child: const Text('Save'),
+            ),
+          ],
+        ),
+      );
+    },
+  );
+
+  if (saved == true && context.mounted) {
+    final wName = warehouses.firstWhere((w) => w.id == selected).name;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('"${product.name}" assigned to $wName.')),
+    );
+  }
 }
 
 /// Smart entry point used by the products table "needs cost" cell. Routes
@@ -241,31 +329,76 @@ class _ProductsScreenState extends State<ProductsScreen> {
             final missingCost = state.productsMissingCost.length;
             final missingSupplier = state.productsMissingSupplier.length;
             final missingBom = state.manufacturedProductsMissingBom.length;
-            final totalGaps = missingCost + missingSupplier + missingBom;
+            final missingWarehouse = state.productsMissingWarehouse.length;
+            final needSourcing = state.productsNeedingSourcingType.length;
+            final totalGaps =
+                missingCost + missingSupplier + missingBom + missingWarehouse;
             if (totalGaps == 0 || state.products.isEmpty) {
               return const SizedBox.shrink();
             }
+            // When products haven't been classified yet, lead with that —
+            // it's the decision that determines every other fix (a
+            // manufactured product needs a BOM, not a supplier price).
+            final leadWithSourcing = needSourcing > 0;
             final parts = <String>[
+              if (leadWithSourcing)
+                '$needSourcing need a sourcing type (purchased or manufactured)',
               if (missingCost > 0)
                 '$missingCost missing unit cost',
-              if (missingSupplier > 0)
-                '$missingSupplier missing supplier',
+              if (!leadWithSourcing && missingSupplier > 0)
+                '$missingSupplier purchased item(s) missing supplier',
+              if (missingWarehouse > 0)
+                '$missingWarehouse missing warehouse',
               if (missingBom > 0)
-                '$missingBom missing BOM',
+                '$missingBom manufactured item(s) missing BOM',
             ];
             return Padding(
               padding: const EdgeInsets.only(bottom: 16),
               child: AlertBanner(
                 severity: AlertSeverity.warning,
-                title: 'Finish product setup to trust your KPIs',
-                message:
-                    '${parts.join(' · ')}. Inventory cost, COGS and margin are '
-                    'calculated from these fields — leave them blank and the '
-                    'dashboard numbers will be wrong.',
-                action: TextButton(
-                  onPressed: () =>
-                      setState(() => _statusFilter = 'Needs Setup'),
-                  child: const Text('Show items'),
+                title: leadWithSourcing
+                    ? 'Tell us how you source each product first'
+                    : 'Finish product setup to trust your KPIs',
+                message: leadWithSourcing
+                    ? '${parts.join(' · ')}. A purchased product\'s cost is the '
+                        'price your supplier charges; a manufactured product\'s '
+                        'cost is built from its raw materials + production fee. '
+                        'Set the type so each item gets the right setup.'
+                    : '${parts.join(' · ')}. Inventory cost, COGS and margin are '
+                        'calculated from these fields — leave them blank and the '
+                        'dashboard numbers will be wrong.',
+                action: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (needSourcing > 0)
+                      TextButton(
+                        onPressed: () =>
+                            _showSetSourcingDialog(context, state),
+                        child: const Text('Set sourcing'),
+                      ),
+                    if (!leadWithSourcing && missingSupplier > 0)
+                      TextButton(
+                        onPressed: () =>
+                            _showLinkSuppliersDialog(context, state),
+                        child: const Text('Link suppliers'),
+                      ),
+                    if (!leadWithSourcing && missingBom > 0)
+                      TextButton(
+                        onPressed: () => context.go('/bom'),
+                        child: const Text('Build BOM'),
+                      ),
+                    if (missingWarehouse > 0)
+                      TextButton(
+                        onPressed: () =>
+                            _showAssignWarehouseDialog(context, state),
+                        child: const Text('Assign warehouse'),
+                      ),
+                    TextButton(
+                      onPressed: () =>
+                          setState(() => _statusFilter = 'Needs Setup'),
+                      child: const Text('Show items'),
+                    ),
+                  ],
                 ),
               ),
             );
@@ -286,6 +419,75 @@ class _ProductsScreenState extends State<ProductsScreen> {
                   ),
                   onChanged: (v) => setState(() => _search = v),
                 ),
+              ),
+              const SizedBox(width: 16),
+              KeyedSubtree(
+                key: TourTargets.instance.keyFor('page:products.setSourcing'),
+                child: Builder(builder: (context) {
+                  final pending = state.productsNeedingSourcingType.length;
+                  return OutlinedButton.icon(
+                    onPressed: () => _showSetSourcingDialog(context, state),
+                    icon: Icon(
+                      pending > 0 ? Icons.help_outline : Icons.category_outlined,
+                      color: pending > 0 ? AppColors.warning : null,
+                    ),
+                    label: Text(pending > 0
+                        ? 'Set Sourcing ($pending)'
+                        : 'Set Sourcing'),
+                    style: pending > 0
+                        ? OutlinedButton.styleFrom(
+                            foregroundColor: AppColors.warning,
+                            side: BorderSide(color: AppColors.warning),
+                          )
+                        : null,
+                  );
+                }),
+              ),
+              const SizedBox(width: 16),
+              KeyedSubtree(
+                key: TourTargets.instance.keyFor('page:products.linkSupplier'),
+                child: Builder(builder: (context) {
+                  final missing = state.productsMissingSupplier.length;
+                  return OutlinedButton.icon(
+                    onPressed: () => _showLinkSuppliersDialog(context, state),
+                    icon: Icon(
+                      missing > 0 ? Icons.link_off : Icons.link,
+                      color: missing > 0 ? AppColors.warning : null,
+                    ),
+                    label: Text(missing > 0
+                        ? 'Link Suppliers ($missing)'
+                        : 'Link Suppliers'),
+                    style: missing > 0
+                        ? OutlinedButton.styleFrom(
+                            foregroundColor: AppColors.warning,
+                            side: BorderSide(color: AppColors.warning),
+                          )
+                        : null,
+                  );
+                }),
+              ),
+              const SizedBox(width: 16),
+              KeyedSubtree(
+                key: TourTargets.instance.keyFor('page:products.assignWarehouse'),
+                child: Builder(builder: (context) {
+                  final missing = state.productsMissingWarehouse.length;
+                  return OutlinedButton.icon(
+                    onPressed: () => _showAssignWarehouseDialog(context, state),
+                    icon: Icon(
+                      missing > 0 ? Icons.warehouse_outlined : Icons.warehouse,
+                      color: missing > 0 ? AppColors.warning : null,
+                    ),
+                    label: Text(missing > 0
+                        ? 'Assign Warehouse ($missing)'
+                        : 'Assign Warehouse'),
+                    style: missing > 0
+                        ? OutlinedButton.styleFrom(
+                            foregroundColor: AppColors.warning,
+                            side: BorderSide(color: AppColors.warning),
+                          )
+                        : null,
+                  );
+                }),
               ),
               const SizedBox(width: 16),
               KeyedSubtree(
@@ -424,6 +626,27 @@ class _ProductsScreenState extends State<ProductsScreen> {
     showDialog(context: context, builder: (ctx) => const _ImportDialog());
   }
 
+  void _showLinkSuppliersDialog(BuildContext context, AppState state) {
+    showDialog(
+      context: context,
+      builder: (ctx) => const _LinkSuppliersDialog(),
+    );
+  }
+
+  void _showAssignWarehouseDialog(BuildContext context, AppState state) {
+    showDialog(
+      context: context,
+      builder: (ctx) => const _AssignWarehouseDialog(),
+    );
+  }
+
+  void _showSetSourcingDialog(BuildContext context, AppState state) {
+    showDialog(
+      context: context,
+      builder: (ctx) => const _SetSourcingDialog(),
+    );
+  }
+
   void _showAddProductDialog(BuildContext context, AppState state) {
     showDialog(
       context: context,
@@ -482,22 +705,31 @@ class _ProductDataSource extends DataTableSource {
         DataCell(
           SizedBox(
             width: 260,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisAlignment: MainAxisAlignment.center,
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.center,
               children: [
-                Text(
-                  p.name,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: AppTextStyles.tableCell
-                      .copyWith(fontWeight: FontWeight.w600),
-                ),
-                Text(
-                  p.sku,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: AppTextStyles.bodySmall,
+                _ProductThumb(imageUrl: p.imageUrl, name: p.name),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Text(
+                        p.name,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: AppTextStyles.tableCell
+                            .copyWith(fontWeight: FontWeight.w600),
+                      ),
+                      Text(
+                        p.sku,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: AppTextStyles.bodySmall,
+                      ),
+                    ],
+                  ),
                 ),
               ],
             ),
@@ -731,7 +963,7 @@ class _SupplyChainCell extends StatelessWidget {
         fixPath = '/raw-materials';
         fixLabel = 'Add Supplier to material';
       } else if (!hasWarehouse) {
-        fixPath = '/warehouses';
+        fixPath = null;
         fixLabel = 'Assign Warehouse';
       }
       final allGood = hasBom && hasSupplier && hasWarehouse;
@@ -751,8 +983,15 @@ class _SupplyChainCell extends StatelessWidget {
                 _ChainBadge(label: 'Warehouse', ok: hasWarehouse),
               ],
             ),
-            if (!allGood && fixPath != null)
-              _FixLink(label: fixLabel!, path: fixPath, context: context),
+            if (!allGood && fixLabel != null)
+              _FixLink(
+                label: fixLabel,
+                path: fixPath,
+                context: context,
+                onTap: fixLabel == 'Assign Warehouse'
+                    ? () => showAssignProductWarehouseDialog(context, product)
+                    : null,
+              ),
           ],
         ),
       );
@@ -760,10 +999,8 @@ class _SupplyChainCell extends StatelessWidget {
 
     // ── From-supplier path: no BOM needed — just supplier + warehouse ────────
     if (isFromSupplier) {
-      String? fixPath;
       String? fixLabel;
       if (!hasWarehouse) {
-        fixPath = '/warehouses';
         fixLabel = 'Assign Warehouse';
       }
       final allGood = hasWarehouse;
@@ -781,8 +1018,14 @@ class _SupplyChainCell extends StatelessWidget {
                 _ChainBadge(label: 'Warehouse', ok: hasWarehouse),
               ],
             ),
-            if (!allGood && fixPath != null)
-              _FixLink(label: fixLabel!, path: fixPath, context: context),
+            if (!allGood && fixLabel != null)
+              _FixLink(
+                label: fixLabel,
+                path: null,
+                context: context,
+                onTap: () =>
+                    showAssignProductWarehouseDialog(context, product),
+              ),
           ],
         ),
       );
@@ -848,6 +1091,51 @@ class _FixLink extends StatelessWidget {
   }
 }
 
+/// Small circular thumbnail rendered next to the product name in the table.
+/// Uses the Shopify-imported `imageUrl` if present; otherwise falls back to
+/// the product's first-letter initial on a tinted background.
+class _ProductThumb extends StatelessWidget {
+  final String? imageUrl;
+  final String name;
+  const _ProductThumb({required this.imageUrl, required this.name});
+
+  @override
+  Widget build(BuildContext context) {
+    const double size = 36;
+    final initial = name.trim().isNotEmpty ? name.trim()[0].toUpperCase() : '?';
+    final fallback = Container(
+      width: size,
+      height: size,
+      alignment: Alignment.center,
+      decoration: BoxDecoration(
+        color: AppColors.primary.withValues(alpha: 0.10),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: AppColors.borderSubtle),
+      ),
+      child: Text(initial,
+          style: const TextStyle(
+              fontSize: 14,
+              fontWeight: FontWeight.w700,
+              color: AppColors.primary)),
+    );
+
+    if (imageUrl == null || imageUrl!.isEmpty) return fallback;
+
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(8),
+      child: Image.network(
+        imageUrl!,
+        width: size,
+        height: size,
+        fit: BoxFit.cover,
+        errorBuilder: (_, __, ___) => fallback,
+        loadingBuilder: (ctx, child, prog) =>
+            prog == null ? child : fallback,
+      ),
+    );
+  }
+}
+
 class _ChainBadge extends StatelessWidget {
   final String label;
   final bool ok;
@@ -873,6 +1161,847 @@ class _ChainBadge extends StatelessWidget {
                   fontSize: 9, fontWeight: FontWeight.w600, color: color)),
         ],
       ),
+    );
+  }
+}
+
+// ─── Set Sourcing Dialog ──────────────────────────────────────────────────────
+// The single decision that drives everything else: is each product PURCHASED
+// (cost = supplier price) or MANUFACTURED (cost = raw materials + production
+// fee)? Until this is answered, the system can't tell whether a product needs
+// a supplier link or a Bill of Materials — which is exactly why a manufactured
+// item like "Figure-8 Straps" was wrongly showing up in the supplier list.
+// This dialog classifies AND wires each product in one step:
+//   • Purchased   → pick the supplier you buy it from.
+//   • Manufactured → pick who makes it; its recipe (materials + their own
+//                    suppliers) is built in the BOM step.
+
+class _SetSourcingDialog extends StatefulWidget {
+  const _SetSourcingDialog();
+
+  @override
+  State<_SetSourcingDialog> createState() => _SetSourcingDialogState();
+}
+
+class _SetSourcingDialogState extends State<_SetSourcingDialog> {
+  // productId -> chosen type
+  final Map<String, _ProductSourceType> _type = {};
+  // productId -> chosen supplierId (purchased) or manufacturerId (manufactured)
+  final Map<String, String?> _link = {};
+  bool _saving = false;
+
+  _ProductSourceType _typeOf(String id) =>
+      _type[id] ?? _ProductSourceType.purchased;
+
+  @override
+  Widget build(BuildContext context) {
+    final state = context.watch<AppState>();
+    final suppliers = state.suppliers;
+    final manufacturers = state.manufacturers;
+    final pending = state.productsNeedingSourcingType;
+
+    final anyManufactured =
+        pending.any((p) => _typeOf(p.id) == _ProductSourceType.manufactured);
+    final anyPurchased =
+        pending.any((p) => _typeOf(p.id) == _ProductSourceType.purchased);
+
+    return AlertDialog(
+      title: const Text('How do you source each product?'),
+      content: SizedBox(
+        width: 620,
+        child: pending.isEmpty
+            ? Padding(
+                padding: const EdgeInsets.symmetric(vertical: 12),
+                child: Row(
+                  children: [
+                    const Icon(Icons.check_circle, color: AppColors.success),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Text(
+                        'Every product knows how it\'s sourced. Purchased items '
+                        'are linked to suppliers; manufactured items will get a '
+                        'Bill of Materials.',
+                        style: TextStyle(color: AppColors.textSecondary),
+                      ),
+                    ),
+                  ],
+                ),
+              )
+            : Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    '${pending.length} product(s) need a sourcing type. '
+                    'Purchased = you buy it from a supplier (cost = their price). '
+                    'Manufactured = you make it (cost = raw materials + a '
+                    'production fee, set up in the BOM step).',
+                    style: TextStyle(
+                        fontSize: 13, color: AppColors.textSecondary),
+                  ),
+                  const SizedBox(height: 8),
+                  // Apply-one-type-to-all shortcut.
+                  Row(
+                    children: [
+                      Text('Set all to:',
+                          style: TextStyle(
+                              fontSize: 12,
+                              color: AppColors.textSecondary)),
+                      const SizedBox(width: 8),
+                      TextButton.icon(
+                        icon: const Icon(Icons.shopping_cart_outlined,
+                            size: 16),
+                        label: const Text('Purchased'),
+                        onPressed: () => setState(() {
+                          for (final p in pending) {
+                            _type[p.id] = _ProductSourceType.purchased;
+                          }
+                        }),
+                      ),
+                      TextButton.icon(
+                        icon: const Icon(Icons.precision_manufacturing_outlined,
+                            size: 16),
+                        label: const Text('Manufactured'),
+                        onPressed: () => setState(() {
+                          for (final p in pending) {
+                            _type[p.id] = _ProductSourceType.manufactured;
+                          }
+                        }),
+                      ),
+                    ],
+                  ),
+                  if (anyPurchased && suppliers.isEmpty)
+                    _InlineSetupHint(
+                      message:
+                          'Purchased products need a supplier. Add one first.',
+                      buttonLabel: 'Go to Suppliers',
+                      onPressed: () {
+                        Navigator.of(context).pop();
+                        context.go('/suppliers');
+                      },
+                    ),
+                  if (anyManufactured && manufacturers.isEmpty)
+                    _InlineSetupHint(
+                      message:
+                          'Manufactured products need a maker. Add a manufacturer first.',
+                      buttonLabel: 'Go to Manufacturers',
+                      onPressed: () {
+                        Navigator.of(context).pop();
+                        context.go('/manufacturers');
+                      },
+                    ),
+                  const Divider(height: 20),
+                  Flexible(
+                    child: ListView.builder(
+                      shrinkWrap: true,
+                      itemCount: pending.length,
+                      itemBuilder: (ctx, i) {
+                        final p = pending[i];
+                        final type = _typeOf(p.id);
+                        final isMade =
+                            type == _ProductSourceType.manufactured;
+                        return Padding(
+                          padding: const EdgeInsets.only(bottom: 12),
+                          child: Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Expanded(
+                                flex: 3,
+                                child: Column(
+                                  crossAxisAlignment:
+                                      CrossAxisAlignment.start,
+                                  children: [
+                                    Text(p.name,
+                                        style: const TextStyle(
+                                            fontWeight: FontWeight.w600),
+                                        overflow: TextOverflow.ellipsis),
+                                    if (p.sku.isNotEmpty)
+                                      Text(p.sku,
+                                          style: TextStyle(
+                                              fontSize: 11,
+                                              color:
+                                                  AppColors.textSecondary)),
+                                    const SizedBox(height: 6),
+                                    SegmentedButton<_ProductSourceType>(
+                                      style: const ButtonStyle(
+                                        visualDensity: VisualDensity.compact,
+                                      ),
+                                      segments: const [
+                                        ButtonSegment(
+                                          value: _ProductSourceType.purchased,
+                                          label: Text('Purchased',
+                                              style: TextStyle(fontSize: 12)),
+                                          icon: Icon(
+                                              Icons.shopping_cart_outlined,
+                                              size: 14),
+                                        ),
+                                        ButtonSegment(
+                                          value:
+                                              _ProductSourceType.manufactured,
+                                          label: Text('Manufactured',
+                                              style: TextStyle(fontSize: 12)),
+                                          icon: Icon(
+                                              Icons
+                                                  .precision_manufacturing_outlined,
+                                              size: 14),
+                                        ),
+                                      ],
+                                      selected: {type},
+                                      onSelectionChanged: (s) => setState(() {
+                                        _type[p.id] = s.first;
+                                        _link[p.id] = null;
+                                      }),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              const SizedBox(width: 12),
+                              Expanded(
+                                flex: 2,
+                                child: isMade
+                                    ? DropdownButtonFormField<String>(
+                                        initialValue: _link[p.id],
+                                        isExpanded: true,
+                                        decoration: const InputDecoration(
+                                          labelText: 'Made by',
+                                          isDense: true,
+                                          border: OutlineInputBorder(),
+                                        ),
+                                        items: manufacturers
+                                            .map((m) => DropdownMenuItem(
+                                                  value: m.id,
+                                                  child: Text(m.name,
+                                                      overflow: TextOverflow
+                                                          .ellipsis),
+                                                ))
+                                            .toList(),
+                                        onChanged: (v) => setState(
+                                            () => _link[p.id] = v),
+                                      )
+                                    : DropdownButtonFormField<String>(
+                                        initialValue: _link[p.id],
+                                        isExpanded: true,
+                                        decoration: const InputDecoration(
+                                          labelText: 'Bought from',
+                                          isDense: true,
+                                          border: OutlineInputBorder(),
+                                        ),
+                                        items: suppliers
+                                            .map((s) => DropdownMenuItem(
+                                                  value: s.id,
+                                                  child: Text(s.name,
+                                                      overflow: TextOverflow
+                                                          .ellipsis),
+                                                ))
+                                            .toList(),
+                                        onChanged: (v) => setState(
+                                            () => _link[p.id] = v),
+                                      ),
+                              ),
+                            ],
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    'Tip: a purchased product can have more than one supplier — '
+                    'open the product later to add backup suppliers.',
+                    style: TextStyle(
+                        fontSize: 11,
+                        fontStyle: FontStyle.italic,
+                        color: AppColors.textSecondary),
+                  ),
+                ],
+              ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: _saving ? null : () => Navigator.of(context).pop(),
+          child: const Text('Close'),
+        ),
+        if (pending.isNotEmpty)
+          FilledButton(
+            onPressed: _saving
+                ? null
+                : () async {
+                    // Group choices by destination so each link is one batch.
+                    final bySupplier = <String, List<String>>{};
+                    final byManufacturer = <String, List<String>>{};
+                    for (final p in pending) {
+                      final link = _link[p.id];
+                      if (link == null || link.isEmpty) continue;
+                      if (_typeOf(p.id) ==
+                          _ProductSourceType.manufactured) {
+                        byManufacturer
+                            .putIfAbsent(link, () => [])
+                            .add(p.id);
+                      } else {
+                        bySupplier.putIfAbsent(link, () => []).add(p.id);
+                      }
+                    }
+                    if (bySupplier.isEmpty && byManufacturer.isEmpty) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                            content: Text(
+                                'Pick a supplier or manufacturer for at least one product.')),
+                      );
+                      return;
+                    }
+                    setState(() => _saving = true);
+                    final messenger = ScaffoldMessenger.of(context);
+                    final navigator = Navigator.of(context);
+                    final appState = context.read<AppState>();
+                    int purchased = 0;
+                    int made = 0;
+                    for (final e in bySupplier.entries) {
+                      purchased += await appState.assignSupplierToProducts(
+                          e.value, e.key);
+                    }
+                    for (final e in byManufacturer.entries) {
+                      made += await appState.assignManufacturerToProducts(
+                          e.value, e.key);
+                    }
+                    if (!mounted) return;
+                    navigator.pop();
+                    messenger.showSnackBar(
+                      SnackBar(
+                          content: Text('$purchased purchased · $made '
+                              'manufactured product(s) set up.'
+                              '${made > 0 ? ' Build their BOM next.' : ''}')),
+                    );
+                  },
+            child: _saving
+                ? const SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(
+                        strokeWidth: 2, color: Colors.white))
+                : const Text('Save Sourcing'),
+          ),
+      ],
+    );
+  }
+}
+
+/// Small inline warning + action used inside the sourcing dialog when a
+/// prerequisite (supplier or manufacturer) doesn't exist yet.
+class _InlineSetupHint extends StatelessWidget {
+  final String message;
+  final String buttonLabel;
+  final VoidCallback onPressed;
+  const _InlineSetupHint({
+    required this.message,
+    required this.buttonLabel,
+    required this.onPressed,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      margin: const EdgeInsets.only(top: 8),
+      padding: const EdgeInsets.all(8),
+      decoration: BoxDecoration(
+        color: AppColors.warning.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(6),
+        border: Border.all(color: AppColors.warning.withValues(alpha: 0.3)),
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.info_outline, size: 16, color: AppColors.warning),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(message,
+                style: const TextStyle(fontSize: 12)),
+          ),
+          TextButton(onPressed: onPressed, child: Text(buttonLabel)),
+        ],
+      ),
+    );
+  }
+}
+
+// ─── Link Suppliers Dialog ────────────────────────────────────────────────────
+// Bulk-assigns a supplier to products that don't have one yet (typically
+// freshly imported from Shopify). Without a supplier link, the reorder engine
+// can't group items into purchase orders or email the supplier — so this is a
+// required bridge between "import products" and "create bulk order".
+
+class _LinkSuppliersDialog extends StatefulWidget {
+  const _LinkSuppliersDialog();
+
+  @override
+  State<_LinkSuppliersDialog> createState() => _LinkSuppliersDialogState();
+}
+
+class _LinkSuppliersDialogState extends State<_LinkSuppliersDialog> {
+  // productId -> chosen supplierId (null = leave unassigned)
+  final Map<String, String?> _choices = {};
+  String? _bulkSupplierId;
+  bool _saving = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final state = context.watch<AppState>();
+    final suppliers = state.suppliers;
+    final unlinked = state.productsMissingSupplier
+        .where((p) =>
+            p.manufacturerId == null || p.manufacturerId!.isEmpty)
+        .toList();
+
+    return AlertDialog(
+      title: const Text('Link products to suppliers'),
+      content: SizedBox(
+        width: 560,
+        child: suppliers.isEmpty
+            ? Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'You have no suppliers yet. Add a supplier first, then come '
+                    'back here to link your products to it.',
+                    style: TextStyle(color: AppColors.textSecondary),
+                  ),
+                  const SizedBox(height: 16),
+                  Align(
+                    alignment: Alignment.centerRight,
+                    child: FilledButton(
+                      onPressed: () {
+                        Navigator.of(context).pop();
+                        context.go('/suppliers');
+                      },
+                      child: const Text('Go to Suppliers'),
+                    ),
+                  ),
+                ],
+              )
+            : unlinked.isEmpty
+                ? Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                    child: Row(
+                      children: [
+                        const Icon(Icons.check_circle,
+                            color: AppColors.success),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Text(
+                            'All purchased products are already linked to a '
+                            'supplier. You\'re ready to create bulk orders.',
+                            style:
+                                TextStyle(color: AppColors.textSecondary),
+                          ),
+                        ),
+                      ],
+                    ),
+                  )
+                : Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        '${unlinked.length} product(s) aren\'t linked to a '
+                        'supplier yet. Set a supplier per product, or apply '
+                        'one to all at once.',
+                        style: TextStyle(
+                            fontSize: 13, color: AppColors.textSecondary),
+                      ),
+                      const SizedBox(height: 12),
+                      // Apply-to-all row
+                      Row(
+                        children: [
+                          Expanded(
+                            child: DropdownButtonFormField<String>(
+                              initialValue: _bulkSupplierId,
+                              isExpanded: true,
+                              decoration: const InputDecoration(
+                                labelText: 'Apply one supplier to all',
+                                isDense: true,
+                                border: OutlineInputBorder(),
+                              ),
+                              items: suppliers
+                                  .map((s) => DropdownMenuItem(
+                                        value: s.id,
+                                        child: Text(s.name,
+                                            overflow:
+                                                TextOverflow.ellipsis),
+                                      ))
+                                  .toList(),
+                              onChanged: (v) => setState(() {
+                                _bulkSupplierId = v;
+                                if (v != null) {
+                                  for (final p in unlinked) {
+                                    _choices[p.id] = v;
+                                  }
+                                }
+                              }),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const Divider(height: 24),
+                      Flexible(
+                        child: ListView.builder(
+                          shrinkWrap: true,
+                          itemCount: unlinked.length,
+                          itemBuilder: (ctx, i) {
+                            final p = unlinked[i];
+                            return Padding(
+                              padding:
+                                  const EdgeInsets.only(bottom: 10),
+                              child: Row(
+                                children: [
+                                  Expanded(
+                                    flex: 2,
+                                    child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        Text(p.name,
+                                            style: const TextStyle(
+                                                fontWeight:
+                                                    FontWeight.w600),
+                                            overflow:
+                                                TextOverflow.ellipsis),
+                                        if (p.sku.isNotEmpty)
+                                          Text(p.sku,
+                                              style: TextStyle(
+                                                  fontSize: 11,
+                                                  color: AppColors
+                                                      .textSecondary)),
+                                      ],
+                                    ),
+                                  ),
+                                  const SizedBox(width: 12),
+                                  Expanded(
+                                    flex: 2,
+                                    child:
+                                        DropdownButtonFormField<String>(
+                                      initialValue: _choices[p.id],
+                                      isExpanded: true,
+                                      decoration: const InputDecoration(
+                                        labelText: 'Supplier',
+                                        isDense: true,
+                                        border: OutlineInputBorder(),
+                                      ),
+                                      items: suppliers
+                                          .map((s) => DropdownMenuItem(
+                                                value: s.id,
+                                                child: Text(s.name,
+                                                    overflow:
+                                                        TextOverflow
+                                                            .ellipsis),
+                                              ))
+                                          .toList(),
+                                      onChanged: (v) => setState(
+                                          () => _choices[p.id] = v),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            );
+                          },
+                        ),
+                      ),
+                    ],
+                  ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: _saving ? null : () => Navigator.of(context).pop(),
+          child: const Text('Close'),
+        ),
+        if (suppliers.isNotEmpty && unlinked.isNotEmpty)
+          FilledButton(
+            onPressed: _saving
+                ? null
+                : () async {
+                    final toAssign = _choices.entries
+                        .where((e) => e.value != null && e.value!.isNotEmpty)
+                        .toList();
+                    if (toAssign.isEmpty) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                            content: Text(
+                                'Pick a supplier for at least one product.')),
+                      );
+                      return;
+                    }
+                    setState(() => _saving = true);
+                    final messenger = ScaffoldMessenger.of(context);
+                    final navigator = Navigator.of(context);
+                    final appState = context.read<AppState>();
+                    // Group by supplier so each supplier is one batched call.
+                    final bySupplier = <String, List<String>>{};
+                    for (final e in toAssign) {
+                      bySupplier
+                          .putIfAbsent(e.value!, () => [])
+                          .add(e.key);
+                    }
+                    int total = 0;
+                    for (final entry in bySupplier.entries) {
+                      total += await appState.assignSupplierToProducts(
+                          entry.value, entry.key);
+                    }
+                    if (!mounted) return;
+                    navigator.pop();
+                    messenger.showSnackBar(
+                      SnackBar(
+                          content: Text(
+                              '$total product(s) linked to their supplier.')),
+                    );
+                  },
+            child: _saving
+                ? const SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(
+                        strokeWidth: 2, color: Colors.white))
+                : const Text('Link Selected'),
+          ),
+      ],
+    );
+  }
+}
+
+// ─── Assign Warehouse Dialog ──────────────────────────────────────────────────
+// Bulk-assigns a warehouse to products that aren't located anywhere yet
+// (typically freshly imported from Shopify). On assignment, any existing
+// on-hand stock is placed at the chosen warehouse so per-warehouse KPIs and
+// the inventory map reflect reality.
+
+class _AssignWarehouseDialog extends StatefulWidget {
+  const _AssignWarehouseDialog();
+
+  @override
+  State<_AssignWarehouseDialog> createState() => _AssignWarehouseDialogState();
+}
+
+class _AssignWarehouseDialogState extends State<_AssignWarehouseDialog> {
+  // productId -> chosen warehouseId (null = leave unassigned)
+  final Map<String, String?> _choices = {};
+  String? _bulkWarehouseId;
+  bool _saving = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final state = context.watch<AppState>();
+    final warehouses = state.warehouses;
+    final unassigned = state.productsMissingWarehouse;
+
+    return AlertDialog(
+      title: const Text('Assign products to warehouses'),
+      content: SizedBox(
+        width: 560,
+        child: warehouses.isEmpty
+            ? Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'You have no warehouses yet. Add a warehouse first, then '
+                    'come back here to tell us where each product is stored.',
+                    style: TextStyle(color: AppColors.textSecondary),
+                  ),
+                  const SizedBox(height: 16),
+                  Align(
+                    alignment: Alignment.centerRight,
+                    child: FilledButton(
+                      onPressed: () {
+                        Navigator.of(context).pop();
+                        context.go('/warehouses');
+                      },
+                      child: const Text('Go to Warehouses'),
+                    ),
+                  ),
+                ],
+              )
+            : unassigned.isEmpty
+                ? Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                    child: Row(
+                      children: [
+                        const Icon(Icons.check_circle,
+                            color: AppColors.success),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Text(
+                            'Every product is assigned to a warehouse. Your '
+                            'stock is fully located.',
+                            style:
+                                TextStyle(color: AppColors.textSecondary),
+                          ),
+                        ),
+                      ],
+                    ),
+                  )
+                : Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        '${unassigned.length} product(s) aren\'t assigned to a '
+                        'warehouse yet. Set a location per product, or apply '
+                        'one to all at once. Current on-hand stock will be '
+                        'placed at that warehouse.',
+                        style: TextStyle(
+                            fontSize: 13, color: AppColors.textSecondary),
+                      ),
+                      const SizedBox(height: 12),
+                      // Apply-to-all row
+                      Row(
+                        children: [
+                          Expanded(
+                            child: DropdownButtonFormField<String>(
+                              initialValue: _bulkWarehouseId,
+                              isExpanded: true,
+                              decoration: const InputDecoration(
+                                labelText: 'Apply one warehouse to all',
+                                isDense: true,
+                                border: OutlineInputBorder(),
+                              ),
+                              items: warehouses
+                                  .map((w) => DropdownMenuItem(
+                                        value: w.id,
+                                        child: Text('${w.name} · ${w.city}',
+                                            overflow:
+                                                TextOverflow.ellipsis),
+                                      ))
+                                  .toList(),
+                              onChanged: (v) => setState(() {
+                                _bulkWarehouseId = v;
+                                if (v != null) {
+                                  for (final p in unassigned) {
+                                    _choices[p.id] = v;
+                                  }
+                                }
+                              }),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const Divider(height: 24),
+                      Flexible(
+                        child: ListView.builder(
+                          shrinkWrap: true,
+                          itemCount: unassigned.length,
+                          itemBuilder: (ctx, i) {
+                            final p = unassigned[i];
+                            return Padding(
+                              padding:
+                                  const EdgeInsets.only(bottom: 10),
+                              child: Row(
+                                children: [
+                                  Expanded(
+                                    flex: 2,
+                                    child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        Text(p.name,
+                                            style: const TextStyle(
+                                                fontWeight:
+                                                    FontWeight.w600),
+                                            overflow:
+                                                TextOverflow.ellipsis),
+                                        Text(
+                                            '${p.sku.isNotEmpty ? '${p.sku} · ' : ''}${p.currentStock} on hand',
+                                            style: TextStyle(
+                                                fontSize: 11,
+                                                color: AppColors
+                                                    .textSecondary)),
+                                      ],
+                                    ),
+                                  ),
+                                  const SizedBox(width: 12),
+                                  Expanded(
+                                    flex: 2,
+                                    child:
+                                        DropdownButtonFormField<String>(
+                                      initialValue: _choices[p.id],
+                                      isExpanded: true,
+                                      decoration: const InputDecoration(
+                                        labelText: 'Warehouse',
+                                        isDense: true,
+                                        border: OutlineInputBorder(),
+                                      ),
+                                      items: warehouses
+                                          .map((w) => DropdownMenuItem(
+                                                value: w.id,
+                                                child: Text(w.name,
+                                                    overflow:
+                                                        TextOverflow
+                                                            .ellipsis),
+                                              ))
+                                          .toList(),
+                                      onChanged: (v) => setState(
+                                          () => _choices[p.id] = v),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            );
+                          },
+                        ),
+                      ),
+                    ],
+                  ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: _saving ? null : () => Navigator.of(context).pop(),
+          child: const Text('Close'),
+        ),
+        if (warehouses.isNotEmpty && unassigned.isNotEmpty)
+          FilledButton(
+            onPressed: _saving
+                ? null
+                : () async {
+                    final toAssign = _choices.entries
+                        .where((e) => e.value != null && e.value!.isNotEmpty)
+                        .toList();
+                    if (toAssign.isEmpty) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                            content: Text(
+                                'Pick a warehouse for at least one product.')),
+                      );
+                      return;
+                    }
+                    setState(() => _saving = true);
+                    final messenger = ScaffoldMessenger.of(context);
+                    final navigator = Navigator.of(context);
+                    final appState = context.read<AppState>();
+                    // Group by warehouse so each is one batched call.
+                    final byWarehouse = <String, List<String>>{};
+                    for (final e in toAssign) {
+                      byWarehouse
+                          .putIfAbsent(e.value!, () => [])
+                          .add(e.key);
+                    }
+                    int total = 0;
+                    for (final entry in byWarehouse.entries) {
+                      total += await appState.assignWarehouseToProducts(
+                          entry.value, entry.key);
+                    }
+                    if (!mounted) return;
+                    navigator.pop();
+                    messenger.showSnackBar(
+                      SnackBar(
+                          content: Text(
+                              '$total product(s) assigned to a warehouse.')),
+                    );
+                  },
+            child: _saving
+                ? const SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(
+                        strokeWidth: 2, color: Colors.white))
+                : const Text('Assign Selected'),
+          ),
+      ],
     );
   }
 }

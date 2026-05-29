@@ -491,6 +491,53 @@ class AppState extends ChangeNotifier {
     }
   }
 
+  /// Assigns a supplier to many products at once — used after a Shopify
+  /// import to wire freshly-imported (purchased) products to the supplier
+  /// they're bought from so the reorder/bulk-order engine can group them.
+  /// Returns the number of products updated.
+  Future<int> assignSupplierToProducts(
+      List<String> productIds, String supplierId) async {
+    if (supplierId.isEmpty || productIds.isEmpty) return 0;
+    int updated = 0;
+    for (final id in productIds) {
+      final idx = _products.indexWhere((p) => p.id == id);
+      if (idx == -1) continue;
+      final next = _products[idx].copyWith(supplierId: supplierId);
+      await _repo!.updateProduct(next);
+      _products[idx] = next;
+      updated++;
+    }
+    if (updated > 0) {
+      _rebuildRecommendations();
+      notifyListeners();
+    }
+    return updated;
+  }
+
+  /// Marks many products as MANUFACTURED by attaching a manufacturer. Their
+  /// unit cost then comes from their Bill of Materials (raw materials +
+  /// production fee) instead of a single supplier price, and they're routed
+  /// to the BOM step rather than the supplier-link step. Returns the number
+  /// of products updated.
+  Future<int> assignManufacturerToProducts(
+      List<String> productIds, String manufacturerId) async {
+    if (manufacturerId.isEmpty || productIds.isEmpty) return 0;
+    int updated = 0;
+    for (final id in productIds) {
+      final idx = _products.indexWhere((p) => p.id == id);
+      if (idx == -1) continue;
+      final next = _products[idx].copyWith(manufacturerId: manufacturerId);
+      await _repo!.updateProduct(next);
+      _products[idx] = next;
+      updated++;
+    }
+    if (updated > 0) {
+      _rebuildRecommendations();
+      notifyListeners();
+    }
+    return updated;
+  }
+
   /// Update the on-hand count for a specific warehouse location. Recomputes
   /// [Product.currentStock] as the sum of all warehouse quantities so the
   /// rest of the codebase (replenishment, forecasts) sees the updated total
@@ -528,6 +575,7 @@ class AppState extends ChangeNotifier {
       minimumStock: p.minimumStock,
       shopifyVariantId: p.shopifyVariantId,
       shopifyProductId: p.shopifyProductId,
+      imageUrl: p.imageUrl,
       sellingPrice: p.sellingPrice,
       productionFee: p.productionFee,
       shopifyUnitCost: p.shopifyUnitCost,
@@ -552,19 +600,7 @@ class AppState extends ChangeNotifier {
         if (idx == -1) continue;
         final p = _products[idx];
         if (p.warehouseId == warehouseId) continue;
-        final updated = Product(
-          id: p.id,
-          sku: p.sku,
-          name: p.name,
-          category: p.category,
-          unitCost: p.unitCost,
-          currentStock: p.currentStock,
-          supplierId: p.supplierId,
-          manufacturerId: p.manufacturerId,
-          warehouseId: warehouseId,
-          isActive: p.isActive,
-          leadTimeDays: p.leadTimeDays,
-        );
+        final updated = p.copyWith(warehouseId: warehouseId);
         await _repo!.updateProduct(updated);
         _products[idx] = updated;
       }
@@ -575,6 +611,78 @@ class AppState extends ChangeNotifier {
       rethrow;
     }
   }
+
+  /// Active products not yet assigned to a physical warehouse. Their on-hand
+  /// stock isn't located anywhere, so they don't show up in per-warehouse
+  /// KPIs. Surfacing these lets the user wire imported products to a location.
+  List<Product> get productsMissingWarehouse => _products
+      .where((p) =>
+          p.isActive &&
+          (p.warehouseId == null || p.warehouseId!.isEmpty) &&
+          p.stockByWarehouse.isEmpty)
+      .toList(growable: false);
+
+  /// Bulk-assigns a warehouse to many products (typically right after a
+  /// Shopify import). For products that have no per-warehouse stock breakdown
+  /// yet, their entire current on-hand count is placed at the chosen
+  /// warehouse so the warehouse's stored-units / SKU KPIs populate.
+  /// Returns the number of products updated.
+  Future<int> assignWarehouseToProducts(
+      List<String> productIds, String warehouseId) async {
+    if (warehouseId.isEmpty || productIds.isEmpty) return 0;
+    int updated = 0;
+    for (final id in productIds) {
+      final idx = _products.indexWhere((p) => p.id == id);
+      if (idx == -1) continue;
+      final p = _products[idx];
+      final byWh = Map<String, int>.from(p.stockByWarehouse);
+      // Allocate existing on-hand stock to this warehouse if nothing has been
+      // located yet — keeps currentStock and the per-warehouse map consistent.
+      if (byWh.isEmpty && p.currentStock > 0) {
+        byWh[warehouseId] = p.currentStock;
+      }
+      final next = p.copyWith(warehouseId: warehouseId, stockByWarehouse: byWh);
+      await _repo!.updateProduct(next);
+      _products[idx] = next;
+      updated++;
+    }
+    if (updated > 0) {
+      _rebuildRecommendations();
+      notifyListeners();
+    }
+    return updated;
+  }
+
+  /// Total on-hand units physically located at [warehouseId]. Prefers the
+  /// per-warehouse [Product.stockByWarehouse] breakdown; falls back to the
+  /// legacy single-location model (`warehouseId` + `currentStock`).
+  int unitsStoredAt(String warehouseId) {
+    int total = 0;
+    for (final p in _products) {
+      if (!p.isActive) continue;
+      if (p.stockByWarehouse.isNotEmpty) {
+        total += p.stockByWarehouse[warehouseId] ?? 0;
+      } else if (p.warehouseId == warehouseId) {
+        total += p.currentStock;
+      }
+    }
+    return total;
+  }
+
+  /// Number of distinct active SKUs stored at [warehouseId].
+  int skuCountAt(String warehouseId) {
+    int count = 0;
+    for (final p in _products) {
+      if (!p.isActive) continue;
+      if (p.stockByWarehouse.isNotEmpty) {
+        if ((p.stockByWarehouse[warehouseId] ?? 0) > 0) count++;
+      } else if (p.warehouseId == warehouseId) {
+        count++;
+      }
+    }
+    return count;
+  }
+
 
   Future<void> deleteProduct(String productId) async {
     try {
@@ -849,13 +957,20 @@ class AppState extends ChangeNotifier {
     final po = await confirmPurchaseOrder(draft);
 
     if (po != null && (supplier?.contactEmail.isNotEmpty ?? false)) {
-      // Mark as sent and send supplier emails.
-      await _invokeCloudFunction(
-        CloudFunctionConfig.sendSupplierEmails,
-        {'uid': _currentUser!.uid, 'purchaseOrderId': po.id},
-      );
-      _lastApprovalEmailsSent = 1;
+      // Mark as sent and send supplier emails. A mail/SMTP failure must not
+      // abort the approval — the PO + SupplierOrders are already persisted, so
+      // we swallow the error and simply report that no email went out.
+      try {
+        await _invokeCloudFunction(
+          CloudFunctionConfig.sendSupplierEmails,
+          {'uid': _currentUser!.uid, 'purchaseOrderId': po.id},
+        );
+        _lastApprovalEmailsSent = 1;
+      } catch (_) {
+        _lastApprovalEmailsSent = 0;
+      }
     }
+
 
     // Atomically update PO status + record approval in a single batch.
     final batch = FirebaseFirestore.instance.batch();
@@ -1296,6 +1411,20 @@ class AppState extends ChangeNotifier {
   List<Product> get productsMissingSupplier => _products
       .where((p) =>
           p.isActive &&
+          (p.supplierId == null || p.supplierId!.isEmpty) &&
+          (p.manufacturerId == null || p.manufacturerId!.isEmpty))
+      .toList(growable: false);
+
+  /// Active products that haven't been told how they're sourced yet — they
+  /// have neither a supplier (purchased) nor a manufacturer (made in-house).
+  /// Until classified, the system can't decide whether their cost comes from
+  /// a supplier price or from a Bill of Materials, and the supplier-link step
+  /// can't tell which products even belong in it. Bundles are excluded
+  /// (their cost rolls up from components).
+  List<Product> get productsNeedingSourcingType => _products
+      .where((p) =>
+          p.isActive &&
+          !p.isBundle &&
           (p.supplierId == null || p.supplierId!.isEmpty) &&
           (p.manufacturerId == null || p.manufacturerId!.isEmpty))
       .toList(growable: false);
@@ -2039,6 +2168,71 @@ class AppState extends ChangeNotifier {
     }
     _shopifyConnection = await _shopifyService!.getCurrentConnection();
     notifyListeners();
+  }
+
+  /// Imports only the Shopify products whose IDs are in [selectedIds].
+  /// Uses the same SKU-based deduplication as [importShopifyProducts].
+  Future<Map<String, int>> importSelectedShopifyProducts(
+      List<String> selectedIds) async {
+    if (_shopifyService == null || selectedIds.isEmpty) {
+      return {'newCount': 0, 'mergedCount': 0, 'totalImported': 0};
+    }
+    final all = await _shopifyService!.fetchShopifyProducts();
+    final toImport = all.where((p) => selectedIds.contains(p.id)).toList();
+    int newCount = 0;
+    int mergedCount = 0;
+
+    for (final p in toImport) {
+      final skuIdx = p.sku.isNotEmpty
+          ? _products.indexWhere((e) => e.sku == p.sku && e.id != p.id)
+          : -1;
+      final idIdx = _products.indexWhere((e) => e.id == p.id);
+
+      if (skuIdx != -1) {
+        final existing = _products[skuIdx];
+        _products[skuIdx] = Product(
+          id: existing.id,
+          sku: existing.sku,
+          name: existing.name.isNotEmpty ? existing.name : p.name,
+          category: existing.category.isNotEmpty ? existing.category : p.category,
+          unitCost: existing.unitCost > 0 ? existing.unitCost : p.unitCost,
+          currentStock: p.currentStock,
+          supplierId: existing.supplierId,
+          manufacturerId: existing.manufacturerId,
+          warehouseId: existing.warehouseId,
+          isActive: existing.isActive,
+        );
+        await _repo?.updateProduct(_products[skuIdx]);
+        mergedCount++;
+      } else if (idIdx != -1) {
+        final existing = _products[idIdx];
+        _products[idIdx] = Product(
+          id: existing.id,
+          sku: p.sku.isNotEmpty ? p.sku : existing.sku,
+          name: p.name.isNotEmpty ? p.name : existing.name,
+          category: p.category.isNotEmpty ? p.category : existing.category,
+          unitCost: p.unitCost > 0 ? p.unitCost : existing.unitCost,
+          currentStock: p.currentStock,
+          supplierId: existing.supplierId ?? p.supplierId,
+          manufacturerId: existing.manufacturerId ?? p.manufacturerId,
+          warehouseId: existing.warehouseId ?? p.warehouseId,
+          isActive: existing.isActive,
+        );
+        await _repo?.updateProduct(_products[idIdx]);
+        mergedCount++;
+      } else {
+        final saved = await _repo!.addProduct(p);
+        _products.add(saved);
+        newCount++;
+      }
+    }
+    _rebuildRecommendations();
+    notifyListeners();
+    return {
+      'newCount': newCount,
+      'mergedCount': mergedCount,
+      'totalImported': toImport.length,
+    };
   }
 
   /// Fetches available products from the Shopify store for the import dialog.

@@ -115,6 +115,22 @@ class _ReorderPlanScreenState extends State<ReorderPlanScreen> {
   bool _isManufactured(Product p) =>
       p.manufacturerId != null && p.manufacturerId!.isNotEmpty;
 
+  /// True if the order created for this product would actually reach someone
+  /// by email — i.e. its assigned supplier (purchased) or manufacturer
+  /// (manufactured) has a non-empty contact email. When false, the order is
+  /// still created but no email can be sent, so we warn the user.
+  bool _hasEmailRecipient(Product p, AppState state) {
+    if (_isManufactured(p)) {
+      final m = state.manufacturers
+          .where((x) => x.id == p.manufacturerId)
+          .firstOrNull;
+      return (m?.contactEmail ?? '').trim().isNotEmpty;
+    }
+    final s =
+        state.suppliers.where((x) => x.id == p.supplierId).firstOrNull;
+    return (s?.contactEmail ?? '').trim().isNotEmpty;
+  }
+
   // ── Actions ─────────────────────────────────────────────────────────────
 
   Future<void> _approveSingle(
@@ -167,6 +183,8 @@ class _ReorderPlanScreenState extends State<ReorderPlanScreen> {
 
     setState(() => _busy = true);
     int successCount = 0;
+    int emailsSent = 0;
+    final noEmailRecipients = <String>[];
     final failures = <String>[];
 
     try {
@@ -178,6 +196,10 @@ class _ReorderPlanScreenState extends State<ReorderPlanScreen> {
             await state.approveRecommendation(row.rec);
           }
           successCount++;
+          emailsSent += state.lastApprovalEmailsSent;
+          if (!_hasEmailRecipient(row.product, state)) {
+            noEmailRecipients.add(row.product.name);
+          }
         } catch (e) {
           failures.add('${row.product.name}: ${e.toString().replaceAll('Exception: ', '')}');
         }
@@ -193,14 +215,25 @@ class _ReorderPlanScreenState extends State<ReorderPlanScreen> {
 
     if (!mounted) return;
     if (failures.isEmpty) {
+      final emailMsg = emailsSent > 0
+          ? '$emailsSent email(s) sent to suppliers/manufacturers.'
+          : 'No emails sent.';
+      var msg = 'Bulk order created — $successCount order(s). $emailMsg';
+      if (noEmailRecipients.isNotEmpty) {
+        msg +=
+            '\n⚠ No contact email on file for: ${noEmailRecipients.join(', ')}. '
+            'Add one in Suppliers/Manufacturers so they receive the order.';
+      }
       messenger.showSnackBar(SnackBar(
-        content: Text('Bulk order created — $successCount order(s) sent.'),
-        backgroundColor: AppColors.success,
+        content: Text(msg),
+        backgroundColor:
+            noEmailRecipients.isEmpty ? AppColors.success : AppColors.warning,
+        duration: Duration(seconds: noEmailRecipients.isEmpty ? 4 : 8),
       ));
     } else {
       messenger.showSnackBar(SnackBar(
         content: Text(
-            '$successCount order(s) created, ${failures.length} failed.\nFirst error: ${failures.first}'),
+            '$successCount order(s) created, $emailsSent email(s) sent, ${failures.length} failed.\nFirst error: ${failures.first}'),
         backgroundColor: AppColors.warning,
         duration: const Duration(seconds: 8),
       ));

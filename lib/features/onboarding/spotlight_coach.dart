@@ -63,6 +63,11 @@ class SpotlightCoach {
     // dialogs/bottom-sheets before each inter-route navigation so they
     // don't bleed through to the next step's page.
     final navigator = Navigator.of(context, rootNavigator: true);
+    // Shell navigator (non-root). Used to detect when a dialog/modal is
+    // currently open so we can suppress the pulse ring — the ring lives in
+    // the root overlay (above everything) and would float on top of any
+    // dialog opened by a step action.
+    final shellNav = Navigator.of(context);
 
     int index = 0;
     late OverlayEntry entry;
@@ -151,6 +156,7 @@ class SpotlightCoach {
           totalSteps: steps.length,
           onNext: () => goToStep(index + 1),
           onSkip: safeRemove,
+          shellNavigator: shellNav,
         );
       },
     );
@@ -168,6 +174,9 @@ class _SpotlightLayer extends StatefulWidget {
   final int totalSteps;
   final VoidCallback onNext;
   final VoidCallback onSkip;
+  /// Shell navigator (non-root). When it can pop, a dialog is open and the
+  /// pulse ring should be hidden so it doesn't float above the dialog.
+  final NavigatorState? shellNavigator;
 
   const _SpotlightLayer({
     required this.step,
@@ -176,6 +185,7 @@ class _SpotlightLayer extends StatefulWidget {
     required this.totalSteps,
     required this.onNext,
     required this.onSkip,
+    this.shellNavigator,
   });
 
   @override
@@ -187,11 +197,17 @@ class _SpotlightLayerState extends State<_SpotlightLayer> {
   // step index changes so the card snaps to the new step's best corner.
   Offset _dragOffset = Offset.zero;
 
+  // Set to true the moment the user taps the highlighted anchor. This hides
+  // the ring immediately on click — before the resulting dialog even opens —
+  // so the ring never floats on top of a dialog or other opened surface.
+  bool _ringTapped = false;
+
   @override
   void didUpdateWidget(covariant _SpotlightLayer oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.stepIndex != widget.stepIndex) {
       _dragOffset = Offset.zero;
+      _ringTapped = false; // reset for the new step
     }
   }
 
@@ -212,21 +228,23 @@ class _SpotlightLayerState extends State<_SpotlightLayer> {
     //      step text, a Next button (always available), and a Skip control.
     // ────────────────────────────────────────────────────────────────────
     const cardWidth = 300.0;
-    const cardHeight = 300.0; // estimated height used only for placement scoring
+    const cardHeight = 300.0; // estimated height used only for overlap scoring
     const margin = 16.0;
 
     // ── Dynamic corner selection ──────────────────────────────────────────
     // Evaluate 4 screen corners; pick the one that (a) does NOT overlap the
     // highlighted anchor rect and (b) is farthest from the anchor centre.
-    // This keeps the card clear of the anchor button AND of any dialog that
-    // opens as a result (dialogs are centred, so the corner opposite the
-    // anchor trigger is almost always unobstructed).
-    Offset bestCorner() {
-      final corners = <Offset>[
-        Offset(margin, margin),                                                   // top-left
-        Offset(size.width - cardWidth - margin, margin),                          // top-right
-        Offset(margin, size.height - cardHeight - margin),                        // bottom-left
-        Offset(size.width - cardWidth - margin, size.height - cardHeight - margin), // bottom-right
+    // Returns a record: (left, isBottomAnchor).
+    // Bottom corners use Positioned(bottom:) so the card grows upward and
+    // can never be clipped by the viewport edge regardless of content height.
+    ({double left, double top, bool isBottom}) bestCorner() {
+      // Scoring uses a representative rect; whether it's top- or
+      // bottom-anchored doesn't affect the left position.
+      final corners = [
+        (left: margin,                          top: margin,                          isBottom: false), // top-left
+        (left: size.width - cardWidth - margin, top: margin,                          isBottom: false), // top-right
+        (left: margin,                          top: size.height - cardHeight - margin, isBottom: true),  // bottom-left
+        (left: size.width - cardWidth - margin, top: size.height - cardHeight - margin, isBottom: true),  // bottom-right
       ];
       final tr = targetRect;
       if (tr == null || tr.isEmpty) return corners[2]; // bottom-left default
@@ -234,31 +252,48 @@ class _SpotlightLayerState extends State<_SpotlightLayer> {
       final anchorCenter = tr.center;
       final inflated = tr.inflate(step.padding + 20.0);
 
-      Offset best = corners[0];
+      var best = corners[0];
       double bestScore = double.negativeInfinity;
-      for (final corner in corners) {
-        final cardRect = Rect.fromLTWH(corner.dx, corner.dy, cardWidth, cardHeight);
+      for (final c in corners) {
+        final cardRect = Rect.fromLTWH(c.left, c.top, cardWidth, cardHeight);
         final score = (!cardRect.overlaps(inflated) ? 10000.0 : 0.0) +
-            (corner + const Offset(cardWidth / 2, cardHeight / 2) - anchorCenter).distance;
+            (Offset(c.left + cardWidth / 2, c.top + cardHeight / 2) - anchorCenter).distance;
         if (score > bestScore) {
           bestScore = score;
-          best = corner;
+          best = c;
         }
       }
       return best;
     }
 
-    final pos = bestCorner();
-    // Apply user drag and clamp so the card never leaves the viewport.
-    final cardLeft = (pos.dx + _dragOffset.dx).clamp(0.0, size.width - cardWidth);
-    final cardTop = (pos.dy + _dragOffset.dy).clamp(0.0, size.height - cardHeight);
+    final corner = bestCorner();
+    // Apply user drag and clamp horizontally so the card never leaves the viewport.
+    final cardLeft = (corner.left + _dragOffset.dx).clamp(0.0, size.width - cardWidth);
+    // Vertical drag offset: positive drag moves card down (for top) / up (for bottom).
+    final verticalDrag = _dragOffset.dy;
+    // For bottom-anchored cards: bottom edge = margin + (negative drag).
+    // For top-anchored cards:    top edge  = margin + (positive drag).
+    // In both cases clamp so the card stays on screen.
+    final maxCardBottom = size.height - margin; // never closer than margin to viewport top
+    final cardBottom = corner.isBottom
+        ? (margin - verticalDrag).clamp(margin, maxCardBottom)
+        : null;
+    final cardTop = !corner.isBottom
+        ? (margin + verticalDrag).clamp(0.0, size.height - cardHeight)
+        : null;
 
-    // Detect whether the anchor is currently visible on screen. If the
-    // anchor has been covered by a dialog/modal (its center is occluded by
-    // something rendered on top), we don't draw the pulse ring — it would
-    // appear over the dialog content and confuse the user.
+    // Detect whether the anchor is currently visible on screen. Hide the
+    // ring when:
+    //   (a) the user just tapped the anchor (_ringTapped — instant feedback), OR
+    //   (b) a dialog is open on the shell navigator (shellNavigator.canPop() is
+    //       true only for imperative routes like dialogs/bottom-sheets; GoRouter
+    //       declarative shell routes don't leave poppable entries behind).
+    // Either condition hides the ring so it never floats above a dialog.
+    final bool dialogIsOpen = widget.shellNavigator?.canPop() ?? false;
     final padded = targetRect?.inflate(step.padding);
-    final showRing = padded != null &&
+    final showRing = !_ringTapped &&
+        !dialogIsOpen &&
+        padded != null &&
         padded.left >= 0 &&
         padded.top >= 0 &&
         padded.right <= size.width &&
@@ -271,25 +306,40 @@ class _SpotlightLayerState extends State<_SpotlightLayer> {
       child: Stack(
         children: [
           // Subtle pulse ring around the spotlighted anchor (visual cue only).
+          // Wrapped in a GestureDetector (translucent) so tapping the anchor
+          // sets _ringTapped immediately — before the resulting dialog opens.
           if (showRing)
             Positioned(
               left: padded.left - 2,
               top: padded.top - 2,
               width: padded.width + 4,
               height: padded.height + 4,
-              child: IgnorePointer(child: _PulseRing()),
+              child: GestureDetector(
+                behavior: HitTestBehavior.translucent,
+                onTap: () => setState(() => _ringTapped = true),
+                onTapDown: (_) => setState(() => _ringTapped = true),
+                child: IgnorePointer(child: _PulseRing()),
+              ),
             ),
           // Compact coach card — draggable by its handle at the top.
+          // Bottom-half corners use `bottom:` anchoring so the card grows
+          // upward and is never clipped by the viewport regardless of how
+          // tall the text content is. Top-half corners use `top:` anchoring.
           Positioned(
             left: cardLeft,
             top: cardTop,
+            bottom: cardBottom,
             width: cardWidth,
             child: Material(
               elevation: 12,
               borderRadius: BorderRadius.circular(12),
               color: Colors.white,
               child: ConstrainedBox(
-                constraints: BoxConstraints(maxHeight: size.height * 0.7),
+                constraints: BoxConstraints(
+                  maxHeight: corner.isBottom
+                      ? (size.height - margin * 2)           // bottom card: up to full viewport
+                      : (size.height - (cardTop ?? 0) - margin), // top card: space below
+                ),
                 child: SingleChildScrollView(
                   padding: const EdgeInsets.fromLTRB(14, 8, 14, 14),
                   child: Column(

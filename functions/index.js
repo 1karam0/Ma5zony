@@ -337,6 +337,7 @@ exports.shopifyImportProducts = onRequest(
               title
               productType
               status
+              featuredImage { url }
               variants(first: 50) {
                 edges {
                   node {
@@ -376,6 +377,7 @@ exports.shopifyImportProducts = onRequest(
               title
               productType
               status
+              featuredImage { url }
               variants(first: 50) {
                 edges {
                   node {
@@ -425,6 +427,11 @@ exports.shopifyImportProducts = onRequest(
 
       const imported = [];
       const batch = db.batch();
+      // bundleVariantMap[shopifyVariantId] = [{ shopifyVariantId, shopifyProductId, sku, quantity, name }, ...]
+      // Persisted to Firestore so `shopifyImportOrders` can explode bundle
+      // line items into demand against the underlying component SKUs instead
+      // of double-counting the bundle as its own product.
+      const bundleVariantMap = {};
       let cursor = null;
       let hasNextPage = true;
 
@@ -512,8 +519,53 @@ exports.shopifyImportProducts = onRequest(
           }
           const isBundle = bundleComponents.length > 0;
 
+          // ── Skip bundles entirely ─────────────────────────────────────────
+          // Importing bundles as products causes double-counting in demand
+          // and stock — the component SKUs are already imported as their own
+          // Shopify products. Record the bundle→components mapping (keyed by
+          // every bundle variant id) so `shopifyImportOrders` can explode
+          // bundle line items into demand against the real component SKUs.
+          if (isBundle) {
+            for (const v of variants) {
+              const vid = v.id.split("/").pop();
+              const compEdges =
+                (v.productVariantComponents &&
+                  v.productVariantComponents.edges) ||
+                [];
+              if (compEdges.length === 0) continue;
+              const comps = [];
+              for (const { node: comp } of compEdges) {
+                const pv = comp && comp.productVariant;
+                if (!pv || !pv.id) continue;
+                comps.push({
+                  shopifyVariantId: pv.id.split("/").pop(),
+                  shopifyProductId:
+                    pv.product && pv.product.id
+                      ? pv.product.id.split("/").pop()
+                      : null,
+                  sku: pv.sku || null,
+                  quantity: comp.quantity || 1,
+                  name:
+                    (pv.product && pv.product.title) ||
+                    pv.sku ||
+                    null,
+                });
+              }
+              if (comps.length > 0) bundleVariantMap[vid] = comps;
+            }
+            continue; // do not write the bundle as a product doc
+          }
+
           const docId = `shopify_${shopifyId}`;
           const existing = existingDocMap[docId];
+
+          // ── imageUrl: always sync from Shopify ────────────────────────────
+          // The product's main image in Shopify is the source of truth. We
+          // pull `featuredImage.url` and overwrite on every import so renames
+          // / re-uploads on the Shopify side show up in Ma5zony's product
+          // table next to the product name.
+          const imageUrl =
+            (sp.featuredImage && sp.featuredImage.url) || null;
 
           // ── unitCost: NEVER touched by Shopify import ─────────────────────
           // Cost is sourced from the BOM (manufactured) or typed by the user
@@ -535,6 +587,7 @@ exports.shopifyImportProducts = onRequest(
             ...(existing ? {} : { supplierId: null }),
             isActive: sp.status === "ACTIVE",
             shopifyProductId: shopifyId,
+            imageUrl,
             // Comma-separated list of all variant IDs so order matching can
             // resolve any variant sale back to this single parent product.
             shopifyVariantId: variants
@@ -562,6 +615,21 @@ exports.shopifyImportProducts = onRequest(
       }
 
       await batch.commit();
+
+      // ── Persist bundle → component-SKU map ──────────────────────────────────
+      // Stored at users/{uid}/shopify/bundleMap so `shopifyImportOrders` can
+      // explode bundle line items into demand against the underlying SKUs.
+      // Always write (even if empty) to clear stale mappings from previous
+      // imports when a bundle is deleted in Shopify.
+      await db
+        .collection("users")
+        .doc(uid)
+        .collection("shopify")
+        .doc("bundleMap")
+        .set({
+          bundles: bundleVariantMap,
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        });
 
       // ── Deactivation sweep ──────────────────────────────────────────────────
       // Any product that was previously imported from Shopify but is NOT in the
@@ -762,6 +830,20 @@ exports.shopifyImportOrders = onRequest(
     try {
       console.log(`shopifyImportOrders: starting for shop=${shopDomain}`);
 
+      // ── Load bundle → component-SKU map (written by shopifyImportProducts) ──
+      // Bundles are NOT imported as Ma5zony products to avoid double-counting
+      // demand. Instead, when an order line item is a bundle variant we
+      // explode it into demand against each underlying component SKU.
+      const bundleMapDoc = await db
+        .collection("users")
+        .doc(uid)
+        .collection("shopify")
+        .doc("bundleMap")
+        .get();
+      const bundleMap = bundleMapDoc.exists
+        ? (bundleMapDoc.data().bundles || {})
+        : {};
+
       // ── Build product resolution maps from Firestore ──────────────────────
       // Priority: shopifyVariantId → sku exact → sku normalised → name → contains → shopifyProductId
       const productsSnap = await db
@@ -903,6 +985,38 @@ exports.shopifyImportOrders = onRequest(
             totalLineItems++;
             const shopifyProductId = item.product && item.product.id ? item.product.id.split("/").pop() : null;
             const shopifyVariantId = item.variant && item.variant.id ? item.variant.id.split("/").pop() : null;
+
+            // ── Bundle explosion ────────────────────────────────────────────
+            // If this variant is a known bundle, split it into per-component
+            // demand records (qty × componentQty) and skip the bundle itself.
+            const components = shopifyVariantId && bundleMap[shopifyVariantId];
+            if (components && components.length > 0) {
+              for (const comp of components) {
+                const compLine = {
+                  shopifyProductId: comp.shopifyProductId,
+                  shopifyVariantId: comp.shopifyVariantId,
+                  variantSku: comp.sku,
+                  lineSku: comp.sku,
+                  productTitle: comp.name,
+                  variantTitle: null,
+                  lineTitle: comp.name,
+                };
+                const compFirestoreId = resolveProductId(compLine);
+                if (compFirestoreId && !compFirestoreId.startsWith("shopify_")) matchedLineItems++;
+                const qty = (item.quantity || 0) * (comp.quantity || 1);
+                const key = `${compFirestoreId}||${year}-${month}`;
+                if (!monthlyMap[key]) {
+                  monthlyMap[key] = {
+                    productId: compFirestoreId,
+                    periodStart: new Date(Date.UTC(year, d.getUTCMonth(), 1)).toISOString(),
+                    quantity: 0,
+                  };
+                }
+                monthlyMap[key].quantity += qty;
+              }
+              continue; // do not also credit the bundle
+            }
+
             const line = {
               shopifyProductId,
               shopifyVariantId,

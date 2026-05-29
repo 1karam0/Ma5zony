@@ -247,65 +247,34 @@ class _IntegrationsScreenState extends State<IntegrationsScreen> {
                                 onPressed: _importing
                                     ? null
                                     : () async {
-                                        final messenger = ScaffoldMessenger.of(
-                                          context,
-                                        );
-                                        final appState =
-                                            context.read<AppState>();
+                                        final messenger = ScaffoldMessenger.of(context);
+                                        final appState = context.read<AppState>();
                                         final router = GoRouter.of(context);
-                                        setState(() => _importing = true);
-                                        try {
-                                          final result =
-                                              await appState.importShopifyProducts();
-                                          if (mounted) {
-                                            final newC = result['newCount'] ?? 0;
-                                            final merged = result['mergedCount'] ?? 0;
-                                            _log('Products', '$newC new, $merged updated');
-                                            final hasWarehouses =
-                                                appState.warehouses.isNotEmpty;
-                                            messenger.showSnackBar(
-                                              SnackBar(
-                                                duration: const Duration(
-                                                    seconds: 5),
-                                                content: Text(
-                                                  '$newC new product(s) added, $merged existing updated. ${hasWarehouses ? "Next: assign them to a warehouse." : "Next: create a warehouse to organize them."}',
-                                                ),
-                                                action: SnackBarAction(
-                                                  label: hasWarehouses
-                                                      ? 'Assign to Warehouse'
-                                                      : 'Create Warehouse',
-                                                  onPressed: () =>
-                                                      router.go('/warehouses'),
-                                                ),
-                                              ),
-                                            );
-                                          }
-                                        } catch (e) {
-                                          if (mounted) {
-                                            messenger.showSnackBar(
-                                              SnackBar(
-                                                content: Text(
-                                                  'Import failed: $e',
-                                                ),
-                                                duration: const Duration(seconds: 3),
-                                              ),
-                                            );
-                                          }
-                                        } finally {
-                                          if (mounted) {
-                                            setState(() => _importing = false);
-                                          }
-                                        }
+                                        // Open picker — user selects which products to import.
+                                        final result =
+                                            await ShopifyProductPickerDialog.show(context);
+                                        if (result == null || !mounted) return;
+                                        final newC = result['newCount'] ?? 0;
+                                        final merged = result['mergedCount'] ?? 0;
+                                        _log('Products', '$newC new, $merged updated');
+                                        final hasWarehouses =
+                                            appState.warehouses.isNotEmpty;
+                                        messenger.showSnackBar(SnackBar(
+                                          duration: const Duration(seconds: 5),
+                                          content: Text(
+                                            '$newC new product(s) added, $merged existing updated. '
+                                            '${hasWarehouses ? "Next: assign them to a warehouse." : "Next: create a warehouse to organize them."}',
+                                          ),
+                                          action: SnackBarAction(
+                                            label: hasWarehouses
+                                                ? 'Assign to Warehouse'
+                                                : 'Create Warehouse',
+                                            onPressed: () =>
+                                                router.go('/warehouses'),
+                                          ),
+                                        ));
                                       },
-                                icon: _importing
-                                    ? const SizedBox(
-                                        width: 14,
-                                        height: 14,
-                                        child: CircularProgressIndicator(
-                                          strokeWidth: 2,
-                                        ),
-                                      )
-                                    : const Icon(Icons.download),
+                                icon: const Icon(Icons.download),
                                 label: const Text('Import Products'),
                               ),
                               const SizedBox(width: 12),

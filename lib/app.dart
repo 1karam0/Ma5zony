@@ -109,15 +109,16 @@ class _Ma5zonyAppState extends State<Ma5zonyApp> {
         ),
       ),
 
-      // Chips: sharp 4px corners; thin border, no shadow.
+      // Chips: sharp 4px corners; light-tint selected bg + primary border.
+      // selectedColor uses a light tint (not solid primary) so dark label text
+      // remains readable on both selected and unselected chips.
       chipTheme: ChipThemeData(
         backgroundColor: AppColors.surface,
-        selectedColor: AppColors.primary,
-        secondarySelectedColor: AppColors.primary,
+        selectedColor: AppColors.primary.withValues(alpha: 0.12),
+        secondarySelectedColor: AppColors.primary.withValues(alpha: 0.12),
         labelStyle: AppTextStyles.label,
-        secondaryLabelStyle:
-            AppTextStyles.label.copyWith(color: AppColors.textOnPrimary),
-        side: const BorderSide(color: AppColors.divider),
+        secondaryLabelStyle: AppTextStyles.label,
+        side: BorderSide(color: AppColors.primary.withValues(alpha: 0.35)),
         shape: const RoundedRectangleBorder(borderRadius: AppRadius.sharp),
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
         showCheckmark: false,

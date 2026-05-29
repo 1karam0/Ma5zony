@@ -12,8 +12,11 @@ import 'package:ma5zony/utils/constants.dart';
 /// the Business Profile wizard. The goal is to:
 ///
 ///   1. Orient the user to the sidebar and key destinations.
-///   2. Explain the data dependency chain (Suppliers → Materials → Products
-///      → BOM → Demand Data → Reorder Plan → Purchase Order).
+///   2. Explain the data dependency chain (Suppliers → Warehouse → Products
+///      → Set Sourcing (Purchased/Manufactured) → Link Purchased to Suppliers
+///      → Assign Warehouse → Materials → BOM → Demand Data → Reorder Plan →
+///      Purchase Order). Supplier links and BOM are set up
+///      BEFORE the reorder plan so bulk orders actually work.
 ///   3. Point at the in-dashboard checklist as the ongoing source of truth.
 ///
 /// On finish (or skip) we set `settings.tourCompleted = true` so it doesn't
@@ -116,10 +119,92 @@ class WelcomeTourDialog extends StatefulWidget {
           completeWhen: () => appState.products.isNotEmpty,
         ),
 
-        // ── 6. Add demand / sales data ────────────────────────────────────
+        // ── 5. Classify each product: purchased vs manufactured ──────────
+        // THE pivotal decision. A purchased product's cost is the supplier's
+        // price; a manufactured product's cost is built from raw materials +
+        // a production fee. This also decides whether a product needs a
+        // supplier link or a Bill of Materials — so it must come first, before
+        // we try to link suppliers (otherwise made-in-house items wrongly show
+        // up in the supplier list).
+        SpotlightStep(
+          anchorId: 'page:products.setSourcing',
+          title: 'Step 5 — Tell us how you source each product',
+          description:
+              'Click "Set Sourcing". For each product choose Purchased (you buy '
+              'it — pick the supplier) or Manufactured (you make it — pick who '
+              'makes it; its recipe is built in the BOM step). '
+              'This is why a product like "Figure-8 Straps" (made from strap, '
+              'logo and padding) belongs to Manufactured, not a single supplier. '
+              'You can set all to one type at once.',
+          navigateTo: '/products',
+          completeWhen: () => appState.productsNeedingSourcingType.isEmpty,
+        ),
+
+        // ── 6. Link imported products to their suppliers ──────────────────
+        // Shopify-imported products arrive with NO supplier attached. Until
+        // each purchased product is linked to the supplier you buy it from,
+        // the reorder engine can't group it into a purchase order or email
+        // the supplier — so this step must happen BEFORE the reorder plan.
+        SpotlightStep(
+          anchorId: 'page:products.linkSupplier',
+          title: 'Step 6 — Link purchased products to their suppliers',
+          description:
+              'For purchased products, click "Link Suppliers" to assign the supplier you buy each from — '
+              'you can apply one supplier to all of them at once. '
+              'This is what lets Ma5zony group items into bulk purchase orders later. '
+              '(Manufactured products skip this — their materials are linked to suppliers in the BOM instead.)',
+          navigateTo: '/products',
+          completeWhen: () => appState.productsMissingSupplier.isEmpty,
+        ),
+
+        // ── 7. Assign products to warehouses ─────────────────────────────
+        // Imported products aren't located anywhere until assigned to a
+        // warehouse. Without a location, per-warehouse stock, the inventory
+        // map and multi-location reorder logic can't work.
+        SpotlightStep(
+          anchorId: 'page:products.assignWarehouse',
+          title: 'Step 7 — Assign products to a warehouse',
+          description:
+              'Tell Ma5zony where each product is physically stored. '
+              'Click "Assign Warehouse" to place products in a location — '
+              'you can apply one warehouse to all at once. '
+              'Their current on-hand stock moves to that warehouse, so your '
+              'warehouse KPIs and stock value become accurate.',
+          navigateTo: '/products',
+          completeWhen: () => appState.productsMissingWarehouse.isEmpty,
+        ),
+
+        // ── 7. Raw materials (manufacturers) ──────────────────────────────
+        // Manufacturers reorder raw MATERIALS, not finished products, so the
+        // materials + BOM must be set up before the reorder plan can compute
+        // anything for made-in-house goods. Resellers can press Next to skip.
+        SpotlightStep(
+          anchorId: 'page:rawmaterials.add',
+          title: 'Step 8 — Add Raw Materials (skip if reseller)',
+          description:
+              'If you MAKE your products, list every input you buy for production here '
+              'and link each material to its supplier — that\'s how reorder math knows '
+              'each component\'s lead time. '
+              'Pure resellers can press Next to skip steps 8–9.',
+          navigateTo: '/raw-materials',
+        ),
+
+        // ── 8. BOM (manufacturers) ────────────────────────────────────────
+        SpotlightStep(
+          anchorId: 'page:bom.add',
+          title: 'Step 9 — Build your Bill of Materials (skip if reseller)',
+          description:
+              'For each manufactured product, map the raw materials it consumes and their quantities. '
+              'Ma5zony rolls this up into the product\'s unit cost and explodes finished-goods '
+              'demand into raw-material demand — so it reorders the right materials automatically. '
+              'Press Next to skip if you only resell.',
+          navigateTo: '/bom',
+        ),
+
+        // ── 9. Add demand / sales data ────────────────────────────────────
         SpotlightStep(
           anchorId: 'page:demand.add',
-          title: 'Step 5 — Add Sales / Demand Data',
+          title: 'Step 10 — Add Sales / Demand Data',
           description:
               'This is the fuel for forecasting. '
               'Use "Import Shopify Orders" (green button, top-right) to pull real sales history automatically, '
@@ -130,21 +215,22 @@ class WelcomeTourDialog extends StatefulWidget {
           completeWhen: () => appState.demandByProduct.isNotEmpty,
         ),
 
-        // ── 7. View Reorder Plan ──────────────────────────────────────────
+        // ── 10. View Reorder Plan ─────────────────────────────────────────
         const SpotlightStep(
           anchorId: 'sidebar:/forecasts',
-          title: 'Step 6 — Your Reorder Plan',
+          title: 'Step 11 — Your Reorder Plan',
           description:
               'Ma5zony has calculated your reorder plan using your demand data, lead times, and current stock levels. '
-              'Items below their Reorder Point are highlighted — tick them and click "Create Bulk Order" to send purchase orders to your suppliers. '
+              'Because your products are now linked to suppliers (and materials, if you manufacture), '
+              'items below their Reorder Point can be ticked and turned into bulk purchase orders to the right supplier in one click. '
               'This page updates automatically whenever your stock or demand changes.',
           navigateTo: '/forecasts',
         ),
 
-        // ── 8. Replenishment recommendations ─────────────────────────────
+        // ── 11. Replenishment recommendations ─────────────────────────────
         const SpotlightStep(
           anchorId: 'sidebar:/replenishment',
-          title: 'Step 7 — Replenishment Recommendations',
+          title: 'Step 12 — Replenishment Recommendations',
           description:
               'This screen groups the reorder suggestions by supplier so you can send bulk orders. '
               'Approve or adjust quantities, then create purchase orders in one click. '
@@ -152,13 +238,14 @@ class WelcomeTourDialog extends StatefulWidget {
           navigateTo: '/replenishment',
         ),
 
-        // ── 9. Manufacturers (manufacturing SMEs only) ────────────────────
+        // ── 12. Manufacturers (manufacturing SMEs only) ───────────────────
         const SpotlightStep(
           anchorId: 'sidebar:/manufacturers',
           title: 'Bonus — Manufacturers (skip if reseller)',
           description:
-              'If you produce goods in-house or through partners, add them here. '
-              'Pure resellers who only buy and sell finished goods can press Next to skip steps 9–11.',
+              'If you produce goods through external partners, add them here so you can '
+              'route production orders to them. '
+              'Pure resellers who only buy and sell finished goods can press Next to skip.',
           navigateTo: '/manufacturers',
         ),
         SpotlightStep(
@@ -170,40 +257,17 @@ class WelcomeTourDialog extends StatefulWidget {
           completeWhen: () => appState.manufacturers.isNotEmpty,
         ),
 
-        // ── 10. Raw materials ─────────────────────────────────────────────
-        SpotlightStep(
-          anchorId: 'page:rawmaterials.add',
-          title: 'Add Raw Materials',
-          description:
-              'List every input you buy for production. '
-              'Link each material to its supplier — this is how reorder math knows the lead time for components. '
-              'Auto-advances when saved.',
-          navigateTo: '/raw-materials',
-          completeWhen: () => appState.rawMaterials.isNotEmpty,
-        ),
-
-        // ── 11. BOM ───────────────────────────────────────────────────────
-        SpotlightStep(
-          anchorId: 'page:bom.add',
-          title: 'Build your Bill of Materials',
-          description:
-              'For each manufactured product, map the raw materials it consumes and their quantities. '
-              'Ma5zony rolls this up into the product\'s unit cost automatically. '
-              'Auto-advances when saved.',
-          navigateTo: '/bom',
-          completeWhen: () => appState.boms.isNotEmpty,
-        ),
-
-        // ── 12. Done ──────────────────────────────────────────────────────
+        // ── 13. Done ──────────────────────────────────────────────────────
         const SpotlightStep(
           anchorId: 'sidebar.group:Dashboard',
           title: 'You\'re all set! 🎉',
           description:
               'Your foundation is complete:\n'
               '✓ Suppliers & warehouses\n'
-              '✓ Products with costs\n'
+              '✓ Products with costs, linked to suppliers\n'
+              '✓ Materials & BOM (if you manufacture)\n'
               '✓ Demand / sales history\n'
-              '✓ Live reorder plan\n\n'
+              '✓ Live reorder plan → one-click bulk orders\n\n'
               'Ma5zony will now continuously watch your stock levels and alert you when it\'s time to reorder. '
               'Replay this tour any time from the dashboard.',
           navigateTo: '/dashboard',

@@ -14,6 +14,10 @@ class Product {
   final int? minimumStock;
   final String? shopifyVariantId;
   final String? shopifyProductId;
+  /// URL of the product's main/featured image, pulled from Shopify on import
+  /// (`featuredImage.url`). Used to render a small thumbnail next to the
+  /// product name in the products table.
+  final String? imageUrl;
   /// Selling price charged to the customer (pulled from Shopify if available,
   /// or entered manually). Used for margin calculations.
   final double? sellingPrice;
@@ -60,6 +64,7 @@ class Product {
     this.minimumStock,
     this.shopifyVariantId,
     this.shopifyProductId,
+    this.imageUrl,
     this.sellingPrice,
     this.productionFee,
     this.shopifyUnitCost,
@@ -116,6 +121,8 @@ class Product {
       shopifyProductId: _resolve<String>(
               data, ['shopifyProductId', 'shopify_product_id'])
           ?.toString(),
+      imageUrl: _resolve<String>(
+          data, ['imageUrl', 'image_url', 'featuredImage', 'image']),
       // Selling price: app uses 'sellingPrice'; Shopify may carry it under
       // 'price' (we prefer 'sellingPrice' to avoid confusion with unitCost).
       sellingPrice: (data['sellingPrice'] as num?)?.toDouble() ??
@@ -149,6 +156,62 @@ class Product {
     return Product.fromFirestore(id, json);
   }
 
+  /// Returns a copy with the given fields overridden. Nullable fields use a
+  /// sentinel pattern is avoided for simplicity — pass the existing value to
+  /// keep it. Used by bulk-edit flows (e.g. assigning a supplier to many
+  /// imported products at once).
+  Product copyWith({
+    String? id,
+    String? sku,
+    String? name,
+    String? category,
+    double? unitCost,
+    int? currentStock,
+    String? supplierId,
+    String? manufacturerId,
+    String? warehouseId,
+    bool? isActive,
+    int? leadTimeDays,
+    double? averageDailySales,
+    int? minimumStock,
+    String? shopifyVariantId,
+    String? shopifyProductId,
+    String? imageUrl,
+    double? sellingPrice,
+    double? productionFee,
+    double? shopifyUnitCost,
+    bool? isBundle,
+    List<BundleComponent>? bundleComponents,
+    List<SourcingOption>? sourcingOptions,
+    Map<String, int>? stockByWarehouse,
+  }) {
+    return Product(
+      id: id ?? this.id,
+      sku: sku ?? this.sku,
+      name: name ?? this.name,
+      category: category ?? this.category,
+      unitCost: unitCost ?? this.unitCost,
+      currentStock: currentStock ?? this.currentStock,
+      supplierId: supplierId ?? this.supplierId,
+      manufacturerId: manufacturerId ?? this.manufacturerId,
+      warehouseId: warehouseId ?? this.warehouseId,
+      isActive: isActive ?? this.isActive,
+      leadTimeDays: leadTimeDays ?? this.leadTimeDays,
+      averageDailySales: averageDailySales ?? this.averageDailySales,
+      minimumStock: minimumStock ?? this.minimumStock,
+      shopifyVariantId: shopifyVariantId ?? this.shopifyVariantId,
+      shopifyProductId: shopifyProductId ?? this.shopifyProductId,
+      imageUrl: imageUrl ?? this.imageUrl,
+      sellingPrice: sellingPrice ?? this.sellingPrice,
+      productionFee: productionFee ?? this.productionFee,
+      shopifyUnitCost: shopifyUnitCost ?? this.shopifyUnitCost,
+      isBundle: isBundle ?? this.isBundle,
+      bundleComponents: bundleComponents ?? this.bundleComponents,
+      sourcingOptions: sourcingOptions ?? this.sourcingOptions,
+      stockByWarehouse: stockByWarehouse ?? this.stockByWarehouse,
+    );
+  }
+
   Map<String, dynamic> toJson() {
     return {
       'id': id,
@@ -166,6 +229,7 @@ class Product {
       if (minimumStock != null) 'minimumStock': minimumStock,
       if (shopifyVariantId != null) 'shopifyVariantId': shopifyVariantId,
       if (shopifyProductId != null) 'shopifyProductId': shopifyProductId,
+      if (imageUrl != null) 'imageUrl': imageUrl,
       if (sellingPrice != null) 'sellingPrice': sellingPrice,
       if (productionFee != null) 'productionFee': productionFee,
       if (shopifyUnitCost != null) 'shopifyUnitCost': shopifyUnitCost,

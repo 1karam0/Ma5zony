@@ -3,7 +3,10 @@ import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:ma5zony/models/product.dart';
+import 'package:ma5zony/providers/app_state.dart';
 import 'package:ma5zony/utils/constants.dart';
+import 'package:provider/provider.dart';
 
 /// Breadcrumb navigation row for detail screens.
 ///
@@ -1033,6 +1036,261 @@ class TableSkeleton extends StatelessWidget {
           ],
         ),
       ),
+    );
+  }
+}
+
+// ── ShopifyProductPickerDialog ────────────────────────────────────────────────
+/// Fetches all available Shopify products, lets the user tick which ones to
+/// import, then calls [AppState.importSelectedShopifyProducts] with only those.
+///
+/// Returns a [Map<String,int>] summary on success, or null if cancelled.
+class ShopifyProductPickerDialog extends StatefulWidget {
+  const ShopifyProductPickerDialog({super.key});
+
+  /// Convenience helper — opens the dialog and returns the result map.
+  static Future<Map<String, int>?> show(BuildContext context) {
+    return showDialog<Map<String, int>>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => const ShopifyProductPickerDialog(),
+    );
+  }
+
+  @override
+  State<ShopifyProductPickerDialog> createState() =>
+      _ShopifyProductPickerDialogState();
+}
+
+class _ShopifyProductPickerDialogState
+    extends State<ShopifyProductPickerDialog> {
+  List<Product>? _products;
+  String? _fetchError;
+  Set<String> _selected = {};
+  bool _importing = false;
+  String _query = '';
+
+  @override
+  void initState() {
+    super.initState();
+    _fetchProducts();
+  }
+
+  Future<void> _fetchProducts() async {
+    try {
+      final products = await context.read<AppState>().fetchShopifyProducts();
+      if (mounted) {
+        setState(() {
+          _products = products;
+          // Pre-select all so the default matches the old "import all" behaviour;
+          // user deselects anything they don't want.
+          _selected = products.map((p) => p.id).toSet();
+        });
+      }
+    } catch (e) {
+      if (mounted) setState(() => _fetchError = e.toString());
+    }
+  }
+
+  Future<void> _import() async {
+    if (_selected.isEmpty) return;
+    setState(() => _importing = true);
+    try {
+      final result = await context
+          .read<AppState>()
+          .importSelectedShopifyProducts(_selected.toList());
+      if (mounted) Navigator.of(context).pop(result);
+    } catch (e) {
+      if (mounted) {
+        setState(() => _importing = false);
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('Import failed: $e'),
+          backgroundColor: Colors.red,
+          duration: const Duration(seconds: 5),
+        ));
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final filtered = _products
+        ?.where((p) =>
+            _query.isEmpty ||
+            p.name.toLowerCase().contains(_query.toLowerCase()) ||
+            p.sku.toLowerCase().contains(_query.toLowerCase()))
+        .toList();
+
+    return AlertDialog(
+      title: const Row(
+        children: [
+          Icon(Icons.shopping_bag_outlined, size: 20),
+          SizedBox(width: 8),
+          Text('Select Products to Import'),
+        ],
+      ),
+      contentPadding: const EdgeInsets.fromLTRB(24, 12, 24, 0),
+      content: SizedBox(
+        width: 520,
+        height: 480,
+        child: _fetchError != null
+            ? Center(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(Icons.error_outline,
+                        size: 40, color: Colors.red),
+                    const SizedBox(height: 8),
+                    const Text('Failed to load products',
+                        style: TextStyle(fontWeight: FontWeight.w600)),
+                    const SizedBox(height: 4),
+                    Text(_fetchError!,
+                        style: const TextStyle(fontSize: 12),
+                        textAlign: TextAlign.center),
+                    const SizedBox(height: 16),
+                    OutlinedButton(
+                      onPressed: () {
+                        setState(() => _fetchError = null);
+                        _fetchProducts();
+                      },
+                      child: const Text('Retry'),
+                    ),
+                  ],
+                ),
+              )
+            : _products == null
+                ? const Center(child: CircularProgressIndicator())
+                : _products!.isEmpty
+                    ? const Center(
+                        child: Text(
+                            'No products found in your Shopify store.'))
+                    : Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          // Search + select-all row
+                          Row(
+                            children: [
+                              Expanded(
+                                child: TextField(
+                                  decoration: const InputDecoration(
+                                    hintText: 'Search products…',
+                                    prefixIcon:
+                                        Icon(Icons.search, size: 18),
+                                    isDense: true,
+                                    contentPadding: EdgeInsets.symmetric(
+                                        vertical: 8, horizontal: 8),
+                                  ),
+                                  onChanged: (v) =>
+                                      setState(() => _query = v),
+                                ),
+                              ),
+                              const SizedBox(width: 12),
+                              TextButton(
+                                onPressed: () => setState(() {
+                                  if (_selected.length ==
+                                      _products!.length) {
+                                    _selected.clear();
+                                  } else {
+                                    _selected = _products!
+                                        .map((p) => p.id)
+                                        .toSet();
+                                  }
+                                }),
+                                child: Text(
+                                  _selected.length == _products!.length
+                                      ? 'Deselect All'
+                                      : 'Select All',
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            '${_selected.length} of ${_products!.length} selected',
+                            style: TextStyle(
+                                fontSize: 12,
+                                color: AppColors.textSecondary),
+                          ),
+                          const SizedBox(height: 8),
+                          const Divider(height: 1),
+                          // Scrollable product list
+                          Expanded(
+                            child: ListView.builder(
+                              itemCount: filtered!.length,
+                              itemBuilder: (ctx, i) {
+                                final p = filtered[i];
+                                final checked = _selected.contains(p.id);
+                                return CheckboxListTile(
+                                  dense: true,
+                                  value: checked,
+                                  onChanged: (v) => setState(() {
+                                    if (v == true) {
+                                      _selected.add(p.id);
+                                    } else {
+                                      _selected.remove(p.id);
+                                    }
+                                  }),
+                                  title: Text(p.name,
+                                      style: const TextStyle(
+                                          fontSize: 14,
+                                          fontWeight: FontWeight.w500)),
+                                  subtitle: p.sku.isNotEmpty
+                                      ? Text('SKU: ${p.sku}',
+                                          style: TextStyle(
+                                              fontSize: 12,
+                                              color: AppColors
+                                                  .textSecondary))
+                                      : null,
+                                  secondary: p.currentStock > 0
+                                      ? Container(
+                                          padding:
+                                              const EdgeInsets.symmetric(
+                                                  horizontal: 8,
+                                                  vertical: 2),
+                                          decoration: BoxDecoration(
+                                            color: AppColors.primary
+                                                .withValues(alpha: 0.1),
+                                            borderRadius:
+                                                BorderRadius.circular(8),
+                                          ),
+                                          child: Text(
+                                            'Stock: ${p.currentStock}',
+                                            style: TextStyle(
+                                                fontSize: 11,
+                                                color: AppColors.primary,
+                                                fontWeight:
+                                                    FontWeight.w500),
+                                          ),
+                                        )
+                                      : null,
+                                  activeColor: AppColors.primary,
+                                );
+                              },
+                            ),
+                          ),
+                        ],
+                      ),
+      ),
+      actions: [
+        TextButton(
+          onPressed:
+              _importing ? null : () => Navigator.of(context).pop(null),
+          child: const Text('Cancel'),
+        ),
+        FilledButton.icon(
+          onPressed: (_importing || _selected.isEmpty) ? null : _import,
+          icon: _importing
+              ? const SizedBox(
+                  width: 14,
+                  height: 14,
+                  child: CircularProgressIndicator(
+                      strokeWidth: 2, color: Colors.white))
+              : const Icon(Icons.download, size: 16),
+          label: Text(_importing
+              ? 'Importing\u2026'
+              : 'Import${_selected.isEmpty ? "" : " (${_selected.length})"}'),
+        ),
+      ],
     );
   }
 }

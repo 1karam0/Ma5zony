@@ -9,6 +9,7 @@ import 'package:ma5zony/models/supplier.dart';
 import 'package:ma5zony/models/warehouse.dart';
 import 'package:ma5zony/providers/app_state.dart';
 import 'package:ma5zony/utils/constants.dart';
+import 'package:ma5zony/widgets/shared_widgets.dart';
 
 class SetupWizardScreen extends StatefulWidget {
   const SetupWizardScreen({super.key});
@@ -128,12 +129,11 @@ class _SetupWizardScreenState extends State<SetupWizardScreen> {
   // ── Step 2: Sync ─────────────────────────────────────────────────────────
 
   Future<void> _syncProducts() async {
-    setState(() => _syncing = true);
-    try {
-      final result = await context.read<AppState>().importShopifyProducts();
+    // Open the product picker dialog — user selects exactly which products
+    // to import rather than pulling everything from Shopify automatically.
+    final result = await ShopifyProductPickerDialog.show(context);
+    if (result != null && mounted) {
       setState(() => _productSyncResult = result);
-    } finally {
-      if (mounted) setState(() => _syncing = false);
     }
   }
 
@@ -368,7 +368,7 @@ class _SetupWizardScreenState extends State<SetupWizardScreen> {
                 onConnect: _connectShopify,
               ),
             1 => _Step2Sync(
-                syncing: _syncing,
+                syncing: false,
                 productResult: _productSyncResult,
                 orderResult: _orderSyncResult,
                 onSyncProducts: _syncProducts,

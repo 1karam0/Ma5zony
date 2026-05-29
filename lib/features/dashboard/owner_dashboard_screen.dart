@@ -1091,67 +1091,301 @@ class _ExpandableAnalyticsCardState extends State<_ExpandableAnalyticsCard> {
   }
 }
 
-class _OwnerHelpTab extends StatelessWidget {
+// ─── Help & Support tab — Quick Chatbot ──────────────────────────────────────
+// Replaces the old static "browse topics" grid with a lightweight, fully
+// offline chatbot. There is NO LLM call: each suggested question maps to a
+// canned answer + (optional) a button that deep-links the user straight to
+// the relevant page in the app. This keeps the help center fast, predictable
+// and free, while still answering the questions new users actually ask.
+
+class _ChatQA {
+  final String question;
+  final String answer;
+  /// Optional in-app route the answer's button navigates to.
+  final String? route;
+  /// Label shown on the route button (defaults to "Open page").
+  final String? buttonLabel;
+  const _ChatQA(this.question, this.answer,
+      {this.route, this.buttonLabel});
+}
+
+const List<_ChatQA> _kChatQAs = [
+  // Setup essentials
+  _ChatQA(
+    'How do I get started?',
+    'Start the guided Welcome Tour from the dashboard — it walks you through '
+        'every required setup step in order: Suppliers → Warehouses → '
+        'Products → Set Sourcing → Link Suppliers → Assign Warehouse → '
+        'Materials → BOM → Demand → Reorder Plan.',
+    route: '/dashboard',
+    buttonLabel: 'Open Dashboard',
+  ),
+  _ChatQA(
+    'How do I import my products from Shopify?',
+    'Go to Integrations, connect your Shopify store, then click "Import '
+        'Products". Your active Shopify products (and their main image) are '
+        'pulled in automatically. Cost is left blank — you set it inside '
+        'Ma5zony so it stays accurate to what you actually pay.',
+    route: '/integrations',
+    buttonLabel: 'Open Integrations',
+  ),
+  _ChatQA(
+    'How do I add a supplier?',
+    'Open Suppliers and click "Add Supplier". Fill in the name, contact '
+        'email and average lead-time days. Your supplier becomes available '
+        'in the product setup dropdowns and in purchase orders.',
+    route: '/suppliers',
+    buttonLabel: 'Open Suppliers',
+  ),
+  _ChatQA(
+    'How do I add a warehouse?',
+    'Open Warehouses and click "Add Warehouse". Once you have at least one '
+        'warehouse, you can assign products to it from the Products page so '
+        'per-location stock and the inventory map become accurate.',
+    route: '/warehouses',
+    buttonLabel: 'Open Warehouses',
+  ),
+  // Products & sourcing
+  _ChatQA(
+    'What\'s the difference between purchased and manufactured?',
+    'Purchased products are bought from a supplier — their cost = the '
+        'supplier price you type in. Manufactured products are made in-house '
+        '— their cost = the sum of raw materials in the BOM plus a '
+        'production fee. Use "Set Sourcing" on Products to classify each one.',
+    route: '/products',
+    buttonLabel: 'Open Products',
+  ),
+  _ChatQA(
+    'Can one product have multiple suppliers?',
+    'Yes. For PURCHASED products, open the product editor and add backup '
+        'sourcing options — the default one drives cost and lead time. For '
+        'MANUFACTURED products (like Figure-8 Straps made of strap + logo + '
+        'padding), each raw material has its own supplier in the BOM.',
+    route: '/products',
+    buttonLabel: 'Open Products',
+  ),
+  _ChatQA(
+    'How do I assign a product to a warehouse?',
+    'On the Products page, click "Assign Warehouse ›" on the row, or use '
+        'the toolbar "Assign Warehouse" button to bulk-assign. The product\'s '
+        'on-hand stock is allocated to that warehouse automatically.',
+    route: '/products',
+    buttonLabel: 'Open Products',
+  ),
+  _ChatQA(
+    'Why is the unit cost greyed out for my manufactured product?',
+    'Manufactured cost is calculated from the BOM (materials × quantities + '
+        'production fee), not typed manually — typing it would silently '
+        'disagree with the BOM. Open BOM to set up the recipe.',
+    route: '/bom',
+    buttonLabel: 'Open BOM',
+  ),
+  // BOM & raw materials
+  _ChatQA(
+    'How do I build a Bill of Materials?',
+    'Open BOM, pick a manufactured product, then add each raw material it '
+        'uses and the quantity per unit. Ma5zony rolls this up into the '
+        'product cost and explodes finished-goods demand into raw-material '
+        'demand for reordering.',
+    route: '/bom',
+    buttonLabel: 'Open BOM',
+  ),
+  _ChatQA(
+    'How do I add raw materials?',
+    'Open Raw Materials and add each input you buy for production. Link '
+        'each material to its supplier so reorder logic knows the lead time.',
+    route: '/raw-materials',
+    buttonLabel: 'Open Raw Materials',
+  ),
+  // Demand & forecasting
+  _ChatQA(
+    'How do I add sales / demand data?',
+    'Open Demand Data. You can import historical Shopify orders, upload a '
+        'CSV, or add records manually. More history = more accurate forecasts.',
+    route: '/demand-data',
+    buttonLabel: 'Open Demand Data',
+  ),
+  _ChatQA(
+    'How does forecasting work?',
+    'Ma5zony runs Simple Moving Average (SMA) and Simple Exponential '
+        'Smoothing (SES) on your demand history. View results and switch '
+        'methods on the Forecasts page.',
+    route: '/forecasts',
+    buttonLabel: 'Open Forecasts',
+  ),
+  // Replenishment & POs
+  _ChatQA(
+    'How do reorder recommendations work?',
+    'Replenishment uses your forecast + lead time + safety stock to compute '
+        'a Reorder Point. When stock drops below it, the product appears in '
+        'Replenishment with a suggested reorder quantity.',
+    route: '/replenishment',
+    buttonLabel: 'Open Replenishment',
+  ),
+  _ChatQA(
+    'How do I create a purchase order?',
+    'Open Orders → "Create PO". Pick a supplier, add the products and '
+        'quantities, and send. Items recommended by replenishment can be '
+        'turned into POs in one click.',
+    route: '/orders/create',
+    buttonLabel: 'Create Purchase Order',
+  ),
+  // Misc
+  _ChatQA(
+    'Where do I see low-stock alerts?',
+    'They appear on the Dashboard inventory health card and in the Inbox. '
+        'Anything below the Reorder Point shows as Low; zero stock shows as '
+        'Critical.',
+    route: '/inbox',
+    buttonLabel: 'Open Inbox',
+  ),
+  _ChatQA(
+    'How do I invite my team / manage roles?',
+    'Open Settings to manage users and their roles (Owner, Inventory '
+        'Manager, Manufacturer, Raw Material Factory). Each role sees only '
+        'the pages it needs.',
+    route: '/settings',
+    buttonLabel: 'Open Settings',
+  ),
+];
+
+class _ChatMessage {
+  final String text;
+  final bool fromUser;
+  /// When set, renders a primary button under the bot message that routes
+  /// to this in-app path.
+  final String? route;
+  final String? buttonLabel;
+  _ChatMessage.user(this.text)
+      : fromUser = true,
+        route = null,
+        buttonLabel = null;
+  _ChatMessage.bot(this.text, {this.route, this.buttonLabel})
+      : fromUser = false;
+}
+
+class _OwnerHelpTab extends StatefulWidget {
   const _OwnerHelpTab();
 
   @override
-  Widget build(BuildContext context) {
-    final topics = const [
-      _HelpTopic(Icons.inventory_2_outlined, 'Products & Inventory',
-          'Manage SKUs, stock levels and warehouses.'),
-      _HelpTopic(Icons.account_tree_outlined, 'Bill of Materials',
-          'Define BOMs and link raw materials to finished goods.'),
-      _HelpTopic(Icons.show_chart, 'Demand Forecasting',
-          'Run SMA / SES forecasts on your sales history.'),
-      _HelpTopic(Icons.shopping_cart_outlined, 'Purchase Orders',
-          'Approve replenishments and track POs to suppliers.'),
-      _HelpTopic(Icons.shopping_bag_outlined, 'Shopify Integration',
-          'Connect your store, sync products and import orders.'),
-      _HelpTopic(Icons.factory_outlined, 'Manufacturing',
-          'Production orders, manufacturers and raw material flow.'),
-    ];
+  State<_OwnerHelpTab> createState() => _OwnerHelpTabState();
+}
 
-    return SingleChildScrollView(
+class _OwnerHelpTabState extends State<_OwnerHelpTab> {
+  final List<_ChatMessage> _messages = [
+    _ChatMessage.bot(
+      'Hi! I\'m the Ma5zony Help Bot. Pick a question below and I\'ll '
+          'explain it and take you straight to the right page.',
+    ),
+  ];
+  final ScrollController _scroll = ScrollController();
+
+  void _ask(_ChatQA qa) {
+    setState(() {
+      _messages.add(_ChatMessage.user(qa.question));
+      _messages.add(_ChatMessage.bot(qa.answer,
+          route: qa.route, buttonLabel: qa.buttonLabel));
+    });
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (_scroll.hasClients) {
+        _scroll.animateTo(
+          _scroll.position.maxScrollExtent,
+          duration: const Duration(milliseconds: 250),
+          curve: Curves.easeOut,
+        );
+      }
+    });
+  }
+
+  void _reset() {
+    setState(() {
+      _messages
+        ..clear()
+        ..add(_ChatMessage.bot(
+          'Cleared. Pick a question below — I\'ll answer and link you to '
+              'the right page.',
+        ));
+    });
+  }
+
+  @override
+  void dispose() {
+    _scroll.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
       padding: const EdgeInsets.all(24),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text('Help & Support', style: AppTextStyles.h2),
-          const SizedBox(height: 4),
-          Text(
-            'Browse guides, contact support or learn how to get the most out of Ma5zony.',
-            style: AppTextStyles.body.copyWith(color: AppColors.textSecondary),
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: AppColors.primary.withValues(alpha: 0.10),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: const Icon(Icons.smart_toy_outlined,
+                    color: AppColors.primary, size: 22),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('Help Bot', style: AppTextStyles.h2),
+                    Text(
+                      'Quick answers to common setup & inventory questions.',
+                      style: AppTextStyles.body
+                          .copyWith(color: AppColors.textSecondary),
+                    ),
+                  ],
+                ),
+              ),
+              TextButton.icon(
+                onPressed: _reset,
+                icon: const Icon(Icons.refresh, size: 18),
+                label: const Text('Reset'),
+              ),
+            ],
           ),
-          const SizedBox(height: 20),
-          HelpSupportCard(onTap: () {}),
-          const SizedBox(height: 24),
-          Text('Browse topics', style: AppTextStyles.h3),
-          const SizedBox(height: 12),
-          LayoutBuilder(
-            builder: (context, constraints) {
-              final w = constraints.maxWidth;
-              final cols = w > 1000 ? 3 : (w > 600 ? 2 : 1);
-              final gap = 12.0;
-              final cardW = (w - gap * (cols - 1)) / cols;
-              return Wrap(
-                spacing: gap,
-                runSpacing: gap,
-                children: topics
-                    .map((t) => SizedBox(
-                          width: cardW,
-                          child: _HelpTopicCard(topic: t),
-                        ))
-                    .toList(),
-              );
-            },
-          ),
-          const SizedBox(height: 32),
-          Center(
-            child: Text(
-              'Ma5zony • v1.0',
-              style: AppTextStyles.bodySmall
-                  .copyWith(color: AppColors.textSecondary),
+          const SizedBox(height: 16),
+          // Chat transcript
+          Expanded(
+            child: Container(
+              decoration: BoxDecoration(
+                color: AppColors.surfaceCard,
+                border: Border.all(color: AppColors.borderSubtle),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              padding: const EdgeInsets.all(16),
+              child: ListView.builder(
+                controller: _scroll,
+                itemCount: _messages.length,
+                itemBuilder: (ctx, i) => _ChatBubble(message: _messages[i]),
+              ),
             ),
+          ),
+          const SizedBox(height: 12),
+          // Suggested questions
+          Text('Suggested questions',
+              style: AppTextStyles.body
+                  .copyWith(fontWeight: FontWeight.w600)),
+          const SizedBox(height: 8),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              for (final qa in _kChatQAs)
+                ActionChip(
+                  label: Text(qa.question),
+                  onPressed: () => _ask(qa),
+                ),
+            ],
           ),
         ],
       ),
@@ -1159,52 +1393,70 @@ class _OwnerHelpTab extends StatelessWidget {
   }
 }
 
-class _HelpTopic {
-  final IconData icon;
-  final String title;
-  final String subtitle;
-  const _HelpTopic(this.icon, this.title, this.subtitle);
-}
-
-class _HelpTopicCard extends StatelessWidget {
-  final _HelpTopic topic;
-  const _HelpTopicCard({required this.topic});
+class _ChatBubble extends StatelessWidget {
+  final _ChatMessage message;
+  const _ChatBubble({required this.message});
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: AppColors.surfaceCard,
-        border: Border.all(color: AppColors.borderSubtle),
-        borderRadius: BorderRadius.circular(12),
-      ),
+    final isUser = message.fromUser;
+    final bg = isUser
+        ? AppColors.primary.withValues(alpha: 0.12)
+        : AppColors.background;
+    final align =
+        isUser ? CrossAxisAlignment.end : CrossAxisAlignment.start;
+    final rowAlign = isUser ? MainAxisAlignment.end : MainAxisAlignment.start;
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
       child: Row(
+        mainAxisAlignment: rowAlign,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Container(
-            padding: const EdgeInsets.all(8),
-            decoration: BoxDecoration(
-              color: AppColors.primary.withValues(alpha: 0.08),
-              borderRadius: BorderRadius.circular(8),
+          if (!isUser) ...[
+            const CircleAvatar(
+              radius: 14,
+              backgroundColor: AppColors.primary,
+              child: Icon(Icons.smart_toy_outlined,
+                  color: Colors.white, size: 16),
             ),
-            child: Icon(topic.icon, size: 20, color: AppColors.primary),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(topic.title,
-                    style: AppTextStyles.body
-                        .copyWith(fontWeight: FontWeight.w600)),
-                const SizedBox(height: 4),
-                Text(topic.subtitle,
-                    style: AppTextStyles.bodySmall
-                        .copyWith(color: AppColors.textSecondary)),
-              ],
+            const SizedBox(width: 8),
+          ],
+          Flexible(
+            child: Container(
+              constraints: const BoxConstraints(maxWidth: 540),
+              padding: const EdgeInsets.symmetric(
+                  horizontal: 12, vertical: 10),
+              decoration: BoxDecoration(
+                color: bg,
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: AppColors.borderSubtle),
+              ),
+              child: Column(
+                crossAxisAlignment: align,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(message.text, style: AppTextStyles.body),
+                  if (!isUser && message.route != null) ...[
+                    const SizedBox(height: 10),
+                    FilledButton.icon(
+                      onPressed: () => context.go(message.route!),
+                      icon: const Icon(Icons.arrow_forward, size: 16),
+                      label: Text(message.buttonLabel ?? 'Open page'),
+                    ),
+                  ],
+                ],
+              ),
             ),
           ),
+          if (isUser) ...[
+            const SizedBox(width: 8),
+            const CircleAvatar(
+              radius: 14,
+              backgroundColor: AppColors.textSecondary,
+              child: Icon(Icons.person, color: Colors.white, size: 16),
+            ),
+          ],
         ],
       ),
     );
