@@ -138,11 +138,24 @@ class SpotlightCoach {
       }
 
       // Live-reposition the cutout. The highlighted button may move when a
-      // dialog opens / closes or when its parent rebuilds. Rebuilding the
-      // overlay every 120ms keeps the spotlight glued to the right place
-      // without coupling us to specific widget lifecycles.
+      // dialog opens / closes or when its parent rebuilds. Instead of blindly
+      // rebuilding the whole overlay 8×/sec (which ran the corner-selection
+      // algorithm and re-laid-out the card every tick — the main cause of tour
+      // lag during navigation), we poll only the target rect (cheap) and
+      // rebuild the overlay ONLY when it actually changed.
+      Rect? lastRect = TourTargets.instance.rectFor(step.anchorId);
       repositionTimer = Timer.periodic(
-          const Duration(milliseconds: 120), (_) => render());
+        const Duration(milliseconds: 120),
+        (_) {
+          if (removed) return;
+          final current = TourTargets.instance.rectFor(step.anchorId);
+          if (!_rectsClose(lastRect, current)) {
+            lastRect = current;
+            render();
+          }
+        },
+      );
+
     }
 
     entry = OverlayEntry(
@@ -165,6 +178,18 @@ class SpotlightCoach {
     // Kick off the first step (navigation aware).
     await goToStep(0);
   }
+}
+
+/// Returns true when two optional rects are effectively the same position
+/// (within 0.5px on every edge), so the reposition timer can skip a rebuild.
+bool _rectsClose(Rect? a, Rect? b) {
+  if (a == null && b == null) return true;
+  if (a == null || b == null) return false;
+  const eps = 0.5;
+  return (a.left - b.left).abs() < eps &&
+      (a.top - b.top).abs() < eps &&
+      (a.width - b.width).abs() < eps &&
+      (a.height - b.height).abs() < eps;
 }
 
 class _SpotlightLayer extends StatefulWidget {

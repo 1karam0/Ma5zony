@@ -1286,7 +1286,22 @@ class AppState extends ChangeNotifier {
   /// derived from raw-materials + manufacturing fees, or from the supplier
   /// price typed in by the user. This guarantees the inventory cost shown
   /// on the dashboard matches what the business actually pays.
-  double effectiveUnitCost(Product p) => _effectiveUnitCost(p, <String>{});
+  double effectiveUnitCost(Product p) =>
+      _unitCostCache.putIfAbsent(p.id, () => _effectiveUnitCost(p, <String>{}));
+
+  /// Per-frame memo for [effectiveUnitCost]. The cost is a pure function of the
+  /// current product/BOM/raw-material state, and that state only changes
+  /// alongside a [notifyListeners] call — so clearing the cache there keeps it
+  /// always-fresh while collapsing the 50+ recursive recomputations a single
+  /// table rebuild used to trigger into one lookup per product.
+  final Map<String, double> _unitCostCache = {};
+
+  @override
+  void notifyListeners() {
+    _unitCostCache.clear();
+    super.notifyListeners();
+  }
+
 
   /// Depth-tracked recursive cost calculator.
   ///

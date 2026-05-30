@@ -21,11 +21,15 @@ class _Ma5zonyAppState extends State<Ma5zonyApp> {
 
   @override
   Widget build(BuildContext context) {
-    final appState = context.watch<AppState>();
+    // Only rebuild MaterialApp when the theme actually changes — not on every
+    // AppState.notifyListeners() (CRUD, background sync, demand updates, …),
+    // which previously rebuilt the entire MaterialApp wrapper needlessly.
+    final themeMode =
+        context.select<AppState, ThemeMode>((s) => s.themeMode);
     return MaterialApp.router(
       title: 'Ma5zony - Inventory Management',
       debugShowCheckedModeBanner: false,
-      themeMode: appState.themeMode,
+      themeMode: themeMode,
       theme: _buildLightTheme(),
       darkTheme: ThemeData(
         colorScheme: ColorScheme.fromSeed(

@@ -37,6 +37,7 @@ import 'package:ma5zony/features/orders/create_raw_material_order_screen.dart';
 import 'package:ma5zony/features/replenishment/replenishment_screen.dart';
 import 'package:ma5zony/features/inbox/inbox_screen.dart';
 import 'package:ma5zony/utils/role_guard.dart';
+import 'package:ma5zony/utils/constants.dart';
 
 // Private navigators
 final _rootNavigatorKey = GlobalKey<NavigatorState>();
@@ -47,6 +48,7 @@ GoRouter buildAppRouter(AppState appState) {
   navigatorKey: _rootNavigatorKey,
   initialLocation: '/login',
   refreshListenable: appState.authNotifier,
+  errorBuilder: (context, state) => _RouteErrorScreen(error: state.error),
   routes: [
     GoRoute(path: '/login', builder: (context, state) => const LoginScreen()),
     GoRoute(
@@ -313,3 +315,57 @@ GoRouter buildAppRouter(AppState appState) {
   },
 );
 }
+
+/// Friendly fallback shown by GoRouter when a route can't be resolved (bad URL,
+/// navigation exception) instead of the default debug error page.
+class _RouteErrorScreen extends StatelessWidget {
+  final Exception? error;
+  const _RouteErrorScreen({this.error});
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: AppColors.background,
+      body: Center(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 420),
+          child: Padding(
+            padding: const EdgeInsets.all(24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  width: 56,
+                  height: 56,
+                  decoration: const BoxDecoration(
+                    color: AppColors.errorBg,
+                    shape: BoxShape.circle,
+                  ),
+                  child: const Icon(Icons.explore_off_rounded,
+                      color: AppColors.error, size: 30),
+                ),
+                const SizedBox(height: 16),
+                Text("This page couldn't be found",
+                    textAlign: TextAlign.center, style: AppTextStyles.h3),
+                const SizedBox(height: 8),
+                Text(
+                  'The page you tried to open may have moved or no longer exists.',
+                  textAlign: TextAlign.center,
+                  style: AppTextStyles.bodySmall
+                      .copyWith(color: AppColors.textSecondary),
+                ),
+                const SizedBox(height: 20),
+                FilledButton.icon(
+                  onPressed: () => context.go('/dashboard'),
+                  icon: const Icon(Icons.home_rounded, size: 18),
+                  label: const Text('Back to dashboard'),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
