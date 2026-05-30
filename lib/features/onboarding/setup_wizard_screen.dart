@@ -258,6 +258,7 @@ class _SetupWizardScreenState extends State<SetupWizardScreen> {
             latitude: s.latitude,
             longitude: s.longitude,
             suppliedRawMaterialIds: s.suppliedRawMaterialIds,
+            suppliedProductIds: s.suppliedProductIds,
           ));
         }
       }

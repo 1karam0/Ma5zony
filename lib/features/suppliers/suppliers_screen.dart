@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:ma5zony/providers/app_state.dart';
+import 'package:ma5zony/models/product.dart';
 import 'package:ma5zony/models/raw_material.dart';
 import 'package:ma5zony/models/supplier.dart';
 import 'package:ma5zony/utils/constants.dart';
@@ -449,13 +450,33 @@ class _SupplierFormDialogState extends State<_SupplierFormDialog> {
   double? _latitude;
   double? _longitude;
   late Set<String> _selectedRawMaterialIds;
+  late Set<String> _selectedProductIds;
+  // Snapshot of products that were already linked to this supplier when the
+  // form opened. Used on save to detect unticked products and unlink them.
+  late Set<String> _initialLinkedProductIds;
 
   @override
   void initState() {
     super.initState();
     final s = widget.supplier;
+    final appState = context.read<AppState>();
     _selectedRawMaterialIds =
         Set<String>.from(s?.suppliedRawMaterialIds ?? const []);
+    // Build the initial set from both:
+    //   1. supplier.suppliedProductIds (the explicit picker selection), and
+    //   2. any Product whose supplierId already points to this supplier
+    //      (legacy data set before the picker existed).
+    final linkedFromProducts = s == null
+        ? <String>{}
+        : appState.products
+            .where((p) => p.supplierId == s.id)
+            .map((p) => p.id)
+            .toSet();
+    _selectedProductIds = {
+      ...(s?.suppliedProductIds ?? const <String>[]),
+      ...linkedFromProducts,
+    };
+    _initialLinkedProductIds = Set<String>.from(linkedFromProducts);
     _nameCtrl = TextEditingController(text: s?.name ?? '');
     _emailCtrl = TextEditingController(text: s?.contactEmail ?? '');
     _phoneCtrl = TextEditingController(text: s?.phone ?? '');
@@ -561,16 +582,52 @@ class _SupplierFormDialogState extends State<_SupplierFormDialog> {
       latitude: _latitude,
       longitude: _longitude,
       suppliedRawMaterialIds: _selectedRawMaterialIds.toList(),
+      suppliedProductIds: _selectedProductIds.toList(),
     );
     final navigator = Navigator.of(context);
     final messenger = ScaffoldMessenger.of(context);
     final appState = context.read<AppState>();
     try {
+      final Supplier saved;
       if (isEdit) {
         await appState.updateSupplier(supplier);
+        saved = supplier;
       } else {
-        await appState.addSupplier(supplier);
+        saved = await appState.addSupplier(supplier);
       }
+
+      // ── Sync product.supplierId so the relationship stays bidirectional ──
+      // 1. Every ticked product whose supplierId != saved.id gets linked.
+      // 2. Every previously-linked product that was unticked gets unlinked.
+      final futures = <Future<void>>[];
+      for (final pid in _selectedProductIds) {
+        final p = appState.products.firstWhere(
+          (e) => e.id == pid,
+          orElse: () => Product(
+              id: '', sku: '', name: '', category: '', unitCost: 0),
+        );
+        if (p.id.isEmpty) continue;
+        if (p.supplierId != saved.id) {
+          futures.add(appState.updateProduct(p.copyWith(supplierId: saved.id)));
+        }
+      }
+      for (final pid in _initialLinkedProductIds) {
+        if (_selectedProductIds.contains(pid)) continue;
+        final p = appState.products.firstWhere(
+          (e) => e.id == pid,
+          orElse: () => Product(
+              id: '', sku: '', name: '', category: '', unitCost: 0),
+        );
+        if (p.id.isEmpty) continue;
+        if (p.supplierId == saved.id) {
+          futures.add(appState
+              .updateProduct(p.copyWith(clearSupplierId: true)));
+        }
+      }
+      if (futures.isNotEmpty) {
+        await Future.wait(futures);
+      }
+
       navigator.pop();
       messenger.showSnackBar(
         SnackBar(duration: const Duration(seconds: 3), content: Text(isEdit ? 'Supplier updated' : 'Supplier added')),
@@ -745,6 +802,13 @@ class _SupplierFormDialogState extends State<_SupplierFormDialog> {
                   selectedIds: _selectedRawMaterialIds,
                   onChanged: (ids) =>
                       setState(() => _selectedRawMaterialIds = ids),
+                ),
+
+                // ── Section 3b: Finished Products Supplied ────────────
+                _ProductsPicker(
+                  selectedIds: _selectedProductIds,
+                  onChanged: (ids) =>
+                      setState(() => _selectedProductIds = ids),
                 ),
 
                 // ── Section 4: Location (collapsible) ────────────────────
@@ -1219,6 +1283,131 @@ class _RawMaterialsPicker extends StatelessWidget {
           ],
         ),
       ),
+    );
+  }
+}
+
+/// Multi-select chip picker for the finished products this supplier delivers.
+/// A supplier may carry raw materials, finished goods, or both — this lets
+/// the user tick any combination. On save, each ticked product has its
+/// `supplierId` set to this supplier (and unticked products are unlinked).
+class _ProductsPicker extends StatelessWidget {
+  final Set<String> selectedIds;
+  final ValueChanged<Set<String>> onChanged;
+
+  const _ProductsPicker({
+    required this.selectedIds,
+    required this.onChanged,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final products = context
+        .watch<AppState>()
+        .products
+        .where((p) => p.isActive)
+        .toList()
+      ..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+
+    return ZohoFormSection(
+      title: 'Finished Products Supplied',
+      subtitle:
+          'Tick every finished product this supplier delivers. Each ticked '
+          'product will be linked to this supplier automatically.',
+      collapsible: true,
+      initiallyExpanded: selectedIds.isNotEmpty,
+      children: [
+        if (products.isEmpty)
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: AppColors.border.withValues(alpha: 0.4),
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: AppColors.divider),
+            ),
+            child: Row(
+              children: [
+                Icon(Icons.info_outline,
+                    size: 14, color: AppColors.textSecondary),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: Text(
+                    'No products yet. Add products from the Products page, '
+                    'then come back here to link them to this supplier.',
+                    style: AppTextStyles.bodySmall
+                        .copyWith(color: AppColors.textSecondary),
+                  ),
+                ),
+              ],
+            ),
+          )
+        else
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: products.map((p) {
+              final isSelected = selectedIds.contains(p.id);
+              return FilterChip(
+                label: Text(p.name),
+                selected: isSelected,
+                onSelected: (val) {
+                  final next = Set<String>.from(selectedIds);
+                  if (val) {
+                    next.add(p.id);
+                  } else {
+                    next.remove(p.id);
+                  }
+                  onChanged(next);
+                },
+              );
+            }).toList(),
+          ),
+        const SizedBox(height: 12),
+        Container(
+          width: double.infinity,
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: selectedIds.isEmpty
+                ? AppColors.border.withValues(alpha: 0.4)
+                : AppColors.primary.withValues(alpha: 0.06),
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(
+              color: selectedIds.isEmpty
+                  ? AppColors.divider
+                  : AppColors.primary.withValues(alpha: 0.25),
+            ),
+          ),
+          child: selectedIds.isEmpty
+              ? Row(
+                  children: [
+                    Icon(Icons.link_off,
+                        size: 14, color: AppColors.textSecondary),
+                    const SizedBox(width: 6),
+                    Expanded(
+                      child: Text(
+                          'No products linked. Leave empty if this supplier '
+                          'only delivers raw materials.',
+                          style: AppTextStyles.bodySmall
+                              .copyWith(color: AppColors.textSecondary)),
+                    ),
+                  ],
+                )
+              : Row(
+                  children: [
+                    Icon(Icons.link, size: 13, color: AppColors.primary),
+                    const SizedBox(width: 6),
+                    Text(
+                        '${selectedIds.length} '
+                        'product${selectedIds.length == 1 ? '' : 's'} '
+                        'will be linked to this supplier on save.',
+                        style: AppTextStyles.bodySmall.copyWith(
+                            color: AppColors.primary,
+                            fontWeight: FontWeight.w600)),
+                  ],
+                ),
+        ),
+      ],
     );
   }
 }

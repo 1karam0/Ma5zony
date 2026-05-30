@@ -184,6 +184,9 @@ class Product {
     List<BundleComponent>? bundleComponents,
     List<SourcingOption>? sourcingOptions,
     Map<String, int>? stockByWarehouse,
+    /// When true, the supplierId field is explicitly cleared (set to null)
+    /// regardless of the [supplierId] argument. Use to unlink a product.
+    bool clearSupplierId = false,
   }) {
     return Product(
       id: id ?? this.id,
@@ -192,7 +195,8 @@ class Product {
       category: category ?? this.category,
       unitCost: unitCost ?? this.unitCost,
       currentStock: currentStock ?? this.currentStock,
-      supplierId: supplierId ?? this.supplierId,
+      supplierId:
+          clearSupplierId ? null : (supplierId ?? this.supplierId),
       manufacturerId: manufacturerId ?? this.manufacturerId,
       warehouseId: warehouseId ?? this.warehouseId,
       isActive: isActive ?? this.isActive,

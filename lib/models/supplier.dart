@@ -12,6 +12,10 @@ class Supplier {
   /// IDs of raw materials this supplier can provide. A single supplier
   /// commonly carries several materials.
   final List<String> suppliedRawMaterialIds;
+  /// IDs of finished products this supplier delivers (e.g. resale items or
+  /// fully-assembled SKUs). A supplier may carry raw materials, finished
+  /// products, or both.
+  final List<String> suppliedProductIds;
 
   Supplier({
     required this.id,
@@ -24,6 +28,7 @@ class Supplier {
     this.latitude,
     this.longitude,
     this.suppliedRawMaterialIds = const [],
+    this.suppliedProductIds = const [],
   });
 
   factory Supplier.fromJson(Map<String, dynamic> json) {
@@ -43,6 +48,10 @@ class Supplier {
               ?.map((e) => e.toString())
               .toList() ??
           const [],
+      suppliedProductIds: (json['suppliedProductIds'] as List?)
+              ?.map((e) => e.toString())
+              .toList() ??
+          const [],
     );
   }
 
@@ -59,6 +68,8 @@ class Supplier {
       if (longitude != null) 'longitude': longitude,
       if (suppliedRawMaterialIds.isNotEmpty)
         'suppliedRawMaterialIds': suppliedRawMaterialIds,
+      if (suppliedProductIds.isNotEmpty)
+        'suppliedProductIds': suppliedProductIds,
     };
   }
 }
