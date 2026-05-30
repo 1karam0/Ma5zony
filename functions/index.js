@@ -329,7 +329,7 @@ exports.shopifyImportProducts = onRequest(
     // fall back to the no-bundles query if Shopify rejects the field.
     const PRODUCTS_QUERY_WITH_BUNDLES = `
       query FetchProducts($cursor: String) {
-        products(first: 100, after: $cursor, query: "status:active") {
+        products(first: 50, after: $cursor, query: "status:active") {
           pageInfo { hasNextPage endCursor }
           edges {
             node {
@@ -338,7 +338,7 @@ exports.shopifyImportProducts = onRequest(
               productType
               status
               featuredImage { url }
-              variants(first: 50) {
+              variants(first: 20) {
                 edges {
                   node {
                     id
@@ -346,7 +346,7 @@ exports.shopifyImportProducts = onRequest(
                     sku
                     price
                     inventoryQuantity
-                    productVariantComponents(first: 25) {
+                    productVariantComponents(first: 10) {
                       edges {
                         node {
                           quantity
@@ -445,16 +445,18 @@ exports.shopifyImportProducts = onRequest(
             { cursor }
           );
         } catch (err) {
-          // Downgrade once if the bundle field is unsupported on this store.
+          // Downgrade once if:
+          //  (a) productVariantComponents field unsupported on this store, OR
+          //  (b) the query cost exceeds Shopify's 1000-point single-query limit.
+          // Both are recoverable by switching to the cheaper NO_BUNDLES query.
           const msg = String(err && err.message ? err.message : err);
           if (
             bundleQuerySupported &&
-            /productVariantComponents|Field .* doesn't exist|Field .* not found/i
+            /productVariantComponents|Field .* doesn't exist|Field .* not found|Query cost.*exceeds|exceeds.*cost.*limit|single query max cost/i
               .test(msg)
           ) {
             console.log(
-              "[shopifyImport] productVariantComponents unsupported — " +
-                "falling back to cost-only query."
+              "[shopifyImport] falling back to no-bundles query. Reason: " + msg
             );
             bundleQuerySupported = false;
             PRODUCTS_QUERY = PRODUCTS_QUERY_NO_BUNDLES;
