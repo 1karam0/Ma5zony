@@ -296,7 +296,19 @@ class FirestoreInventoryRepository implements InventoryRepository {
   Future<Manufacturer> addManufacturer(Manufacturer manufacturer) async {
     final data = manufacturer.toFirestore();
     final docRef = await _manufacturersCol.add(data);
-    return Manufacturer.fromFirestore(docRef.id, data);
+    // Flutter web: Firebase JS SDK resolves add() from the local cache before
+    // the server confirms. Read back from server to surface any permission
+    // denial that would otherwise be invisible to the caller.
+    final snap = await docRef.get(const GetOptions(source: Source.server));
+    if (!snap.exists) {
+      throw FirebaseException(
+        plugin: 'cloud_firestore',
+        code: 'permission-denied',
+        message:
+            'Manufacturer was not saved. Check your account role or Firestore rules.',
+      );
+    }
+    return Manufacturer.fromFirestore(snap.id, snap.data()!);
   }
 
   @override

@@ -169,7 +169,7 @@ service cloud.firestore {
       // ── Manufacturers ────────────────────────────────────────────────
       match /manufacturers/{manufacturerId} {
         allow read: if isOwner(userId);
-        allow write: if isOwner(userId) && hasOwnerRole();
+        allow write: if isOwner(userId) && hasInventoryRole();
       }
 
       // ── Production Orders ────────────────────────────────────────────
