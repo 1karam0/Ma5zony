@@ -7,27 +7,22 @@ import 'package:ma5zony/models/raw_material.dart';
 import 'package:ma5zony/services/replenishment_service.dart';
 import 'package:ma5zony/services/settings_service.dart';
 
-/// Computed reorder point for a single raw material, derived from the demand
-/// of every finished product that consumes it (via its active BOM).
+/// Reorder result for one raw material.
 class RawMaterialStockResult {
   final String rawMaterialId;
 
-  /// Average units of this material consumed per day across all products.
+  // avg units used per day across all products
   final double dailyConsumption;
 
-  /// Lead time used in the calculation (material lead time, or a 7-day
-  /// fallback when none is configured).
+  // material lead time, or 7 if not set
   final int leadTimeDays;
 
-  /// Buffer to absorb demand variability during the lead time.
   final int safetyStock;
 
-  /// Reorder point = expected consumption during lead time + safety stock.
-  /// This is the level at which a new purchase should be triggered.
+  // reorder when stock hits this level
   final int reorderPoint;
 
-  /// Whether enough connected data (demand + BOM linkage) existed to compute
-  /// a meaningful figure. When false, callers should keep any manual value.
+  // false when there's no demand/BOM data yet
   final bool hasData;
 
   RawMaterialStockResult({
@@ -40,18 +35,11 @@ class RawMaterialStockResult {
   });
 }
 
-/// Calculates raw-material reorder points automatically by exploding finished
-/// product demand through each product's active Bill of Materials.
-///
-/// Raw-material demand is a *derived* quantity: a material is only consumed
-/// when the products that use it are built. So the reorder point is:
-///
-///   reorderPoint = (Σ productDailyDemand × qtyPerUnit) × leadTime + safetyStock
-///
-/// This removes the need for the user to hand-enter a safety-stock figure —
-/// once products, demand history and BOMs are set up, the value is computed.
+/// Works out raw-material reorder points from product demand and BOMs.
+/// A material is only used when its products are built, so:
+///   reorderPoint = (sum of product daily demand * qty per unit) * leadTime + safety
+/// This way the user doesn't have to type a safety-stock number by hand.
 class RawMaterialStockService {
-  /// Computes reorder points for every raw material.
   Map<String, RawMaterialStockResult> computeAll({
     required List<RawMaterial> rawMaterials,
     required List<Product> products,
@@ -63,14 +51,14 @@ class RawMaterialStockService {
         ? ReplenishmentService.serviceLevelToZ(settings.serviceLevelTarget)
         : 1.65;
 
-    // Pre-compute per-product daily demand mean & standard deviation once.
+    // daily demand mean + std dev per product
     final productStats = <String, _ProductDemandStats>{};
     for (final product in products) {
       final records = demandByProduct[product.id] ?? const [];
       productStats[product.id] = _ProductDemandStats.fromRecords(records);
     }
 
-    // Index active BOMs by finished product id.
+    // active BOM per product
     final activeBomByProduct = <String, BillOfMaterials>{};
     for (final bom in boms) {
       if (bom.isActive) activeBomByProduct[bom.finalProductId] = bom;
@@ -130,9 +118,7 @@ class RawMaterialStockService {
   }
 }
 
-/// Daily demand mean / standard deviation derived from a product's demand
-/// records, normalised to a per-day basis so it can be combined across the
-/// raw material's lead time.
+/// Daily demand mean and std dev for one product.
 class _ProductDemandStats {
   final double dailyMean;
   final double dailyStdDev;
@@ -164,8 +150,7 @@ class _ProductDemandStats {
           dailyMean: 0, dailyStdDev: 0, hasData: false);
     }
 
-    // Standard deviation of per-record demand, converted to a daily figure by
-    // dividing by the average record span (records are typically monthly).
+    // std dev of demand per record, turned into a daily number
     final recordMean = totalDemand / sorted.length;
     final variance = sorted.fold<double>(
             0, (s, r) => s + pow(r.quantity - recordMean, 2).toDouble()) /

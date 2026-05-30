@@ -10,11 +10,8 @@ class RawMaterial {
   int safetyStock;
   final int leadTimeDays;
 
-  /// When true (default), [safetyStock] is treated as an automatically
-  /// computed reorder point — the system recalculates it from product demand
-  /// exploded through the BOM plus this material's lead time. When false, the
-  /// user has manually overridden the reorder level and the system leaves it
-  /// untouched.
+  // when true, the reorder point is auto-calculated; when false the user
+  // typed it in manually and we leave it alone
   bool autoSafetyStock;
 
   RawMaterial({

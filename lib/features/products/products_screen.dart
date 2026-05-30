@@ -9,18 +9,11 @@ import 'package:ma5zony/widgets/shared_widgets.dart';
 import 'package:ma5zony/widgets/zoho_patterns.dart';
 import 'package:ma5zony/features/onboarding/tour_targets.dart';
 
-/// Opens the product Add/Edit dialog pre-filled for [product]. The dialog
-/// Quick inline dialog to set / edit just the supplier price (unit cost) of
-/// a *purchased* product. Saves without touching any other field.
-///
-/// **Don't call this for manufactured products** — their cost is rolled up
-/// from BOM materials + production fee, never typed manually. Use
-/// [showProductCostFixDialog] which dispatches to the correct flow.
+// Small dialog to set just the supplier price of a purchased product.
+// Don't use this for manufactured products (their cost comes from the BOM).
 Future<void> showQuickCostDialog(
     BuildContext context, Product product) async {
-  // Capture the provider up-front from the (stable) screen context so the
-  // save handler never reads it through the dialog's own context, which may be
-  // deactivated by the time the mutation runs.
+  // grab the provider from the screen context, not the dialog's
   final appState = context.read<AppState>();
   await showDialog(
     context: context,
@@ -28,10 +21,8 @@ Future<void> showQuickCostDialog(
   );
 }
 
-/// Dialog body for [showQuickCostDialog]. Owning the [TextEditingController]
-/// inside a StatefulWidget lets the framework dispose it only when the element
-/// is truly removed — avoiding "used after being disposed" crashes when a
-/// `notifyListeners()` rebuild lands during the dialog's exit animation.
+// Keep the controller in a StatefulWidget so it's only disposed when the
+// dialog is really gone (avoids "used after disposed" crashes on rebuild).
 class _QuickCostDialog extends StatefulWidget {
   const _QuickCostDialog({required this.product, required this.appState});
 
@@ -109,12 +100,9 @@ class _QuickCostDialogState extends State<_QuickCostDialog> {
           onPressed: () async {
             if (!formKey.currentState!.validate()) return;
             final newCost = double.parse(ctrl.text.trim());
-            // Use copyWith so every field (including imageUrl) is preserved —
-            // manual reconstruction silently drops any field not listed.
+            // copyWith keeps all the other fields (like imageUrl)
             final updated = product.copyWith(unitCost: newCost);
-            // Close the dialog FIRST, then mutate state. Doing the
-            // notifyListeners-driven rebuild while the dialog is still mounted
-            // can deactivate an InheritedElement that still has dependents.
+            // close first, then update state
             Navigator.pop(context);
             await widget.appState.updateProduct(updated);
           },

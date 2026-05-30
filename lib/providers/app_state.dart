@@ -2110,11 +2110,8 @@ class AppState extends ChangeNotifier {
     computeRawMaterialReorderPoints();
   }
 
-  /// Auto-calculates each raw material's reorder point (safety-stock level)
-  /// from finished-product demand exploded through active BOMs. Materials
-  /// flagged [RawMaterial.autoSafetyStock] have their stored [safetyStock]
-  /// updated (and persisted when the value changes); manually overridden
-  /// materials are left untouched.
+  // Auto reorder point for each raw material, worked out from product demand
+  // and BOMs. Auto materials get their safetyStock updated and saved.
   void computeRawMaterialReorderPoints() {
     _rmStockResults = _rmStockService.computeAll(
       rawMaterials: _rawMaterials,
@@ -2124,15 +2121,13 @@ class AppState extends ChangeNotifier {
       settings: _settings,
     );
 
-    // Apply computed reorder points to auto-managed materials. Persist only
-    // when the value actually changes to avoid redundant Firestore writes.
+    // only save when the number actually changed
     for (final rm in _rawMaterials) {
       if (!rm.autoSafetyStock) continue;
       final result = _rmStockResults[rm.id];
       if (result == null || !result.hasData) continue;
       if (rm.safetyStock == result.reorderPoint) continue;
       rm.safetyStock = result.reorderPoint;
-      // Fire-and-forget persistence; in-memory value drives the UI.
       _repo?.updateRawMaterial(rm);
     }
   }
