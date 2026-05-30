@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:provider/provider.dart';
 import 'package:ma5zony/models/bill_of_materials.dart';
+import 'package:ma5zony/models/product.dart';
 import 'package:ma5zony/providers/app_state.dart';
 import 'package:ma5zony/utils/constants.dart';
 import 'package:ma5zony/widgets/shared_widgets.dart';
@@ -391,49 +392,116 @@ class _BomFormDialog extends StatefulWidget {
 class _BomFormDialogState extends State<_BomFormDialog> {
   final _formKey = GlobalKey<FormState>();
   String? _productId;
-  /// One row per raw material — initialised in initState once we have access
-  /// to widget.state.rawMaterials.
-  late List<_MaterialLine> _lines;
+
+  /// Material rows grouped by scope. The `null` key is the **shared** scope
+  /// (materials every variant consumes); each non-null key is a variant id
+  /// holding that variant's own materials. For products without variants only
+  /// the shared scope exists.
+  late Map<String?, List<_MaterialLine>> _linesByScope;
+
+  /// Which scope the materials list is currently editing (`null` = shared).
+  String? _activeScope;
+
   bool _saving = false;
 
   bool get _isEdit => widget.existing != null;
+
+  /// Real variants of the selected product. Empty unless the product has 2+
+  /// variants (single-variant / "Default Title" products use the simple flow).
+  List<ProductVariant> get _variants {
+    final id = _productId;
+    if (id == null) return const [];
+    Product? p;
+    for (final x in widget.state.products) {
+      if (x.id == id) {
+        p = x;
+        break;
+      }
+    }
+    if (p == null || p.variants.length <= 1) return const [];
+    return p.variants;
+  }
+
+  bool get _hasVariants => _variants.isNotEmpty;
+
+  /// Rows for the scope currently being edited.
+  List<_MaterialLine> get _currentLines =>
+      _linesByScope[_activeScope] ?? const [];
+
+  /// Human title for a variant id (falls back to the id itself).
+  String _variantTitle(String variantId) {
+    for (final v in _variants) {
+      if (v.id == variantId) return v.title;
+    }
+    return variantId;
+  }
 
   @override
   void initState() {
     super.initState();
     _productId = widget.existing?.finalProductId;
+    _linesByScope = _buildScopes();
+  }
 
-    // Build one row for every raw material, pre-ticking those that are
-    // already in the BOM (edit mode) and prefilling their qty/uom.
-    final existingByMaterialId = <String, BomMaterial>{
-      if (widget.existing != null)
-        for (final m in widget.existing!.materials) m.rawMaterialId: m,
-    };
-    _lines = widget.state.rawMaterials.map((rm) {
-      final existing = existingByMaterialId[rm.id];
-      // Priority: 1) saved BOM line  2) unit already set on the raw material
-      //           3) fallback 'units'
-      final uom = existing != null && _kUomOptions.contains(existing.unitOfMeasure)
-          ? existing.unitOfMeasure
-          : _kUomOptions.contains(rm.unitOfMeasure)
-              ? rm.unitOfMeasure
-              : 'units';
-      return _MaterialLine(
-        materialId: rm.id,
-        materialName: rm.name,
-        included: existing != null,
-        qtyCtrl: TextEditingController(
-            text: existing != null ? '${existing.quantityPerUnit}' : '1'),
-        uom: uom,
-      );
-    }).toList();
+  /// (Re)builds the per-scope material rows for the current product. Pre-ticks
+  /// rows already in the existing BOM and prefills their qty/uom.
+  Map<String?, List<_MaterialLine>> _buildScopes() {
+    final scopes = <String?>[null, ..._variants.map((v) => v.id)];
+    // Index existing lines by "<variantId>|<materialId>".
+    final byKey = <String, BomMaterial>{};
+    if (widget.existing != null) {
+      for (final m in widget.existing!.materials) {
+        byKey['${m.variantId ?? ''}|${m.rawMaterialId}'] = m;
+      }
+    }
+    final result = <String?, List<_MaterialLine>>{};
+    for (final scope in scopes) {
+      result[scope] = widget.state.rawMaterials.map((rm) {
+        final existing = byKey['${scope ?? ''}|${rm.id}'];
+        // Priority: 1) saved BOM line  2) unit set on the raw material
+        //           3) fallback 'units'
+        final uom = existing != null &&
+                _kUomOptions.contains(existing.unitOfMeasure)
+            ? existing.unitOfMeasure
+            : _kUomOptions.contains(rm.unitOfMeasure)
+                ? rm.unitOfMeasure
+                : 'units';
+        return _MaterialLine(
+          materialId: rm.id,
+          materialName: rm.name,
+          included: existing != null,
+          qtyCtrl: TextEditingController(
+              text: existing != null ? '${existing.quantityPerUnit}' : '1'),
+          uom: uom,
+        );
+      }).toList();
+    }
+    return result;
+  }
+
+  /// Disposes every controller across all scopes.
+  void _disposeScopes() {
+    for (final lines in _linesByScope.values) {
+      for (final l in lines) {
+        l.qtyCtrl.dispose();
+      }
+    }
+  }
+
+  /// Called when the product changes (create mode): rebuild scopes for the
+  /// new product and reset to the shared tab.
+  void _onProductChanged(String? value) {
+    setState(() {
+      _disposeScopes();
+      _productId = value;
+      _activeScope = null;
+      _linesByScope = _buildScopes();
+    });
   }
 
   @override
   void dispose() {
-    for (final l in _lines) {
-      l.qtyCtrl.dispose();
-    }
+    _disposeScopes();
     super.dispose();
   }
 
@@ -603,7 +671,7 @@ class _BomFormDialogState extends State<_BomFormDialog> {
                             .toList(),
                         onChanged: _isEdit
                             ? null // can't change product on existing BOM
-                            : (v) => setState(() => _productId = v),
+                            : _onProductChanged,
                         validator: (v) =>
                             v == null || v.isEmpty ? 'Select a product' : null,
                       );
@@ -612,10 +680,27 @@ class _BomFormDialogState extends State<_BomFormDialog> {
                 ),
                 ZohoFormSection(
                   title: 'Materials',
-                  subtitle: 'Tick every raw material this product needs. '  
-                      'Fill in how much of each is used per unit produced.',
+                  subtitle: _hasVariants
+                      ? 'Shared materials are used by every variant. Use the '
+                          'tabs to add materials specific to one variant '
+                          '(e.g. a red strap only for the Red variant).'
+                      : 'Tick every raw material this product needs. '
+                          'Fill in how much of each is used per unit produced.',
                   children: [
-                    if (_lines.isEmpty)
+                    // Per-variant scope selector (only for multi-variant products).
+                    if (_hasVariants) ...[
+                      _VariantScopeSelector(
+                        variants: _variants,
+                        activeScope: _activeScope,
+                        countFor: (scope) => (_linesByScope[scope] ?? const [])
+                            .where((l) => l.included)
+                            .length,
+                        onSelected: (scope) =>
+                            setState(() => _activeScope = scope),
+                      ),
+                      const SizedBox(height: 12),
+                    ],
+                    if (_currentLines.isEmpty)
                       Container(
                         padding: const EdgeInsets.all(12),
                         decoration: BoxDecoration(
@@ -689,7 +774,7 @@ class _BomFormDialogState extends State<_BomFormDialog> {
                       ),
                       const Divider(height: 1),
                       // One row per raw material
-                      ..._lines.map((line) {
+                      ..._currentLines.map((line) {
                         return Padding(
                           padding:
                               const EdgeInsets.symmetric(vertical: 6),
@@ -760,7 +845,8 @@ class _BomFormDialogState extends State<_BomFormDialog> {
                       Padding(
                         padding: const EdgeInsets.only(top: 6),
                         child: Text(
-                          '${_lines.where((l) => l.included).length} of ${_lines.length} material(s) included',
+                          '${_currentLines.where((l) => l.included).length} of ${_currentLines.length} material(s) included'
+                          '${_hasVariants ? ' in ${_activeScope == null ? 'shared' : _variantTitle(_activeScope!)}' : ''}',
                           style: AppTextStyles.bodySmall
                               .copyWith(color: AppColors.textSecondary),
                         ),
@@ -800,8 +886,30 @@ class _BomFormDialogState extends State<_BomFormDialog> {
 
   Future<void> _save() async {
     if (!_formKey.currentState!.validate()) return;
-    final included = _lines.where((l) => l.included).toList();
-    if (included.isEmpty) {
+
+    // Collect included rows across every scope. Hidden scopes aren't in the
+    // widget tree, so validate their quantities manually here.
+    final entries = <MapEntry<String?, _MaterialLine>>[];
+    for (final scope in _linesByScope.keys) {
+      for (final l in _linesByScope[scope]!.where((x) => x.included)) {
+        final qty = double.tryParse(l.qtyCtrl.text.trim()) ?? 0;
+        if (qty <= 0) {
+          // Surface the offending scope so the user can fix it.
+          setState(() => _activeScope = scope);
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              duration: const Duration(seconds: 3),
+              content: Text(
+                  'Enter a quantity > 0 for ${l.materialName}'
+                  '${scope == null ? '' : ' (${_variantTitle(scope)})'}'),
+            ),
+          );
+          return;
+        }
+        entries.add(MapEntry(scope, l));
+      }
+    }
+    if (entries.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
             content: Text('Tick at least one material'),
@@ -815,11 +923,12 @@ class _BomFormDialogState extends State<_BomFormDialog> {
         id: widget.existing?.id ?? '',
         finalProductId: _productId!,
         isActive: widget.existing?.isActive ?? true,
-        materials: included
-            .map((l) => BomMaterial(
-                  rawMaterialId: l.materialId,
-                  quantityPerUnit: double.parse(l.qtyCtrl.text.trim()),
-                  unitOfMeasure: l.uom,
+        materials: entries
+            .map((e) => BomMaterial(
+                  rawMaterialId: e.value.materialId,
+                  quantityPerUnit: double.parse(e.value.qtyCtrl.text.trim()),
+                  unitOfMeasure: e.value.uom,
+                  variantId: e.key,
                 ))
             .toList(),
       );
@@ -867,3 +976,59 @@ class _MaterialLine {
     this.uom = 'units',
   });
 }
+
+/// Tab strip that lets the user switch between the shared material list and
+/// each variant's own material list while building a BOM. Each chip shows how
+/// many materials are currently ticked in that scope.
+class _VariantScopeSelector extends StatelessWidget {
+  final List<ProductVariant> variants;
+  final String? activeScope;
+  final int Function(String? scope) countFor;
+  final ValueChanged<String?> onSelected;
+
+  const _VariantScopeSelector({
+    required this.variants,
+    required this.activeScope,
+    required this.countFor,
+    required this.onSelected,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    Widget chip(String? scope, String label, IconData icon) {
+      final selected = scope == activeScope;
+      final count = countFor(scope);
+      return Padding(
+        padding: const EdgeInsets.only(right: 8),
+        child: ChoiceChip(
+          avatar: Icon(
+            icon,
+            size: 16,
+            color: selected ? Colors.white : AppColors.textSecondary,
+          ),
+          label: Text(count > 0 ? '$label ($count)' : label),
+          selected: selected,
+          showCheckmark: false,
+          selectedColor: AppColors.primary,
+          labelStyle: TextStyle(
+            color: selected ? Colors.white : AppColors.textPrimary,
+            fontWeight: selected ? FontWeight.w600 : FontWeight.w500,
+          ),
+          onSelected: (_) => onSelected(scope),
+        ),
+      );
+    }
+
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      child: Row(
+        children: [
+          chip(null, 'Shared (all variants)', Icons.all_inclusive),
+          ...variants.map((v) =>
+              chip(v.id, v.title, Icons.style_outlined)),
+        ],
+      ),
+    );
+  }
+}
+

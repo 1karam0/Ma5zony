@@ -44,6 +44,11 @@ class Product {
   /// legacy single-location scalar.
   final Map<String, int> stockByWarehouse;
 
+  /// Shopify variants (id + human title, e.g. "Red", "Black / L") collapsed
+  /// under this single product. Used by the BOM step to map raw materials per
+  /// variant. Empty for products with no/one variant.
+  final List<ProductVariant> variants;
+
   /// Returns the stock count at a specific warehouse (0 if not tracked).
   int stockAtWarehouse(String warehouseId) =>
       stockByWarehouse[warehouseId] ?? 0;
@@ -72,6 +77,7 @@ class Product {
     this.bundleComponents = const [],
     this.sourcingOptions = const [],
     this.stockByWarehouse = const {},
+    this.variants = const [],
   });
 
   /// Resolves a value from multiple possible field name aliases.
@@ -146,6 +152,11 @@ class Product {
             (data['stockByWarehouse'] as Map<String, dynamic>? ?? {}).entries)
           entry.key: (entry.value as num).toInt(),
       },
+      variants: (data['variants'] as List<dynamic>?)
+              ?.map((e) =>
+                  ProductVariant.fromJson(Map<String, dynamic>.from(e as Map)))
+              .toList() ??
+          const [],
     );
   }
 
@@ -184,6 +195,7 @@ class Product {
     List<BundleComponent>? bundleComponents,
     List<SourcingOption>? sourcingOptions,
     Map<String, int>? stockByWarehouse,
+    List<ProductVariant>? variants,
     /// When true, the supplierId field is explicitly cleared (set to null)
     /// regardless of the [supplierId] argument. Use to unlink a product.
     bool clearSupplierId = false,
@@ -213,6 +225,7 @@ class Product {
       bundleComponents: bundleComponents ?? this.bundleComponents,
       sourcingOptions: sourcingOptions ?? this.sourcingOptions,
       stockByWarehouse: stockByWarehouse ?? this.stockByWarehouse,
+      variants: variants ?? this.variants,
     );
   }
 
@@ -245,6 +258,8 @@ class Product {
         'sourcingOptions': sourcingOptions.map((o) => o.toJson()).toList(),
       if (stockByWarehouse.isNotEmpty)
         'stockByWarehouse': stockByWarehouse,
+      if (variants.isNotEmpty)
+        'variants': variants.map((v) => v.toJson()).toList(),
     };
   }
 }
@@ -300,7 +315,43 @@ class SourcingOption {
       };
 }
 
-/// A single line in a bundle: how many of which component variant this
+/// A single Shopify variant of a product (e.g. a colour or size option),
+/// collapsed under one Ma5zony [Product]. Used so the BOM step can assign
+/// different raw materials to each variant (Red strap → red material, etc.).
+class ProductVariant {
+  /// Shopify variant id (raw numeric id, no `gid://` prefix).
+  final String id;
+  /// Human-readable variant title from Shopify, e.g. "Red" or "Black / L".
+  final String title;
+  /// Variant SKU, if any.
+  final String? sku;
+
+  const ProductVariant({
+    required this.id,
+    required this.title,
+    this.sku,
+  });
+
+  /// True for Shopify's placeholder title used on single-variant products.
+  bool get isDefaultTitle =>
+      title.trim().toLowerCase() == 'default title' || title.trim().isEmpty;
+
+  factory ProductVariant.fromJson(Map<String, dynamic> json) {
+    return ProductVariant(
+      id: json['id']?.toString() ?? '',
+      title: json['title'] as String? ?? 'Default Title',
+      sku: json['sku'] as String?,
+    );
+  }
+
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'title': title,
+        if (sku != null) 'sku': sku,
+      };
+}
+
+
 /// bundle contains. Either [productId] (Ma5zony Firestore id) or
 /// [shopifyVariantId] / [shopifyProductId] can be used to look up the
 /// component's current unit cost when computing the bundle's effective cost.

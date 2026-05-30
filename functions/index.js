@@ -498,6 +498,17 @@ exports.shopifyImportProducts = onRequest(
           // Pick a representative SKU: first variant's SKU, or fall back.
           const firstSku = variants.find((v) => v.sku && v.sku.trim())?.sku;
           const sku = firstSku || `SHOP-${shopifyId}`;
+
+          // ── Variant list (for per-variant BOMs) ──────────────────────────
+          // Keep each variant's id + human title (e.g. "Red", "Black / L")
+          // so Ma5zony can map raw materials per variant inside the BOM step.
+          // Shopify uses "Default Title" for single-variant products — we
+          // keep it but the UI only surfaces variants when there are 2+.
+          const variantList = variants.map((v) => ({
+            id: v.id.split("/").pop(),
+            title: v.title || "Default Title",
+            sku: v.sku || null,
+          }));
           // Shopify selling price (first variant) — stored separately so it is
           // never confused with the user's cost price.
           const sellingPrice = parseFloat(
@@ -612,6 +623,8 @@ exports.shopifyImportProducts = onRequest(
               .map((v) => v.id.split("/").pop())
               .join(","),
             variantCount: variants.length,
+            // Per-variant id+title list (drives per-variant BOM mapping).
+            variants: variantList,
             // Bundle metadata. Always write so removed bundles are cleared.
             isBundle,
             bundleComponents,

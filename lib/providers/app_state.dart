@@ -1339,25 +1339,42 @@ class AppState extends ChangeNotifier {
           .where((b) => b.finalProductId == p.id && b.isActive)
           .firstOrNull;
       if (bom != null && bom.materials.isNotEmpty) {
-        double materialsCost = 0;
         final nextVisiting = {...visiting, p.id};
-        for (final m in bom.materials) {
+        // Cost contributed by one BOM line.
+        double lineCost(BomMaterial m) {
           final qty = m.effectiveQuantityPerUnit;
           if (m.kind == BomComponentKind.product) {
             // Sub-assembly — roll up its own cost.
-            final sub =
-                _products.where((x) => x.id == m.refId).firstOrNull;
+            final sub = _products.where((x) => x.id == m.refId).firstOrNull;
             if (sub != null) {
-              materialsCost += _effectiveUnitCost(sub, nextVisiting) * qty;
+              return _effectiveUnitCost(sub, nextVisiting) * qty;
             }
+            return 0;
+          }
+          final rm = _rawMaterials.where((r) => r.id == m.refId).firstOrNull;
+          return rm != null ? rm.unitCost * qty : 0;
+        }
+
+        // Shared lines (variantId == null) are consumed by every variant.
+        // Variant-specific lines are mutually exclusive, so the representative
+        // product cost uses the AVERAGE of the per-variant totals rather than
+        // summing them (which would overcount).
+        double sharedCost = 0;
+        final perVariant = <String, double>{};
+        for (final m in bom.materials) {
+          if (m.variantId == null) {
+            sharedCost += lineCost(m);
           } else {
-            final rm = _rawMaterials
-                .where((r) => r.id == m.refId)
-                .firstOrNull;
-            if (rm != null) materialsCost += rm.unitCost * qty;
+            perVariant[m.variantId!] =
+                (perVariant[m.variantId!] ?? 0) + lineCost(m);
           }
         }
-        return materialsCost + (p.productionFee ?? 0);
+        double variantAvg = 0;
+        if (perVariant.isNotEmpty) {
+          variantAvg = perVariant.values.reduce((a, b) => a + b) /
+              perVariant.length;
+        }
+        return sharedCost + variantAvg + (p.productionFee ?? 0);
       }
       // No BOM yet → fall through to manual unitCost so the row still has
       // a number (will be 0 until the user sets up the BOM).

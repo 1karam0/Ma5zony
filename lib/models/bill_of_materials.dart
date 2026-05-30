@@ -25,12 +25,19 @@ class BomMaterial {
   /// equivalent (no loss). Range is enforced 1..100 at read time.
   final double? yieldPercent;
 
+  /// Optional Shopify variant id this line applies to. When `null` the line
+  /// is **shared** — consumed by every variant of the finished product. When
+  /// set, the material is only consumed when building that specific variant
+  /// (e.g. "red strap" → only the Red variant of Figure-8 Straps).
+  final String? variantId;
+
   BomMaterial({
     required this.rawMaterialId,
     required this.quantityPerUnit,
     this.unitOfMeasure = 'units',
     this.kind = BomComponentKind.rawMaterial,
     this.yieldPercent,
+    this.variantId,
   });
 
   /// Unified accessor: the id of whatever this line points at.
@@ -59,6 +66,9 @@ class BomMaterial {
       unitOfMeasure: json['unitOfMeasure'] as String? ?? 'units',
       kind: kind,
       yieldPercent: (yp != null && yp > 0 && yp <= 100) ? yp : null,
+      variantId: (json['variantId'] as String?)?.isNotEmpty == true
+          ? json['variantId'] as String?
+          : null,
     );
   }
 
@@ -71,6 +81,7 @@ class BomMaterial {
         'quantityPerUnit': quantityPerUnit,
         'unitOfMeasure': unitOfMeasure,
         if (yieldPercent != null) 'yieldPercent': yieldPercent,
+        if (variantId != null) 'variantId': variantId,
       };
 }
 

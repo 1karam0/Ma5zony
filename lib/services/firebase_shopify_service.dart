@@ -160,6 +160,11 @@ class FirebaseShopifyService implements ShopifyIntegrationService {
         sellingPrice: (m['sellingPrice'] as num?)?.toDouble(),
         shopifyProductId: m['shopifyProductId'] as String?,
         shopifyVariantId: m['shopifyVariantId'] as String?,
+        variants: (m['variants'] as List?)
+                ?.map((e) =>
+                    ProductVariant.fromJson(Map<String, dynamic>.from(e as Map)))
+                .toList() ??
+            const [],
       );
     }).toList();
   }
