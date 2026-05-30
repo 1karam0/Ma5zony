@@ -3,7 +3,7 @@ const {
   Document, Packer, Paragraph, TextRun, Table, TableRow, TableCell,
   Header, Footer, AlignmentType, HeadingLevel, BorderStyle, WidthType,
   ShadingType, VerticalAlign, PageNumber, PageBreak, LevelFormat,
-  TableOfContents, UnderlineType
+  TableOfContents, UnderlineType, ImageRun
 } = require('docx');
 const fs = require('fs');
 
@@ -111,41 +111,114 @@ function makeTable(headers, rows, widths) {
   });
 }
 
-// ── COVER PAGE ────────────────────────────────────────────────────────────────
+// ── COVER PAGE (BUE Dissertation Template style) ─────────────────────────────
 function coverPage() {
+  // Top navy header bar using a full-width shaded table row
+  const headerBar = new Table({
+    columnWidths: [9360],
+    margins: { top: 0, bottom: 0, left: 0, right: 0 },
+    rows: [
+      new TableRow({
+        children: [
+          new TableCell({
+            borders: { top: {style:BorderStyle.NONE}, bottom: {style:BorderStyle.NONE}, left: {style:BorderStyle.NONE}, right: {style:BorderStyle.NONE} },
+            shading: { fill: NAVY, type: ShadingType.CLEAR },
+            margins: { top: 300, bottom: 300, left: 400, right: 400 },
+            children: [
+              new Paragraph({ alignment: AlignmentType.CENTER,
+                children: [new TextRun({ text: 'THE BRITISH UNIVERSITY IN EGYPT', bold: true, size: 30, font: 'Calibri Light', color: WHITE })] }),
+              new Paragraph({ alignment: AlignmentType.CENTER, spacing: { before: 80 },
+                children: [new TextRun({ text: 'Faculty of Computing and Digital Technology', size: 22, font: 'Calibri Light', color: 'BFBFBF' })] }),
+              new Paragraph({ alignment: AlignmentType.CENTER, spacing: { before: 60 },
+                children: [new TextRun({ text: 'Department of Computer Science', size: 20, font: 'Calibri Light', color: 'BFBFBF' })] }),
+            ]
+          })
+        ]
+      })
+    ]
+  });
+
+  // Logo placeholder row (user to insert BUE logo image here)
+  const logoPlaceholder = new Paragraph({
+    alignment: AlignmentType.CENTER,
+    spacing: { before: 600, after: 200 },
+    border: { bottom: { style: BorderStyle.THICK, size: 4, color: BLUE } },
+    children: [new TextRun({ text: '[ Insert BUE Logo Here ]', italics: true, size: 20, color: 'AAAAAA', font: 'Calibri' })]
+  });
+
+  // Title block
+  const titleTable = new Table({
+    columnWidths: [9360],
+    margins: { top: 0, bottom: 0, left: 0, right: 0 },
+    rows: [
+      new TableRow({
+        children: [
+          new TableCell({
+            borders: { top: {style:BorderStyle.THICK,size:4,color:BLUE}, bottom: {style:BorderStyle.THICK,size:4,color:BLUE}, left: {style:BorderStyle.NONE}, right: {style:BorderStyle.NONE} },
+            shading: { fill: LIGHT, type: ShadingType.CLEAR },
+            margins: { top: 400, bottom: 400, left: 600, right: 600 },
+            children: [
+              new Paragraph({ alignment: AlignmentType.CENTER,
+                children: [new TextRun({ text: 'Ma5zony', bold: true, size: 80, font: 'Calibri Light', color: NAVY })] }),
+              new Paragraph({ alignment: AlignmentType.CENTER, spacing: { before: 160 },
+                children: [new TextRun({ text: 'An Intelligent Inventory Management and', bold: true, size: 28, font: 'Calibri Light', color: BLUE })] }),
+              new Paragraph({ alignment: AlignmentType.CENTER, spacing: { before: 80 },
+                children: [new TextRun({ text: 'Demand Forecasting System for SMEs', bold: true, size: 28, font: 'Calibri Light', color: BLUE })] }),
+            ]
+          })
+        ]
+      })
+    ]
+  });
+
+  // Submission info table
+  const infoTable = new Table({
+    columnWidths: [3000, 6360],
+    margins: { top: 0, bottom: 0, left: 0, right: 0 },
+    rows: [
+      new TableRow({ children: [
+        new TableCell({ borders: cb, shading: { fill: NAVY, type: ShadingType.CLEAR }, margins: { top: 120, bottom: 120, left: 200, right: 200 },
+          children: [new Paragraph({ children: [new TextRun({ text: 'Student Name', bold: true, size: 20, color: WHITE, font: 'Calibri' })] })] }),
+        new TableCell({ borders: cb, margins: { top: 120, bottom: 120, left: 200, right: 200 },
+          children: [new Paragraph({ children: [new TextRun({ text: 'Ahmed Karam', size: 20, color: NAVY, font: 'Calibri' })] })] }),
+      ]}),
+      new TableRow({ children: [
+        new TableCell({ borders: cb, shading: { fill: NAVY, type: ShadingType.CLEAR }, margins: { top: 120, bottom: 120, left: 200, right: 200 },
+          children: [new Paragraph({ children: [new TextRun({ text: 'Student ID', bold: true, size: 20, color: WHITE, font: 'Calibri' })] })] }),
+        new TableCell({ borders: cb, margins: { top: 120, bottom: 120, left: 200, right: 200 },
+          children: [new Paragraph({ children: [new TextRun({ text: '236548', size: 20, font: 'Calibri' })] })] }),
+      ]}),
+      new TableRow({ children: [
+        new TableCell({ borders: cb, shading: { fill: NAVY, type: ShadingType.CLEAR }, margins: { top: 120, bottom: 120, left: 200, right: 200 },
+          children: [new Paragraph({ children: [new TextRun({ text: 'Degree', bold: true, size: 20, color: WHITE, font: 'Calibri' })] })] }),
+        new TableCell({ borders: cb, margins: { top: 120, bottom: 120, left: 200, right: 200 },
+          children: [new Paragraph({ children: [new TextRun({ text: 'BSc Computer Science', size: 20, font: 'Calibri' })] })] }),
+      ]}),
+      new TableRow({ children: [
+        new TableCell({ borders: cb, shading: { fill: NAVY, type: ShadingType.CLEAR }, margins: { top: 120, bottom: 120, left: 200, right: 200 },
+          children: [new Paragraph({ children: [new TextRun({ text: 'Academic Year', bold: true, size: 20, color: WHITE, font: 'Calibri' })] })] }),
+        new TableCell({ borders: cb, margins: { top: 120, bottom: 120, left: 200, right: 200 },
+          children: [new Paragraph({ children: [new TextRun({ text: '2025 / 2026', size: 20, font: 'Calibri' })] })] }),
+      ]}),
+      new TableRow({ children: [
+        new TableCell({ borders: cb, shading: { fill: NAVY, type: ShadingType.CLEAR }, margins: { top: 120, bottom: 120, left: 200, right: 200 },
+          children: [new Paragraph({ children: [new TextRun({ text: 'Submission Date', bold: true, size: 20, color: WHITE, font: 'Calibri' })] })] }),
+        new TableCell({ borders: cb, margins: { top: 120, bottom: 120, left: 200, right: 200 },
+          children: [new Paragraph({ children: [new TextRun({ text: 'May 2026', size: 20, font: 'Calibri' })] })] }),
+      ]}),
+    ]
+  });
+
   return [
-    new Paragraph({ spacing: { before: 1440, after: 0 }, alignment: AlignmentType.CENTER,
-      children: [new TextRun({ text: 'THE BRITISH UNIVERSITY IN EGYPT', bold: true, size: 28, font: 'Calibri Light', color: NAVY })] }),
-    new Paragraph({ spacing: { before: 80, after: 0 }, alignment: AlignmentType.CENTER,
-      children: [new TextRun({ text: 'Faculty of Computing and Digital Technology', size: 24, font: 'Calibri Light', color: NAVY })] }),
-    new Paragraph({ spacing: { before: 80, after: 0 }, alignment: AlignmentType.CENTER,
-      children: [new TextRun({ text: 'Department of Computer Science', size: 24, font: 'Calibri Light', color: NAVY })] }),
-    spacer(), spacer(),
-    new Paragraph({ alignment: AlignmentType.CENTER, spacing: { before: 240, after: 240 },
-      children: [new TextRun({ text: '─────────────────────────────────────────', size: 22, color: BLUE, font: 'Calibri' })] }),
-    new Paragraph({ alignment: AlignmentType.CENTER, spacing: { before: 200, after: 200 },
-      children: [new TextRun({ text: 'Ma5zony', bold: true, size: 72, font: 'Calibri Light', color: NAVY })] }),
-    new Paragraph({ alignment: AlignmentType.CENTER, spacing: { before: 160, after: 160 },
-      children: [new TextRun({ text: 'An Intelligent Inventory Management and Demand Forecasting System', bold: true, size: 32, font: 'Calibri Light', color: BLUE })] }),
-    new Paragraph({ alignment: AlignmentType.CENTER, spacing: { before: 160, after: 160 },
-      children: [new TextRun({ text: 'for Small and Medium-Sized Enterprises', size: 28, font: 'Calibri Light', color: NAVY })] }),
-    new Paragraph({ alignment: AlignmentType.CENTER, spacing: { before: 240, after: 240 },
-      children: [new TextRun({ text: '─────────────────────────────────────────', size: 22, color: BLUE, font: 'Calibri' })] }),
-    spacer(), spacer(),
-    new Paragraph({ alignment: AlignmentType.CENTER, spacing: { before: 200, after: 80 },
-      children: [new TextRun({ text: 'A Dissertation Submitted in Partial Fulfilment', size: 22, font: 'Calibri' })] }),
-    new Paragraph({ alignment: AlignmentType.CENTER, spacing: { before: 0, after: 80 },
-      children: [new TextRun({ text: 'of the Requirements for the Degree of', size: 22, font: 'Calibri' })] }),
-    new Paragraph({ alignment: AlignmentType.CENTER, spacing: { before: 0, after: 200 },
-      children: [new TextRun({ text: 'Bachelor of Science in Computer Science', bold: true, size: 24, font: 'Calibri' })] }),
-    spacer(),
-    new Paragraph({ alignment: AlignmentType.CENTER, spacing: { before: 160, after: 80 },
-      children: [new TextRun({ text: 'Submitted by:', bold: true, size: 22, font: 'Calibri', color: NAVY })] }),
-    new Paragraph({ alignment: AlignmentType.CENTER, spacing: { before: 0, after: 80 },
-      children: [new TextRun({ text: 'Ahmed Karam', bold: true, size: 26, font: 'Calibri Light', color: BLUE })] }),
-    spacer(),
-    new Paragraph({ alignment: AlignmentType.CENTER, spacing: { before: 160, after: 80 },
-      children: [new TextRun({ text: 'Academic Year: 2025 – 2026', size: 22, font: 'Calibri', color: '595959' })] }),
+    headerBar,
+    logoPlaceholder,
+    new Paragraph({ spacing: { before: 400 }, children: [] }),
+    titleTable,
+    new Paragraph({ spacing: { before: 600, after: 240 }, alignment: AlignmentType.CENTER,
+      children: [new TextRun({ text: 'A Dissertation Submitted in Partial Fulfilment of the Requirements for the', size: 20, font: 'Calibri', color: '595959' })] }),
+    new Paragraph({ spacing: { before: 0, after: 400 }, alignment: AlignmentType.CENTER,
+      children: [new TextRun({ text: 'Bachelor of Science in Computer Science', bold: true, size: 22, font: 'Calibri', color: NAVY })] }),
+    infoTable,
     pb()
   ];
 }
@@ -175,13 +248,13 @@ function abstractPage() {
     spacer(),
     body('This dissertation presents Ma5zony, a web-based inventory management and demand forecasting platform built specifically for small and medium-sized enterprises (SMEs). The system was designed with a single overriding goal: to bring the kind of intelligent supply chain tooling that large corporations take for granted within reach of businesses that typically lack both the budget and the technical staff to operate enterprise-grade systems.'),
     spacer(),
-    body('Ma5zony was developed using Flutter for the web frontend, Firebase for authentication and real-time data persistence, and Firebase Cloud Functions for server-side logic including third-party integrations. The application implements five demand forecasting algorithms — Simple Moving Average (SMA), Weighted Moving Average (WMA), Single Exponential Smoothing (SES), Holt\'s Double Exponential Smoothing, and the Holt-Winters seasonal method — giving business owners the ability to model their demand patterns with an appropriate level of statistical rigour.'),
+    body('Ma5zony was developed using Flutter for the web frontend, Firebase for authentication and real-time data persistence, and Firebase Cloud Functions for server-side logic including third-party integrations. The application implements five demand forecasting algorithms, Simple Moving Average (SMA), Weighted Moving Average (WMA), Single Exponential Smoothing (SES), Holt\'s Double Exponential Smoothing, and the Holt-Winters seasonal method, giving business owners the ability to model their demand patterns with an appropriate level of statistical rigour.'),
     spacer(),
     body('Beyond forecasting, the system covers the complete operational cycle of an SME inventory process: product catalogue management with Shopify import, supplier and warehouse management, automatic replenishment recommendations based on reorder-point theory, purchase order generation, manufacturing workflow with bill-of-materials costing, and a real-time ABC-XYZ product classification matrix. A Shopify OAuth integration allows demand data to be populated automatically from live sales history.'),
     spacer(),
     body('The design and implementation placed usability at the centre of every decision. An interactive spotlight-based onboarding tour guides new users through the exact data-entry sequence required before any intelligent feature can produce meaningful output. Setup health banners surface configuration gaps proactively. Public token-based portals let suppliers, manufacturers, and factory contacts respond to orders without needing a system account.'),
     spacer(),
-    body('The dissertation discusses not only the final architecture but also the significant pivots made during development — including a full rethink of the product-sourcing classification model, a correction to the warehouse stock denormalisation approach, and a resequencing of the onboarding tour steps. Honest reflection on these decisions forms a substantial part of the analysis chapters.'),
+    body('The dissertation discusses not only the final architecture but also the significant pivots made during development, including a full rethink of the product-sourcing classification model, a correction to the warehouse stock denormalisation approach, and a resequencing of the onboarding tour steps. Honest reflection on these decisions forms a substantial part of the analysis chapters.'),
     spacer(),
     bodyBold('Keywords: ', 'Inventory Management, Demand Forecasting, Flutter, Firebase, SME, Usability, Supply Chain, Shopify Integration, Replenishment Optimisation.'),
     pb()
@@ -206,6 +279,25 @@ function acknowledgementsPage() {
   ];
 }
 
+function imageBlock(imgBuffer, widthPx, heightPx, captionText) {
+  const items = [];
+  if (imgBuffer) {
+    items.push(new Paragraph({
+      alignment: AlignmentType.CENTER,
+      spacing: { before: 200, after: 80 },
+      children: [new ImageRun({ data: imgBuffer, transformation: { width: widthPx, height: heightPx } })]
+    }));
+  } else {
+    items.push(new Paragraph({
+      alignment: AlignmentType.CENTER,
+      spacing: { before: 200, after: 80 },
+      children: [new TextRun({ text: '[Diagram: ' + captionText + ']', italics: true, size: 20, color: '999999', font: 'Calibri' })]
+    }));
+  }
+  if (captionText) items.push(caption(captionText));
+  return items;
+}
+
 module.exports = { coverPage, declarationPage, abstractPage, acknowledgementsPage,
-  h1, h2, h3, body, bodyBold, code, caption, pb, spacer, makeTable,
+  h1, h2, h3, body, bodyBold, code, caption, pb, spacer, makeTable, imageBlock,
   NAVY, BLUE, WHITE, LIGHT, GRAY, BLACK, GREEN, cb, tbl };

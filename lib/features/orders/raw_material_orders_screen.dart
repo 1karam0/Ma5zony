@@ -106,10 +106,19 @@ class _OrderList extends StatelessWidget {
   }
 }
 
-class _OrderCard extends StatelessWidget {
+class _OrderCard extends StatefulWidget {
   final RawMaterialPurchaseOrder order;
 
   const _OrderCard({required this.order});
+
+  @override
+  State<_OrderCard> createState() => _OrderCardState();
+}
+
+class _OrderCardState extends State<_OrderCard> {
+  bool _busy = false;
+
+  RawMaterialPurchaseOrder get order => widget.order;
 
   Color get _statusColor {
     return switch (order.status) {
@@ -118,6 +127,51 @@ class _OrderCard extends StatelessWidget {
       'cancelled' => AppColors.error,
       _ => AppColors.warning,
     };
+  }
+
+  Future<void> _markReceived() async {
+    setState(() => _busy = true);
+    try {
+      await context.read<AppState>().receiveRawMaterialPurchaseOrder(order.id);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Raw materials received and added to stock.'),
+          backgroundColor: AppColors.success,
+        ),
+      );
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _sendToManufacturer() async {
+    setState(() => _busy = true);
+    try {
+      final po = await context
+          .read<AppState>()
+          .sendReceivedRawMaterialsToManufacturer(order);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(po != null
+              ? 'Raw materials sent to the manufacturer to begin production.'
+              : 'Could not send to manufacturer.'),
+          backgroundColor:
+              po != null ? AppColors.success : AppColors.error,
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(e.toString().replaceFirst('Exception: ', '')),
+          backgroundColor: AppColors.error,
+        ),
+      );
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
   }
 
   @override
@@ -188,12 +242,46 @@ class _OrderCard extends StatelessWidget {
                 if (order.status == 'draft') ...[
                   const SizedBox(width: 12),
                   FilledButton.tonal(
-                    onPressed: () async {
-                      await context
-                          .read<AppState>()
-                          .confirmRawMaterialPurchaseOrder(order.id);
-                    },
+                    onPressed: _busy
+                        ? null
+                        : () async {
+                            await context
+                                .read<AppState>()
+                                .confirmRawMaterialPurchaseOrder(order.id);
+                          },
                     child: const Text('Mark Sent'),
+                  ),
+                ],
+                if (order.status == 'sent') ...[
+                  const SizedBox(width: 12),
+                  FilledButton.icon(
+                    onPressed: _busy ? null : _markReceived,
+                    icon: _busy
+                        ? const SizedBox(
+                            width: 16,
+                            height: 16,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.inventory_2_outlined, size: 18),
+                    label: const Text('Mark Received'),
+                  ),
+                ],
+                if (order.status == 'received' &&
+                    (order.forecastProductId ?? '').isNotEmpty) ...[
+                  const SizedBox(width: 12),
+                  FilledButton.icon(
+                    style: FilledButton.styleFrom(
+                        backgroundColor: AppColors.primary),
+                    onPressed: _busy ? null : _sendToManufacturer,
+                    icon: _busy
+                        ? const SizedBox(
+                            width: 16,
+                            height: 16,
+                            child: CircularProgressIndicator(
+                                strokeWidth: 2, color: Colors.white),
+                          )
+                        : const Icon(Icons.factory_outlined, size: 18),
+                    label: const Text('Send to Manufacturer'),
                   ),
                 ],
               ],

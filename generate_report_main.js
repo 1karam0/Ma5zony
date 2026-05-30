@@ -18,6 +18,8 @@ const { screenDescriptions, implementationDeepDive, designDeepDive, additionalTe
 const { algorithmDeepDive, inventoryTheorySection, extendedUsabilityAnalysis, extendedImplementation, extendedChapter8 } = require('./generate_report_p7');
 const { deploymentChapter, extendedChapter1, extendedConclusion, extendedLiterature } = require('./generate_report_p8');
 const { extendedMethodology, securityAnalysis, businessAnalysis, extendedFutureWork, extendedReferences } = require('./generate_report_p9');
+const { diagramsChapter } = require('./generate_report_p10');
+const { fetchAllDiagrams } = require('./generate_diagrams');
 
 const header = new Header({
   children: [
@@ -25,7 +27,7 @@ const header = new Header({
       alignment: AlignmentType.RIGHT,
       border: { bottom: { style: BorderStyle.SINGLE, size: 1, color: BLUE } },
       children: [
-        new TextRun({ text: 'Ma5zony — Graduation Project Dissertation', size: 18, color: '595959', font: 'Calibri' }),
+        new TextRun({ text: 'Ma5zony - Graduation Project Dissertation', size: 18, color: '595959', font: 'Calibri' }),
         new TextRun({ text: '\t', size: 18, font: 'Calibri' }),
         new TextRun({ text: 'Ahmed Karam | BUE 2026', size: 18, color: '595959', font: 'Calibri' })
       ]
@@ -66,94 +68,106 @@ const tocPage = [
   pb()
 ];
 
-const allContent = [
-  ...coverPage(),
-  ...declarationPage(),
-  ...abstractPage(),
-  ...acknowledgementsPage(),
-  ...tocPage,
-  ...chapter1(),
-  ...extendedChapter1(),
-  ...moreLiteratureAndRequirements(),
-  ...extendedLiterature(),
-  ...chapter3(),
-  ...chapter4(),
-  ...deploymentChapter(),
-  ...chapter5(),
-  ...extendedImplementation(),
-  ...screenDescriptions(),
-  ...implementationDeepDive(),
-  ...algorithmDeepDive(),
-  ...inventoryTheorySection(),
-  ...chapter6(),
-  ...designDeepDive(),
-  ...extendedUsabilityAnalysis(),
-  ...chapter7(),
-  ...additionalTesting(),
-  ...chapter8(),
-  ...extendedChapter8(),
-  ...chapter9(),
-  ...extendedConclusion(),
-  ...extendedMethodology(),
-  ...securityAnalysis(),
-  ...businessAnalysis(),
-  ...extendedFutureWork(),
-  ...extendedReferences(),
-  ...referencesPage(),
-  ...appendices(),
-];
+async function buildDocument() {
+  // Fetch all Mermaid diagrams (with graceful fallback if network unavailable)
+  let imgs = {};
+  try {
+    imgs = await fetchAllDiagrams();
+  } catch (err) {
+    console.warn('Diagram fetch failed, proceeding without images:', err.message);
+  }
 
-const doc = new Document({
-  styles: {
-    default: {
-      document: { run: { font: 'Calibri', size: 22 } }
-    },
-    paragraphStyles: [
-      {
-        id: 'Heading1', name: 'Heading 1', basedOn: 'Normal', next: 'Normal', quickFormat: true,
-        run: { size: 32, bold: true, color: NAVY, font: 'Calibri Light' },
-        paragraph: { spacing: { before: 400, after: 200 }, outlineLevel: 0 }
-      },
-      {
-        id: 'Heading2', name: 'Heading 2', basedOn: 'Normal', next: 'Normal', quickFormat: true,
-        run: { size: 26, bold: true, color: NAVY, font: 'Calibri Light' },
-        paragraph: { spacing: { before: 300, after: 160 }, outlineLevel: 1 }
-      },
-      {
-        id: 'Heading3', name: 'Heading 3', basedOn: 'Normal', next: 'Normal', quickFormat: true,
-        run: { size: 24, bold: true, color: NAVY, font: 'Calibri' },
-        paragraph: { spacing: { before: 240, after: 120 }, outlineLevel: 2 }
-      }
-    ]
-  },
-  numbering: {
-    config: [
-      {
-        reference: 'bullet-list',
-        levels: [{
-          level: 0, format: LevelFormat.BULLET, text: '\u2022', alignment: AlignmentType.LEFT,
-          style: { paragraph: { indent: { left: 720, hanging: 360 } } }
-        }]
-      }
-    ]
-  },
-  sections: [{
-    properties: {
-      page: { margin: { top: 1440, right: 1080, bottom: 1440, left: 1440 } }
-    },
-    headers: { default: header },
-    footers: { default: footer },
-    children: allContent
-  }]
-});
+  const allContent = [
+    ...coverPage(),
+    ...declarationPage(),
+    ...abstractPage(),
+    ...acknowledgementsPage(),
+    ...tocPage,
+    ...chapter1(),
+    ...extendedChapter1(),
+    ...moreLiteratureAndRequirements(),
+    ...extendedLiterature(),
+    ...extendedMethodology(),
+    ...chapter3(),
+    ...chapter4(),
+    ...deploymentChapter(),
+    ...chapter5(),
+    ...extendedImplementation(),
+    ...screenDescriptions(),
+    ...implementationDeepDive(),
+    ...diagramsChapter(imgs),
+    ...algorithmDeepDive(),
+    ...inventoryTheorySection(),
+    ...chapter6(),
+    ...designDeepDive(),
+    ...extendedUsabilityAnalysis(),
+    ...chapter7(),
+    ...additionalTesting(),
+    ...securityAnalysis(),
+    ...chapter8(),
+    ...extendedChapter8(),
+    ...businessAnalysis(),
+    ...chapter9(),
+    ...extendedFutureWork(),
+    ...extendedConclusion(),
+    ...extendedReferences(),
+    ...referencesPage(),
+    ...appendices(),
+  ];
 
-Packer.toBuffer(doc).then(buffer => {
+  const doc = new Document({
+    styles: {
+      default: {
+        document: { run: { font: 'Calibri', size: 22 } }
+      },
+      paragraphStyles: [
+        {
+          id: 'Heading1', name: 'Heading 1', basedOn: 'Normal', next: 'Normal', quickFormat: true,
+          run: { size: 32, bold: true, color: NAVY, font: 'Calibri Light' },
+          paragraph: { spacing: { before: 400, after: 200 }, outlineLevel: 0 }
+        },
+        {
+          id: 'Heading2', name: 'Heading 2', basedOn: 'Normal', next: 'Normal', quickFormat: true,
+          run: { size: 26, bold: true, color: NAVY, font: 'Calibri Light' },
+          paragraph: { spacing: { before: 300, after: 160 }, outlineLevel: 1 }
+        },
+        {
+          id: 'Heading3', name: 'Heading 3', basedOn: 'Normal', next: 'Normal', quickFormat: true,
+          run: { size: 24, bold: true, color: NAVY, font: 'Calibri' },
+          paragraph: { spacing: { before: 240, after: 120 }, outlineLevel: 2 }
+        }
+      ]
+    },
+    numbering: {
+      config: [
+        {
+          reference: 'bullet-list',
+          levels: [{
+            level: 0, format: LevelFormat.BULLET, text: '\u2022', alignment: AlignmentType.LEFT,
+            style: { paragraph: { indent: { left: 720, hanging: 360 } } }
+          }]
+        }
+      ]
+    },
+    sections: [{
+      properties: {
+        page: { margin: { top: 1440, right: 1080, bottom: 1440, left: 1440 } }
+      },
+      headers: { default: header },
+      footers: { default: footer },
+      children: allContent
+    }]
+  });
+
+  const buffer = await Packer.toBuffer(doc);
   const outPath = 'C:/Users/akara/Development/projects/Ma5zony_project/Ma5zony_Project_Report.docx';
   fs.writeFileSync(outPath, buffer);
   console.log('Document written to', outPath);
   const stats = fs.statSync(outPath);
   console.log('File size:', Math.round(stats.size / 1024), 'KB');
-}).catch(err => {
+}
+
+buildDocument().catch(err => {
   console.error('Error generating document:', err);
   process.exit(1);
 });

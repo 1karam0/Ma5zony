@@ -152,7 +152,7 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
                 border: Border.all(color: AppColors.borderSubtle),
               ),
               child: ZohoStepper(
-                currentIndex: _stepIndexFor(order.status),
+                currentIndex: _stepIndexFor(order.status, supplierOrders),
                 steps: const [
                   ZohoStepperStep(label: 'Draft', icon: Icons.edit_note),
                   ZohoStepperStep(label: 'Confirmed', icon: Icons.check_circle_outline),
@@ -321,7 +321,19 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
     );
   }
 
-  int _stepIndexFor(OrderStatus status) {
+  int _stepIndexFor(OrderStatus status, List<SupplierOrder> supplierOrders) {
+    // Derive receipt progress from the actual supplier orders so the journey
+    // bar stays accurate regardless of how an order was received (in-app GRN
+    // or via the supplier portal). This avoids the stepper getting stuck on
+    // "Sent" when the parent PO status lags behind its supplier orders.
+    if (supplierOrders.isNotEmpty) {
+      final allDelivered =
+          supplierOrders.every((o) => o.status == 'delivered');
+      if (allDelivered) return 4; // Completed
+      final someDelivered =
+          supplierOrders.any((o) => o.status == 'delivered');
+      if (someDelivered) return 3; // Receiving
+    }
     switch (status) {
       case OrderStatus.draft:
         return 0;

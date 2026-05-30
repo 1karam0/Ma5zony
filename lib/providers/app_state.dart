@@ -3425,6 +3425,159 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Mark a raw-material purchase order as received: set its status to
+  /// `received` and increment on-hand stock for each line item's raw material.
+  Future<void> receiveRawMaterialPurchaseOrder(String orderId) async {
+    if (_currentUser == null) return;
+    final idx = _rmPurchaseOrders.indexWhere((o) => o.id == orderId);
+    if (idx == -1) return;
+    final order = _rmPurchaseOrders[idx];
+    order.status = 'received';
+
+    // Add the received quantities into raw-material stock.
+    for (final item in order.items) {
+      final rmIdx =
+          _rawMaterials.indexWhere((r) => r.id == item.rawMaterialId);
+      if (rmIdx == -1) continue;
+      _rawMaterials[rmIdx].currentStock += item.quantityOrdered.round();
+      if (_repo != null) {
+        await _repo!.updateRawMaterial(_rawMaterials[rmIdx]);
+      }
+    }
+
+    final ref = FirebaseFirestore.instance
+        .collection('users')
+        .doc(_currentUser!.uid)
+        .collection('rawMaterialPurchaseOrders')
+        .doc(orderId);
+    await ref.update({'status': 'received'});
+    notifyListeners();
+  }
+
+  /// After a raw-material purchase order has been received, dispatch the
+  /// materials to the manufacturer responsible for the finished product so
+  /// they can begin production. Creates a [ProductionOrder], a manufacturer
+  /// portal order (so the materials show in the manufacturer's portal/email),
+  /// and emails the manufacturer. Returns the created order.
+  ///
+  /// Throws an [Exception] with a user-facing message when the order is not
+  /// linked to a product or the product has no manufacturer assigned.
+  Future<ProductionOrder?> sendReceivedRawMaterialsToManufacturer(
+    RawMaterialPurchaseOrder rmOrder,
+  ) async {
+    if (_currentUser == null ||
+        _manufacturingService == null ||
+        _firestoreRepo == null) {
+      return null;
+    }
+
+    final productId = rmOrder.forecastProductId;
+    if (productId == null || productId.isEmpty) {
+      throw Exception(
+        'This raw-material order is not linked to a product, so it cannot '
+        'be sent to a manufacturer.',
+      );
+    }
+    final product = _products.where((p) => p.id == productId).firstOrNull;
+    if (product == null) {
+      throw Exception('The linked product could not be found.');
+    }
+    final manufacturerId = product.manufacturerId ?? '';
+    if (manufacturerId.isEmpty) {
+      throw Exception(
+        'Product "${product.name}" has no manufacturer assigned. '
+        'Assign one in Products → Edit, then try again.',
+      );
+    }
+
+    // Determine how many finished units these received materials support,
+    // using the product's BOM. Falls back to one batch when unavailable.
+    final bom = _boms
+            .where((b) => b.finalProductId == productId && b.isActive)
+            .firstOrNull ??
+        _boms.where((b) => b.finalProductId == productId).firstOrNull;
+    int producibleQty = 0;
+    if (bom != null && bom.materials.isNotEmpty) {
+      final relevant = bom.materials
+          .where((mat) =>
+              rmOrder.items.any((it) => it.rawMaterialId == mat.rawMaterialId))
+          .toList();
+      for (final mat in relevant) {
+        if (mat.quantityPerUnit <= 0) continue;
+        final received = rmOrder.items
+            .where((it) => it.rawMaterialId == mat.rawMaterialId)
+            .fold<double>(0, (acc, it) => acc + it.quantityOrdered);
+        final canMake = (received / mat.quantityPerUnit).floor();
+        if (producibleQty == 0 || canMake < producibleQty) {
+          producibleQty = canMake;
+        }
+      }
+    }
+    if (producibleQty <= 0) producibleQty = 1;
+
+    final estimatedCost = rmOrder.totalCost;
+
+    // Create the production order and notify the manufacturer.
+    final order = await _manufacturingService!.createProductionOrder(
+      finalProductId: productId,
+      quantity: producibleQty,
+      manufacturerId: manufacturerId,
+      estimatedCost: estimatedCost,
+    );
+    _productionOrders.insert(0, order);
+
+    // Build a manufacturer portal order from the received materials so the
+    // manufacturer email/portal lists what they are receiving.
+    final mfr =
+        _manufacturers.where((m) => m.id == manufacturerId).firstOrNull;
+    final rmOrdersData = rmOrder.items
+        .map((it) => {
+              'materialName': it.rawMaterialName,
+              'quantity': it.quantityOrdered,
+              'unit': it.unitOfMeasure,
+              'status': 'received',
+              'supplierName': rmOrder.supplierName,
+            })
+        .toList();
+    await _firestoreRepo!.addManufacturerOrder({
+      'productionOrderId': order.id,
+      'productName': product.name,
+      'quantity': order.quantity,
+      'estimatedCost': order.estimatedCost,
+      'manufacturerId': manufacturerId,
+      'manufacturerName': mfr?.name ?? '',
+      'manufacturerEmail': mfr?.contactEmail ?? '',
+      'status': 'pending',
+      'accessToken': _generateAccessToken(),
+      'rawMaterialOrders': rmOrdersData,
+      'incomingSuppliers': [rmOrder.supplierName],
+      'expiresAt':
+          Timestamp.fromDate(DateTime.now().add(const Duration(days: 30))),
+    });
+
+    // Materials are already in hand → mark the production order ready.
+    if (_workflowService != null) {
+      await _workflowService!.transitionProductionOrder(
+        order,
+        ProductionOrderStatus.materialsReady,
+        _currentUser!.uid,
+      );
+    }
+
+    try {
+      await _invokeCloudFunction(
+        CloudFunctionConfig.sendManufacturerEmails,
+        {'uid': _currentUser!.uid, 'productionOrderId': order.id},
+      );
+    } catch (e) {
+      debugPrint(
+          '[sendReceivedRawMaterialsToManufacturer] email failed: $e');
+    }
+
+    notifyListeners();
+    return order;
+  }
+
   /// Invokes the `sendRawMaterialSupplierEmail` Cloud Function for a single
   /// RM purchase order. Returns true on success, false on any failure (caller
   /// can use the return value to report per-supplier delivery in the UI).
