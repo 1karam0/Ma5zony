@@ -2144,7 +2144,10 @@ class _ImportDialogState extends State<_ImportDialog> {
               : () async {
                   final messenger = ScaffoldMessenger.of(context);
                   Navigator.pop(context);
-                  final result = await context.read<AppState>().importShopifyProducts();
+                  // Import ONLY the products the user ticked.
+                  final result = await context
+                      .read<AppState>()
+                      .importSelectedShopifyProducts(_selectedIds.toList());
                   final newC = result['newCount'] ?? 0;
                   final merged = result['mergedCount'] ?? 0;
                   messenger.showSnackBar(
