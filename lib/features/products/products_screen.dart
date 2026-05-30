@@ -2219,12 +2219,17 @@ class _BomRowState {
   final TextEditingController yieldCtrl;
   String uom;
   BomComponentKind kind;
+  /// Shopify variant id this row applies to (null = shared across all
+  /// variants). Preserved here so editing a product doesn't wipe per-variant
+  /// recipes created in the BOM screen.
+  String? variantId;
   _BomRowState({
     this.rawMaterialId,
     double qty = 1,
     this.uom = 'pcs',
     this.kind = BomComponentKind.rawMaterial,
     double? yieldPercent,
+    this.variantId,
   })  : qtyCtrl = TextEditingController(
             text: qty == qty.truncate()
                 ? qty.toStringAsFixed(0)
@@ -2278,29 +2283,56 @@ class _AddProductDialogState extends State<_AddProductDialog> {
   /// input than the typed amount. Sub-assembly rows pull cost from
   /// AppState.effectiveUnitCost so nested BOMs roll up correctly.
   double get _computedMaterialCost {
-    double total = 0;
     final appState = context.read<AppState>();
-    for (final row in _bomRows) {
-      if (row.rawMaterialId == null || row.rawMaterialId!.isEmpty) continue;
+    double rowCost(_BomRowState row) {
+      if (row.rawMaterialId == null || row.rawMaterialId!.isEmpty) return 0;
       final qty = row.effectiveQty;
-      if (qty <= 0) continue;
+      if (qty <= 0) return 0;
       if (row.kind == BomComponentKind.product) {
         final sub = appState.products
             .where((p) => p.id == row.rawMaterialId)
             .firstOrNull;
-        if (sub != null) total += qty * appState.effectiveUnitCost(sub);
+        return sub != null ? qty * appState.effectiveUnitCost(sub) : 0;
+      }
+      final rm = widget.rawMaterials
+          .where((m) => m.id == row.rawMaterialId)
+          .firstOrNull;
+      return rm != null ? qty * (rm.unitCost as double) : 0;
+    }
+
+    // Shared rows count once; variant-specific rows are mutually exclusive so
+    // the representative cost adds the AVERAGE of the per-variant totals
+    // rather than summing every variant (which overcounts).
+    double shared = 0;
+    final perVariant = <String, double>{};
+    for (final row in _bomRows) {
+      if (row.variantId == null) {
+        shared += rowCost(row);
       } else {
-        final rm = widget.rawMaterials
-            .where((m) => m.id == row.rawMaterialId)
-            .firstOrNull;
-        if (rm != null) total += qty * (rm.unitCost as double);
+        perVariant[row.variantId!] =
+            (perVariant[row.variantId!] ?? 0) + rowCost(row);
       }
     }
-    return total;
+    final variantAvg = perVariant.isEmpty
+        ? 0.0
+        : perVariant.values.reduce((a, b) => a + b) / perVariant.length;
+    return shared + variantAvg;
   }
 
   double get _computedTotalCost =>
       _computedMaterialCost + (double.tryParse(_productionFeeCtrl.text) ?? 0);
+
+  /// Human title for a variant id of the product being edited (falls back to
+  /// the raw id if the product has no matching variant — e.g. not re-imported).
+  String _variantTitleFor(String variantId) {
+    final p = widget.existingProduct;
+    if (p != null) {
+      for (final v in p.variants) {
+        if (v.id == variantId) return v.title;
+      }
+    }
+    return variantId;
+  }
 
   @override
   void initState() {
@@ -2347,6 +2379,7 @@ class _AddProductDialogState extends State<_AddProductDialog> {
           uom: m.unitOfMeasure,
           kind: m.kind,
           yieldPercent: m.yieldPercent,
+          variantId: m.variantId,
         ));
       }
     }
@@ -3028,6 +3061,33 @@ class _AddProductDialogState extends State<_AddProductDialog> {
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
+                                // Variant scope tag — shown only for rows tied
+                                // to a specific variant (created in the BOM
+                                // screen). Preserved here so editing a product
+                                // never wipes a per-variant recipe.
+                                if (row.variantId != null)
+                                  Padding(
+                                    padding: const EdgeInsets.only(bottom: 6),
+                                    child: Container(
+                                      padding: const EdgeInsets.symmetric(
+                                          horizontal: 8, vertical: 2),
+                                      decoration: BoxDecoration(
+                                        color: AppColors.primary
+                                            .withValues(alpha: 0.1),
+                                        borderRadius: BorderRadius.circular(10),
+                                        border: Border.all(
+                                            color: AppColors.primary
+                                                .withValues(alpha: 0.4)),
+                                      ),
+                                      child: Text(
+                                        'Variant: ${_variantTitleFor(row.variantId!)}',
+                                        style: const TextStyle(
+                                            fontSize: 11,
+                                            fontWeight: FontWeight.w600,
+                                            color: AppColors.primary),
+                                      ),
+                                    ),
+                                  ),
                                 // Kind toggle: raw material vs sub-assembly
                                 // (Phase 2.3 nesting).
                                 Row(
@@ -3503,6 +3563,7 @@ class _AddProductDialogState extends State<_AddProductDialog> {
                 kind: r.kind,
                 yieldPercent:
                     (yp != null && yp > 0 && yp < 100) ? yp : null,
+                variantId: r.variantId,
               );
             })
             .where((m) => m.quantityPerUnit > 0)

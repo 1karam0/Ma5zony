@@ -493,6 +493,8 @@ class _RawMaterialFormDialogState extends State<_RawMaterialFormDialog> {
                             decoration: const InputDecoration(
                               labelText: 'Unit Cost *',
                               prefixText: 'EGP ',
+                              helperText: 'Price you pay per 1 unit/UoM',
+                              helperMaxLines: 2,
                             ),
                             keyboardType: TextInputType.number,
                             validator: (v) {
@@ -510,6 +512,8 @@ class _RawMaterialFormDialogState extends State<_RawMaterialFormDialog> {
                             controller: _stockCtrl,
                             decoration: const InputDecoration(
                               labelText: 'Current Stock',
+                              helperText: 'Quantity on hand right now',
+                              helperMaxLines: 2,
                             ),
                             keyboardType: TextInputType.number,
                           ),
@@ -520,6 +524,8 @@ class _RawMaterialFormDialogState extends State<_RawMaterialFormDialog> {
                             controller: _safetyCtrl,
                             decoration: const InputDecoration(
                               labelText: 'Safety Stock',
+                              helperText: 'Reorder when stock hits this level',
+                              helperMaxLines: 2,
                             ),
                             keyboardType: TextInputType.number,
                           ),

@@ -17,6 +17,7 @@ const { chapter6, chapter7, chapter8, chapter9, referencesPage, appendices } = r
 const { screenDescriptions, implementationDeepDive, designDeepDive, additionalTesting, moreLiteratureAndRequirements } = require('./generate_report_p6');
 const { algorithmDeepDive, inventoryTheorySection, extendedUsabilityAnalysis, extendedImplementation, extendedChapter8 } = require('./generate_report_p7');
 const { deploymentChapter, extendedChapter1, extendedConclusion, extendedLiterature } = require('./generate_report_p8');
+const { extendedMethodology, securityAnalysis, businessAnalysis, extendedFutureWork, extendedReferences } = require('./generate_report_p9');
 
 const header = new Header({
   children: [
@@ -93,6 +94,11 @@ const allContent = [
   ...extendedChapter8(),
   ...chapter9(),
   ...extendedConclusion(),
+  ...extendedMethodology(),
+  ...securityAnalysis(),
+  ...businessAnalysis(),
+  ...extendedFutureWork(),
+  ...extendedReferences(),
   ...referencesPage(),
   ...appendices(),
 ];

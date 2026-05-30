@@ -23,6 +23,7 @@ class _BomScreenState extends State<BomScreen> {
   Widget build(BuildContext context) {
     final state = context.watch<AppState>();
     final products = {for (final p in state.products) p.id: p.name};
+    final productsById = {for (final p in state.products) p.id: p};
     final rawMaterials = {for (final m in state.rawMaterials) m.id: m};
 
     if (state.isLoading) {
@@ -124,6 +125,19 @@ class _BomScreenState extends State<BomScreen> {
             ...state.boms.map((bom) {
               final productName =
                   products[bom.finalProductId] ?? 'Unknown Product';
+              final bomProduct = productsById[bom.finalProductId];
+              // Variant id → human title, for labelling per-variant lines.
+              final variantTitles = <String, String>{
+                for (final v in (bomProduct?.variants ?? const []))
+                  v.id: v.title,
+              };
+              // Distinct raw materials used (a material reused across variants
+              // counts once) so the summary reflects the recipe, not the line
+              // count.
+              final distinctMaterials =
+                  bom.materials.map((m) => m.rawMaterialId).toSet().length;
+              final hasVariantLines =
+                  bom.materials.any((m) => m.variantId != null);
               return Card(
                 margin: const EdgeInsets.only(bottom: 12),
                 child: ExpansionTile(
@@ -136,7 +150,10 @@ class _BomScreenState extends State<BomScreen> {
                     ],
                   ),
                   subtitle:
-                      Text('${bom.materials.length} material(s)',
+                      Text(
+                          hasVariantLines
+                              ? '$distinctMaterials material(s) · ${variantTitles.length} variants'
+                              : '$distinctMaterials material(s)',
                           style: AppTextStyles.bodySmall),
                   trailing: Row(
                     mainAxisSize: MainAxisSize.min,
@@ -184,19 +201,33 @@ class _BomScreenState extends State<BomScreen> {
                       padding: const EdgeInsets.symmetric(
                           horizontal: 16, vertical: 8),
                       child: DataTable(
-                        columns: const [
-                          DataColumn(label: Text('Material')),
-                          DataColumn(label: Text('Qty / Unit')),
-                          DataColumn(label: Text('UoM')),
-                          DataColumn(label: Text('Unit Cost')),
-                          DataColumn(label: Text('Line Cost')),
+                        columns: [
+                          const DataColumn(label: Text('Material')),
+                          if (hasVariantLines)
+                            const DataColumn(label: Text('Applies to')),
+                          const DataColumn(label: Text('Qty / Unit')),
+                          const DataColumn(label: Text('UoM')),
+                          const DataColumn(label: Text('Unit Cost')),
+                          const DataColumn(label: Text('Line Cost')),
                         ],
                         rows: bom.materials.map((line) {
                           final rm = rawMaterials[line.rawMaterialId];
                           final unitCost = rm?.unitCost ?? 0;
                           final lineCost = line.quantityPerUnit * unitCost;
+                          final scopeLabel = line.variantId == null
+                              ? 'All variants'
+                              : (variantTitles[line.variantId] ??
+                                  line.variantId!);
                           return DataRow(cells: [
                             DataCell(Text(rm?.name ?? line.rawMaterialId)),
+                            if (hasVariantLines)
+                              DataCell(
+                                line.variantId == null
+                                    ? Text(scopeLabel,
+                                        style: AppTextStyles.bodySmall.copyWith(
+                                            color: AppColors.textSecondary))
+                                    : _VariantTag(label: scopeLabel),
+                              ),
                             DataCell(Text('${line.quantityPerUnit}')),
                             DataCell(Text(line.unitOfMeasure)),
                             DataCell(Text('EGP ${unitCost.toStringAsFixed(2)}')),
@@ -211,9 +242,23 @@ class _BomScreenState extends State<BomScreen> {
                       child: Row(
                         mainAxisAlignment: MainAxisAlignment.end,
                         children: [
-                          Text(
-                            'Est. cost per unit: EGP ${_totalCost(bom, rawMaterials).toStringAsFixed(2)}',
-                            style: AppTextStyles.h3,
+                          Column(
+                            crossAxisAlignment: CrossAxisAlignment.end,
+                            children: [
+                              Text(
+                                'Est. cost per unit: EGP ${_totalCost(bom, rawMaterials).toStringAsFixed(2)}',
+                                style: AppTextStyles.h3,
+                              ),
+                              if (hasVariantLines)
+                                Padding(
+                                  padding: const EdgeInsets.only(top: 2),
+                                  child: Text(
+                                    'Shared materials + average of per-variant materials',
+                                    style: AppTextStyles.bodySmall.copyWith(
+                                        color: AppColors.textSecondary),
+                                  ),
+                                ),
+                            ],
                           ),
                         ],
                       ),
@@ -229,14 +274,30 @@ class _BomScreenState extends State<BomScreen> {
 
   double _totalCost(
       BillOfMaterials bom, Map<String, dynamic> rawMaterials) {
-    double total = 0;
-    for (final line in bom.materials) {
+    double lineCost(BomMaterial line) {
       final rm = rawMaterials[line.rawMaterialId];
-      if (rm != null) {
-        total += line.quantityPerUnit * (rm.unitCost as double);
+      if (rm == null) return 0;
+      return line.quantityPerUnit * (rm.unitCost as double);
+    }
+
+    // Shared lines (no variantId) are consumed by every variant. Variant
+    // lines are mutually exclusive, so the representative per-unit cost adds
+    // the AVERAGE of the per-variant totals rather than summing them all
+    // (which would overcount a multi-variant product).
+    double shared = 0;
+    final perVariant = <String, double>{};
+    for (final line in bom.materials) {
+      if (line.variantId == null) {
+        shared += lineCost(line);
+      } else {
+        perVariant[line.variantId!] =
+            (perVariant[line.variantId!] ?? 0) + lineCost(line);
       }
     }
-    return total;
+    final variantAvg = perVariant.isEmpty
+        ? 0
+        : perVariant.values.reduce((a, b) => a + b) / perVariant.length;
+    return shared + variantAvg;
   }
 
   void _showFormDialog(BuildContext context, AppState state,
@@ -338,6 +399,29 @@ class _ActiveBadge extends StatelessWidget {
         label,
         style: TextStyle(
             fontSize: 11, fontWeight: FontWeight.w700, color: color),
+      ),
+    );
+  }
+}
+
+/// Small coloured pill that labels which variant a BOM line belongs to.
+class _VariantTag extends StatelessWidget {
+  final String label;
+  const _VariantTag({required this.label});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+      decoration: BoxDecoration(
+        color: AppColors.primary.withValues(alpha: 0.1),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: AppColors.primary.withValues(alpha: 0.4)),
+      ),
+      child: Text(
+        label,
+        style: const TextStyle(
+            fontSize: 11, fontWeight: FontWeight.w600, color: AppColors.primary),
       ),
     );
   }
