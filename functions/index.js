@@ -312,6 +312,18 @@ exports.shopifyImportProducts = onRequest(
 
     const { shopDomain, accessToken } = connDoc.data();
 
+    // ── Optional request params ──────────────────────────────────────────────
+    // previewOnly: true  → return product list without writing to Firestore
+    //                       (used by the import-picker dialog for a safe preview).
+    // selectedShopifyIds → only write products whose Firestore doc ID is in this
+    //                       array (e.g. ["shopify_123", "shopify_456"]).
+    const reqData = (req.body && req.body.data) || {};
+    const previewOnly = reqData.previewOnly === true;
+    const selectedFilter =
+      Array.isArray(reqData.selectedShopifyIds) && reqData.selectedShopifyIds.length > 0
+        ? new Set(reqData.selectedShopifyIds)
+        : null;
+
     // GraphQL query with cursor-based pagination.
     // `query: "status:active"` filters out archived/draft products so only
     // currently-sellable items are imported into Ma5zony.
@@ -559,6 +571,10 @@ exports.shopifyImportProducts = onRequest(
           }
 
           const docId = `shopify_${shopifyId}`;
+
+          // Skip products the user did not select (picker-dialog flow).
+          if (selectedFilter && !selectedFilter.has(docId)) continue;
+
           const existing = existingDocMap[docId];
 
           // ── imageUrl: always sync from Shopify ────────────────────────────
@@ -606,7 +622,10 @@ exports.shopifyImportProducts = onRequest(
             .doc(uid)
             .collection("products")
             .doc(docId);
-          batch.set(ref, docData, { merge: true });
+          // In preview mode we build the list but skip all Firestore writes.
+          if (!previewOnly) {
+            batch.set(ref, docData, { merge: true });
+          }
           imported.push({
             id: ref.id,
             ...docData,
@@ -614,6 +633,12 @@ exports.shopifyImportProducts = onRequest(
               unitCostField.unitCost ?? existing?.unitCost ?? 0,
           });
         }
+      }
+
+      // Preview mode: return product list without persisting anything.
+      if (previewOnly) {
+        res.json({ result: { count: imported.length, deactivated: 0, products: imported } });
+        return;
       }
 
       await batch.commit();

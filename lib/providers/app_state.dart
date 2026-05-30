@@ -2177,52 +2177,51 @@ class AppState extends ChangeNotifier {
     if (_shopifyService == null || selectedIds.isEmpty) {
       return {'newCount': 0, 'mergedCount': 0, 'totalImported': 0};
     }
-    final all = await _shopifyService!.fetchShopifyProducts();
-    final toImport = all.where((p) => selectedIds.contains(p.id)).toList();
+    // Call the Cloud Function with only the selected doc IDs — it writes
+    // those products to Firestore and returns the merged data.
+    final toImport =
+        await (_shopifyService as dynamic).importSelectedFromShopify(selectedIds)
+            as List<Product>;
     int newCount = 0;
     int mergedCount = 0;
 
     for (final p in toImport) {
-      final skuIdx = p.sku.isNotEmpty
-          ? _products.indexWhere((e) => e.sku == p.sku && e.id != p.id)
-          : -1;
+      // Match by Firestore ID first, then by SKU (handles legacy local products
+      // that share a SKU with a newly-imported Shopify product).
       final idIdx = _products.indexWhere((e) => e.id == p.id);
+      final skuIdx = idIdx == -1 && p.sku.isNotEmpty
+          ? _products.indexWhere((e) => e.sku == p.sku)
+          : -1;
 
-      if (skuIdx != -1) {
-        final existing = _products[skuIdx];
-        _products[skuIdx] = Product(
-          id: existing.id,
-          sku: existing.sku,
-          name: existing.name.isNotEmpty ? existing.name : p.name,
-          category: existing.category.isNotEmpty ? existing.category : p.category,
-          unitCost: existing.unitCost > 0 ? existing.unitCost : p.unitCost,
+      if (idIdx != -1) {
+        // Update only Shopify-sourced fields; preserve user-configured fields
+        // (supplierId, manufacturerId, warehouseId, leadTimeDays, etc.).
+        final e = _products[idIdx];
+        _products[idIdx] = e.copyWith(
+          sku: p.sku.isNotEmpty ? p.sku : null,
+          name: p.name.isNotEmpty ? p.name : null,
+          category: p.category.isNotEmpty ? p.category : null,
           currentStock: p.currentStock,
-          supplierId: existing.supplierId,
-          manufacturerId: existing.manufacturerId,
-          warehouseId: existing.warehouseId,
-          isActive: existing.isActive,
+          imageUrl: p.imageUrl,
+          sellingPrice: p.sellingPrice,
+          shopifyProductId: p.shopifyProductId,
+          shopifyVariantId: p.shopifyVariantId,
+          isActive: p.isActive,
         );
-        await _repo?.updateProduct(_products[skuIdx]);
         mergedCount++;
-      } else if (idIdx != -1) {
-        final existing = _products[idIdx];
-        _products[idIdx] = Product(
-          id: existing.id,
-          sku: p.sku.isNotEmpty ? p.sku : existing.sku,
-          name: p.name.isNotEmpty ? p.name : existing.name,
-          category: p.category.isNotEmpty ? p.category : existing.category,
-          unitCost: p.unitCost > 0 ? p.unitCost : existing.unitCost,
+      } else if (skuIdx != -1) {
+        final e = _products[skuIdx];
+        _products[skuIdx] = e.copyWith(
           currentStock: p.currentStock,
-          supplierId: existing.supplierId ?? p.supplierId,
-          manufacturerId: existing.manufacturerId ?? p.manufacturerId,
-          warehouseId: existing.warehouseId ?? p.warehouseId,
-          isActive: existing.isActive,
+          imageUrl: p.imageUrl,
+          sellingPrice: p.sellingPrice,
+          shopifyProductId: p.shopifyProductId,
+          shopifyVariantId: p.shopifyVariantId,
+          isActive: p.isActive,
         );
-        await _repo?.updateProduct(_products[idIdx]);
         mergedCount++;
       } else {
-        final saved = await _repo!.addProduct(p);
-        _products.add(saved);
+        _products.add(p);
         newCount++;
       }
     }

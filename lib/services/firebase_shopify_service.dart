@@ -142,9 +142,8 @@ class FirebaseShopifyService implements ShopifyIntegrationService {
 
   // ── Import / Sync ──────────────────────────────────────────────────────────
 
-  @override
-  Future<List<Product>> importProductsFromShopify() async {
-    final result = await _callFunction('shopifyImportProducts');
+  /// Parses the product list returned by the shopifyImportProducts function.
+  static List<Product> _parseProductList(Map<String, dynamic> result) {
     final raw = (result['products'] as List?) ?? [];
     return raw.map((p) {
       final m = Map<String, dynamic>.from(p as Map);
@@ -157,8 +156,18 @@ class FirebaseShopifyService implements ShopifyIntegrationService {
         currentStock: (m['currentStock'] as num?)?.toInt() ?? 0,
         supplierId: m['supplierId'] as String?,
         isActive: m['isActive'] as bool? ?? true,
+        imageUrl: m['imageUrl'] as String?,
+        sellingPrice: (m['sellingPrice'] as num?)?.toDouble(),
+        shopifyProductId: m['shopifyProductId'] as String?,
+        shopifyVariantId: m['shopifyVariantId'] as String?,
       );
     }).toList();
+  }
+
+  @override
+  Future<List<Product>> importProductsFromShopify() async {
+    final result = await _callFunction('shopifyImportProducts');
+    return _parseProductList(result);
   }
 
   @override
@@ -167,11 +176,25 @@ class FirebaseShopifyService implements ShopifyIntegrationService {
   }
 
   /// Returns a list of products available in Shopify **without** writing them
-  /// to Firestore. Useful for the import-selection dialog.
+  /// to Firestore. Used by the picker dialog for a safe preview.
   Future<List<Product>> fetchShopifyProducts() async {
     final conn = await getCurrentConnection();
     if (!conn.isConnected) return [];
-    return importProductsFromShopify();
+    final result = await _callFunction(
+      'shopifyImportProducts',
+      {'previewOnly': true},
+    );
+    return _parseProductList(result);
+  }
+
+  /// Imports **only** the specified products (by Firestore doc ID, e.g.
+  /// "shopify_123") to Firestore. All other products are left untouched.
+  Future<List<Product>> importSelectedFromShopify(List<String> docIds) async {
+    final result = await _callFunction(
+      'shopifyImportProducts',
+      {'selectedShopifyIds': docIds},
+    );
+    return _parseProductList(result);
   }
 
   /// Imports Shopify order history and converts line items into demand records.
