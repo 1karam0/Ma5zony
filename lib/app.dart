@@ -41,10 +41,26 @@ class _Ma5zonyAppState extends State<Ma5zonyApp> {
         progressIndicatorTheme: const ProgressIndicatorThemeData(
           color: AppColors.primary,
         ),
+        pageTransitionsTheme: _pageTransitions,
       ),
       routerConfig: _router,
     );
   }
+
+  /// A single, subtle fade transition applied across all platforms so route
+  /// changes feel smooth and intentional instead of snapping instantly (the
+  /// default on web). Cheap to render — no slide/scale work per frame.
+  static const PageTransitionsTheme _pageTransitions = PageTransitionsTheme(
+    builders: {
+      TargetPlatform.android: FadeForwardsPageTransitionsBuilder(),
+      TargetPlatform.iOS: FadeForwardsPageTransitionsBuilder(),
+      TargetPlatform.macOS: FadeForwardsPageTransitionsBuilder(),
+      TargetPlatform.windows: FadeForwardsPageTransitionsBuilder(),
+      TargetPlatform.linux: FadeForwardsPageTransitionsBuilder(),
+      TargetPlatform.fuchsia: FadeForwardsPageTransitionsBuilder(),
+    },
+  );
+
 
   /// Operator-Editorial theme: outlined cards (no elevation), filled inputs
   /// with bottom-border-only focus, sharp 4px chips, soft 6px default radius,
@@ -64,6 +80,7 @@ class _Ma5zonyAppState extends State<Ma5zonyApp> {
       textTheme: GoogleFonts.interTextTheme(),
       scaffoldBackgroundColor: AppColors.canvas,
       dividerColor: AppColors.divider,
+      pageTransitionsTheme: _pageTransitions,
 
       // Cards: outlined, no elevation, soft corners.
       cardTheme: CardThemeData(
