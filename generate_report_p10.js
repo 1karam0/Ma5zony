@@ -13,21 +13,36 @@ function diagramsChapter(imgs) {
 
     // ── 1. System Context ──────────────────────────────────────────────────
     h2('5.S.1 System Context Diagram'),
-    body('The system context diagram (Figure 5.1) positions Ma5zony within its environment. Four human actors interact with the system directly: the SME Owner, who has full access; the Inventory Manager, who handles day-to-day stock operations; the Manufacturer, who receives production orders and updates their status; and the Supplier, who views and acknowledges purchase orders through a public portal. Three external systems are involved: Shopify (from which sales order data is imported), an SMTP email server (used for supplier and manufacturer notifications), and the Firebase infrastructure (Firestore for data persistence, Auth for identity, Hosting for delivery).'),
+    body('The system context diagram (Figure 5.1) positions Ma5zony within its operational environment. Four human actors interact with the system: the SME Owner (full access, approvals, financial analytics); the Inventory Manager (day-to-day stock and demand data); the Manufacturer (views and updates production orders through a public portal); and the Supplier (views and acknowledges purchase orders through a separate token-based portal). Three external systems are involved: Shopify for sales order import, an SMTP server for email notifications, and the Firebase infrastructure for data persistence, identity management, and CDN delivery.'),
     spacer(),
-    ...imageBlock(D.systemContext, 580, 300, 'Figure 5.1: System Context Diagram'),
+    ...imageBlock(D.systemContext, 600, 380, 'Figure 5.1: System Context Diagram'),
+    spacer(),
+
+    // ── 1b. Use Case Diagram ──────────────────────────────────────────────
+    h2('5.S.2 Use Case Diagram'),
+    body('The use case diagram in Figure 5.2 captures the full set of functional requirements across all four actors. The SME Owner role extends the Inventory Manager role, meaning owners can perform all inventory management actions in addition to their owner-specific capabilities. Key dependency relationships include: the Shopify order import (UC11) includes connecting a Shopify store (UC10); viewing the replenishment plan (UC07) includes running a demand forecast (UC06); creating a purchase order (UC08) includes having a supplier configured (UC03); and creating a production order (UC15) includes having a bill of materials defined (UC14).'),
+    spacer(),
+    ...imageBlock(D.useCaseDiagram, 600, 480, 'Figure 5.2: Use Case Diagram'),
     spacer(),
 
     // ── 2. System Architecture ─────────────────────────────────────────────
-    h2('5.S.2 System Architecture Diagram'),
+    h2('5.S.3 System Architecture Diagram'),
     body('Figure 5.2 shows the three-tier architecture of Ma5zony. The client tier is a Flutter web application running entirely in the browser. State is managed through a single AppState ChangeNotifier, with GoRouter providing URL-based navigation. The middle tier is Firebase: Firestore for real-time data, Firebase Auth for identity, Cloud Functions v2 (deployed on Cloud Run) for server-side logic, and Firebase Hosting for static asset delivery. The integration tier consists of external APIs: the Shopify REST API for order data and an SMTP server for email notifications. The three tiers communicate over HTTPS; the client SDK talks directly to Firestore and Auth, while all Shopify and email communication is routed through Cloud Functions to keep credentials server-side.'),
     spacer(),
-    ...imageBlock(D.architecture, 580, 360, 'Figure 5.2: System Architecture Diagram'),
+    ...imageBlock(D.architecture, 580, 360, 'Figure 5.3: System Architecture Diagram'),
     spacer(),
     pb(),
 
-    // ── 3. ERD ─────────────────────────────────────────────────────────────
-    h2('5.S.3 Entity Relationship Diagram'),
+    // ── 3. Class Diagram ───────────────────────────────────────────────────
+    h2('5.S.4 Class Diagram'),
+    body('Figure 5.4 shows the domain model class diagram for Ma5zony. The central class is Product, which aggregates DemandRecord entries over time, generates ForecastResult objects through the ForecastingService, and triggers ReplenishmentRecommendation objects through the ReplenishmentService. The composition relationship between BillOfMaterials and BomItem, and the association between BomItem and RawMaterial, models the manufacturing dependency chain. PurchaseOrder and ProductionOrder are the two primary transactional classes, representing the procurement and manufacturing workflows respectively. The ForecastingService and ReplenishmentService are shown as service classes with pure computation methods and no Firestore dependency.'),
+    spacer(),
+    ...imageBlock(D.classDiagram, 600, 520, 'Figure 5.4: Class Diagram - Domain Model'),
+    spacer(),
+    pb(),
+
+    // ── 4. ERD ─────────────────────────────────────────────────────────────
+    h2('5.S.5 Entity Relationship Diagram'),
     body('The ERD in Figure 5.3 shows the data model underlying Ma5zony. All entities are scoped to a USERS root, reflecting the Firestore structure where each user\'s data lives under users/{uid}/. Products are at the centre of the model: they accumulate DEMAND_RECORDS over time, generate FORECAST_RESULTS and REPLENISHMENT_RECS, and can require raw materials via BOM_ITEMS. PURCHASE_ORDERS are placed with SUPPLIERS and contain ORDER_LINE_ITEMS referencing PRODUCTS. PRODUCTION_ORDERS are assigned to MANUFACTURERS and reference the finished product being produced.'),
     spacer(),
     ...imageBlock(D.erd, 580, 400, 'Figure 5.3: Entity Relationship Diagram'),

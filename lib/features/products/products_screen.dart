@@ -22,14 +22,49 @@ Future<void> showQuickCostDialog(
   // save handler never reads it through the dialog's own context, which may be
   // deactivated by the time the mutation runs.
   final appState = context.read<AppState>();
-  final ctrl = TextEditingController(
-      text: product.unitCost > 0
-          ? product.unitCost.toStringAsFixed(2)
-          : '');
-  final formKey = GlobalKey<FormState>();
   await showDialog(
     context: context,
-    builder: (ctx) => AlertDialog(
+    builder: (ctx) => _QuickCostDialog(product: product, appState: appState),
+  );
+}
+
+/// Dialog body for [showQuickCostDialog]. Owning the [TextEditingController]
+/// inside a StatefulWidget lets the framework dispose it only when the element
+/// is truly removed — avoiding "used after being disposed" crashes when a
+/// `notifyListeners()` rebuild lands during the dialog's exit animation.
+class _QuickCostDialog extends StatefulWidget {
+  const _QuickCostDialog({required this.product, required this.appState});
+
+  final Product product;
+  final AppState appState;
+
+  @override
+  State<_QuickCostDialog> createState() => _QuickCostDialogState();
+}
+
+class _QuickCostDialogState extends State<_QuickCostDialog> {
+  late final TextEditingController ctrl;
+  final formKey = GlobalKey<FormState>();
+
+  @override
+  void initState() {
+    super.initState();
+    ctrl = TextEditingController(
+        text: widget.product.unitCost > 0
+            ? widget.product.unitCost.toStringAsFixed(2)
+            : '');
+  }
+
+  @override
+  void dispose() {
+    ctrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final product = widget.product;
+    return AlertDialog(
       title: const Text('Set Supplier Price'),
       content: Form(
         key: formKey,
@@ -67,7 +102,7 @@ Future<void> showQuickCostDialog(
       ),
       actions: [
         TextButton(
-          onPressed: () => Navigator.pop(ctx),
+          onPressed: () => Navigator.pop(context),
           child: const Text('Cancel'),
         ),
         FilledButton(
@@ -80,15 +115,14 @@ Future<void> showQuickCostDialog(
             // Close the dialog FIRST, then mutate state. Doing the
             // notifyListeners-driven rebuild while the dialog is still mounted
             // can deactivate an InheritedElement that still has dependents.
-            Navigator.pop(ctx);
-            await appState.updateProduct(updated);
+            Navigator.pop(context);
+            await widget.appState.updateProduct(updated);
           },
           child: const Text('Save'),
         ),
       ],
-    ),
-  );
-  ctrl.dispose();
+    );
+  }
 }
 
 /// Per-product warehouse picker. Lets the user pick which warehouse stores
