@@ -411,9 +411,13 @@ class _BomFormDialogState extends State<_BomFormDialog> {
     };
     _lines = widget.state.rawMaterials.map((rm) {
       final existing = existingByMaterialId[rm.id];
+      // Priority: 1) saved BOM line  2) unit already set on the raw material
+      //           3) fallback 'units'
       final uom = existing != null && _kUomOptions.contains(existing.unitOfMeasure)
           ? existing.unitOfMeasure
-          : 'units';
+          : _kUomOptions.contains(rm.unitOfMeasure)
+              ? rm.unitOfMeasure
+              : 'units';
       return _MaterialLine(
         materialId: rm.id,
         materialName: rm.name,
@@ -676,7 +680,7 @@ class _BomFormDialogState extends State<_BomFormDialog> {
                             ),
                             const SizedBox(width: 8),
                             SizedBox(
-                              width: 90,
+                              width: 110,
                               child: Text('UoM',
                                   style: AppTextStyles.tableHeader),
                             ),
@@ -734,7 +738,7 @@ class _BomFormDialogState extends State<_BomFormDialog> {
                               ),
                               const SizedBox(width: 8),
                               SizedBox(
-                                width: 90,
+                                width: 110,
                                 child: DropdownButtonFormField<String>(
                                   value: line.uom,
                                   decoration: const InputDecoration(
