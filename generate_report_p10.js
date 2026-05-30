@@ -45,19 +45,19 @@ function diagramsChapter(imgs) {
     h2('5.S.5 Entity Relationship Diagram'),
     body('The ERD in Figure 5.3 shows the data model underlying Ma5zony. All entities are scoped to a USERS root, reflecting the Firestore structure where each user\'s data lives under users/{uid}/. Products are at the centre of the model: they accumulate DEMAND_RECORDS over time, generate FORECAST_RESULTS and REPLENISHMENT_RECS, and can require raw materials via BOM_ITEMS. PURCHASE_ORDERS are placed with SUPPLIERS and contain ORDER_LINE_ITEMS referencing PRODUCTS. PRODUCTION_ORDERS are assigned to MANUFACTURERS and reference the finished product being produced.'),
     spacer(),
-    ...imageBlock(D.erd, 580, 400, 'Figure 5.3: Entity Relationship Diagram'),
+    ...imageBlock(D.erd, 580, 480, 'Figure 5.5: Entity Relationship Diagram'),
     spacer(),
 
-    // ── 4. Component Diagram ───────────────────────────────────────────────
-    h2('5.S.4 Component Diagram'),
+    // ── 5. Component Diagram ───────────────────────────────────────────────
+    h2('5.S.6 Component Diagram'),
     body('Figure 5.4 shows the main software components and their dependencies. AppState is the central hub: it instantiates and holds references to all service objects and exposes their data to the UI through ChangeNotifier. The service layer is strictly separated from the UI, meaning that any screen can access business logic only through AppState, never directly. The FirestoreInventoryRepository is the only component that talks to Firestore; all other services operate on in-memory data passed to them by AppState. This separation makes unit testing of the forecasting and replenishment logic straightforward, as those services have no Firestore dependency.'),
     spacer(),
-    ...imageBlock(D.componentDiagram, 580, 420, 'Figure 5.4: Component Diagram'),
+    ...imageBlock(D.componentDiagram, 580, 460, 'Figure 5.6: Component Diagram'),
     spacer(),
     pb(),
 
-    // ── 5. Login Sequence ──────────────────────────────────────────────────
-    h2('5.S.5 Sequence Diagram: User Login'),
+    // ── 6. Login Sequence ──────────────────────────────────────────────────
+    h2('5.S.7 Sequence Diagram: User Authentication'),
     body('Figure 5.5 shows the message sequence for user login. After the user submits credentials, the Flutter app calls Firebase Auth\'s signInWithEmailAndPassword(). On success, Firebase returns a JWT. AppState then fetches the AppUser document from Firestore (which contains the user\'s role and settings), attaches real-time listeners to all collections, and calls notifyListeners() to trigger a UI rebuild that navigates to the dashboard. The entire sequence from credential submission to dashboard display typically completes within 800-1200 milliseconds on a warm auth session.'),
     spacer(),
     ...imageBlock(D.loginSequence, 580, 340, 'Figure 5.5: Sequence Diagram - User Login'),
