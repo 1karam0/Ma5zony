@@ -162,7 +162,7 @@ class _RawMaterialsScreenState extends State<RawMaterialsScreen> {
                   DataColumn(label: Text('LEAD TIME', style: AppTextStyles.tableHeader)),
                   DataColumn(label: Text('UNIT COST', style: AppTextStyles.tableHeader), numeric: true),
                   DataColumn(label: Text('STOCK', style: AppTextStyles.tableHeader), numeric: true),
-                  DataColumn(label: Text('SAFETY STOCK', style: AppTextStyles.tableHeader), numeric: true),
+                  DataColumn(label: Text('REORDER POINT', style: AppTextStyles.tableHeader), numeric: true),
                   DataColumn(label: Text('SUPPLIER', style: AppTextStyles.tableHeader)),
                   DataColumn(label: Text('ACTIONS', style: AppTextStyles.tableHeader)),
                 ],
@@ -187,7 +187,41 @@ class _RawMaterialsScreenState extends State<RawMaterialsScreen> {
                         fontWeight: isLow ? FontWeight.bold : null,
                       ),
                     )),
-                    DataCell(Text('${m.safetyStock}', style: AppTextStyles.tableNum)),
+                    DataCell(
+                      Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text('${m.safetyStock}', style: AppTextStyles.tableNum),
+                          if (m.autoSafetyStock) ...[
+                            const SizedBox(width: 6),
+                            Tooltip(
+                              message: state
+                                          .rawMaterialStockResultFor(m.id)
+                                          ?.hasData ==
+                                      true
+                                  ? 'Auto-calculated from product demand & BOM'
+                                  : 'Auto — will calculate once this material is used in a product with demand history',
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 6, vertical: 2),
+                                decoration: BoxDecoration(
+                                  color: AppColors.infoBg,
+                                  borderRadius: BorderRadius.circular(8),
+                                ),
+                                child: Text(
+                                  'Auto',
+                                  style: AppTextStyles.bodySmall.copyWith(
+                                    color: AppColors.info,
+                                    fontWeight: FontWeight.w600,
+                                    fontSize: 11,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ],
+                        ],
+                      ),
+                    ),
                     DataCell(
                       supplierName != null
                           ? Container(
@@ -347,6 +381,7 @@ class _RawMaterialFormDialogState extends State<_RawMaterialFormDialog> {
   String? _supplierId;
   String _uom = 'units';
   bool _saving = false;
+  bool _autoSafetyStock = true;
 
   // Inline new-supplier creation
   bool _creatingNewSupplier = false;
@@ -370,6 +405,7 @@ class _RawMaterialFormDialogState extends State<_RawMaterialFormDialog> {
     _leadTimeCtrl =
         TextEditingController(text: e != null ? '${e.leadTimeDays}' : '0');
     _supplierId = e?.supplierId;
+    _autoSafetyStock = e?.autoSafetyStock ?? true;
     final existingUom = e?.unitOfMeasure ?? 'units';
     _uom = _kUomOptions.contains(existingUom) ? existingUom : 'units';
   }
@@ -483,7 +519,7 @@ class _RawMaterialFormDialogState extends State<_RawMaterialFormDialog> {
                 ZohoFormSection(
                   title: 'Pricing & Inventory',
                   subtitle:
-                      'Unit cost feeds BOM cost. Safety stock triggers reorders.',
+                      'Unit cost feeds BOM cost. The reorder point is calculated automatically from product demand.',
                   children: [
                     Row(
                       children: [
@@ -518,20 +554,10 @@ class _RawMaterialFormDialogState extends State<_RawMaterialFormDialog> {
                             keyboardType: TextInputType.number,
                           ),
                         ),
-                        const SizedBox(width: 16),
-                        Expanded(
-                          child: TextFormField(
-                            controller: _safetyCtrl,
-                            decoration: const InputDecoration(
-                              labelText: 'Safety Stock',
-                              helperText: 'Reorder when stock hits this level',
-                              helperMaxLines: 2,
-                            ),
-                            keyboardType: TextInputType.number,
-                          ),
-                        ),
                       ],
                     ),
+                    const SizedBox(height: 16),
+                    _buildReorderPointField(),
                   ],
                 ),
                 ZohoFormSection(
@@ -646,6 +672,99 @@ class _RawMaterialFormDialogState extends State<_RawMaterialFormDialog> {
     );
   }
 
+  Widget _buildReorderPointField() {
+    final id = widget.existing?.id;
+    final result =
+        id != null ? widget.state.rawMaterialStockResultFor(id) : null;
+    final hasComputed = result != null && result.hasData;
+    final computedValue = hasComputed
+        ? result.reorderPoint
+        : (widget.existing?.safetyStock ?? 0);
+
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: AppColors.background,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: AppColors.border),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.auto_awesome,
+                  size: 18, color: AppColors.primary),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('Reorder point',
+                        style: AppTextStyles.body
+                            .copyWith(fontWeight: FontWeight.w600)),
+                    Text(
+                      'When stock drops to this level, it\'s time to reorder.',
+                      style: AppTextStyles.bodySmall
+                          .copyWith(color: AppColors.textSecondary),
+                    ),
+                  ],
+                ),
+              ),
+              Switch(
+                value: _autoSafetyStock,
+                onChanged: (v) => setState(() => _autoSafetyStock = v),
+              ),
+            ],
+          ),
+          const SizedBox(height: 4),
+          if (_autoSafetyStock)
+            Row(
+              children: [
+                Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                  decoration: BoxDecoration(
+                    color: AppColors.infoBg,
+                    borderRadius: BorderRadius.circular(6),
+                  ),
+                  child: Text(
+                    hasComputed
+                        ? '$computedValue units'
+                        : 'Auto',
+                    style: AppTextStyles.body.copyWith(
+                      color: AppColors.info,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    hasComputed
+                        ? 'Calculated from product demand and this material\'s usage in your Bills of Materials, plus its lead time.'
+                        : 'Calculated automatically once this material is used in a product\'s BOM and that product has demand history.',
+                    style: AppTextStyles.bodySmall
+                        .copyWith(color: AppColors.textSecondary),
+                  ),
+                ),
+              ],
+            )
+          else
+            TextFormField(
+              controller: _safetyCtrl,
+              decoration: const InputDecoration(
+                labelText: 'Reorder point (manual)',
+                helperText: 'Reorder when stock hits this level',
+                helperMaxLines: 2,
+              ),
+              keyboardType: TextInputType.number,
+            ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildNewSupplierInline() {
     return Container(
       padding: const EdgeInsets.all(12),
@@ -727,6 +846,7 @@ class _RawMaterialFormDialogState extends State<_RawMaterialFormDialog> {
         currentStock: int.tryParse(_stockCtrl.text.trim()) ?? 0,
         safetyStock: int.tryParse(_safetyCtrl.text.trim()) ?? 0,
         leadTimeDays: int.tryParse(_leadTimeCtrl.text.trim()) ?? 0,
+        autoSafetyStock: _autoSafetyStock,
       );
       if (_isEdit) {
         await widget.state.updateRawMaterial(material);

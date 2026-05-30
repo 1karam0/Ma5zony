@@ -42,6 +42,7 @@ import 'package:ma5zony/services/workflow_service.dart';
 import 'package:ma5zony/models/raw_material_purchase_order.dart';
 import 'package:ma5zony/services/backend_api_service.dart';
 import 'package:ma5zony/services/minimum_stock_service.dart';
+import 'package:ma5zony/services/raw_material_stock_service.dart';
 import 'package:ma5zony/services/raw_material_order_service.dart';
 import 'package:ma5zony/utils/cloud_function_config.dart';
 
@@ -98,6 +99,7 @@ class AppState extends ChangeNotifier {
   late final FirebaseAuthService _authService;
   late final RecommendationEngineService _recEngine;
   late final MinimumStockService _minimumStockService;
+  late final RawMaterialStockService _rmStockService;
   late final RawMaterialOrderService _rmOrderService;
   ManufacturingService? _manufacturingService;
   WorkflowService? _workflowService;
@@ -115,6 +117,7 @@ class AppState extends ChangeNotifier {
     _authService = FirebaseAuthService();
     _recEngine = RecommendationEngineService();
     _minimumStockService = MinimumStockService();
+    _rmStockService = RawMaterialStockService();
     _rmOrderService = RawMaterialOrderService();
 
     // Listen to Firebase auth state changes and sync our AppUser.
@@ -388,6 +391,7 @@ class AppState extends ChangeNotifier {
   List<CashFlowSnapshot> _cashFlowSnapshots = [];
   List<WorkflowLog> _workflowLogs = [];
   List<MinimumStockResult> _minimumStockResults = [];
+  Map<String, RawMaterialStockResult> _rmStockResults = {};
   List<RawMaterialPurchaseOrder> _rmPurchaseOrders = [];
   bool _onboardingComplete = false;
   bool _onboardingStateLoaded = false;
@@ -448,6 +452,16 @@ class AppState extends ChangeNotifier {
       _cashFlowSnapshots.isNotEmpty ? _cashFlowSnapshots.first : null;
   List<WorkflowLog> get workflowLogs => _workflowLogs;
   List<MinimumStockResult> get minimumStockResults => _minimumStockResults;
+
+  /// Auto-computed reorder points for raw materials, keyed by material id.
+  /// Derived from finished-product demand exploded through active BOMs.
+  Map<String, RawMaterialStockResult> get rawMaterialStockResults =>
+      _rmStockResults;
+
+  /// Returns the auto-computed reorder result for a raw material, if any.
+  RawMaterialStockResult? rawMaterialStockResultFor(String rawMaterialId) =>
+      _rmStockResults[rawMaterialId];
+
   List<MinimumStockResult> get criticalStockProducts =>
       _minimumStockResults.where((r) => r.isUrgent).toList();
   bool get hasUrgentStockAlerts => _minimumStockResults.any((r) => r.isUrgent);
@@ -774,6 +788,7 @@ class AppState extends ChangeNotifier {
             currentStock: rm.currentStock,
             safetyStock: rm.safetyStock,
             leadTimeDays: rm.leadTimeDays,
+            autoSafetyStock: rm.autoSafetyStock,
           );
           await _repo!.updateRawMaterial(updated);
           _rawMaterials[i] = updated;
@@ -2092,6 +2107,34 @@ class AppState extends ChangeNotifier {
       manufacturers: _manufacturers,
       settings: _settings,
     );
+    computeRawMaterialReorderPoints();
+  }
+
+  /// Auto-calculates each raw material's reorder point (safety-stock level)
+  /// from finished-product demand exploded through active BOMs. Materials
+  /// flagged [RawMaterial.autoSafetyStock] have their stored [safetyStock]
+  /// updated (and persisted when the value changes); manually overridden
+  /// materials are left untouched.
+  void computeRawMaterialReorderPoints() {
+    _rmStockResults = _rmStockService.computeAll(
+      rawMaterials: _rawMaterials,
+      products: _products.where((p) => p.isActive).toList(),
+      boms: _boms,
+      demandByProduct: _demandByProduct,
+      settings: _settings,
+    );
+
+    // Apply computed reorder points to auto-managed materials. Persist only
+    // when the value actually changes to avoid redundant Firestore writes.
+    for (final rm in _rawMaterials) {
+      if (!rm.autoSafetyStock) continue;
+      final result = _rmStockResults[rm.id];
+      if (result == null || !result.hasData) continue;
+      if (rm.safetyStock == result.reorderPoint) continue;
+      rm.safetyStock = result.reorderPoint;
+      // Fire-and-forget persistence; in-memory value drives the UI.
+      _repo?.updateRawMaterial(rm);
+    }
   }
 
   // ── Shopify ────────────────────────────────────────────────────────────────
@@ -2694,6 +2737,7 @@ class AppState extends ChangeNotifier {
   Future<void> addRawMaterial(RawMaterial material) async {
     final saved = await _repo!.addRawMaterial(material);
     _rawMaterials.add(saved);
+    computeRawMaterialReorderPoints();
     notifyListeners();
   }
 
@@ -2701,6 +2745,7 @@ class AppState extends ChangeNotifier {
     await _repo!.updateRawMaterial(material);
     final idx = _rawMaterials.indexWhere((m) => m.id == material.id);
     if (idx != -1) _rawMaterials[idx] = material;
+    computeRawMaterialReorderPoints();
     notifyListeners();
   }
 

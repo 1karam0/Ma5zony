@@ -7,8 +7,15 @@ class RawMaterial {
   final double unitCost;
   final String? supplierId;
   int currentStock;
-  final int safetyStock;
+  int safetyStock;
   final int leadTimeDays;
+
+  /// When true (default), [safetyStock] is treated as an automatically
+  /// computed reorder point — the system recalculates it from product demand
+  /// exploded through the BOM plus this material's lead time. When false, the
+  /// user has manually overridden the reorder level and the system leaves it
+  /// untouched.
+  bool autoSafetyStock;
 
   RawMaterial({
     required this.id,
@@ -21,6 +28,7 @@ class RawMaterial {
     this.currentStock = 0,
     this.safetyStock = 0,
     this.leadTimeDays = 0,
+    this.autoSafetyStock = true,
   }) : unitOfMeasure = unitOfMeasure ?? unit;
 
   factory RawMaterial.fromFirestore(String id, Map<String, dynamic> data) {
@@ -36,6 +44,7 @@ class RawMaterial {
       currentStock: (data['currentStock'] as num?)?.toInt() ?? 0,
       safetyStock: (data['safetyStock'] as num?)?.toInt() ?? 0,
       leadTimeDays: (data['leadTimeDays'] as num?)?.toInt() ?? 0,
+      autoSafetyStock: data['autoSafetyStock'] as bool? ?? true,
     );
   }
 
@@ -50,6 +59,7 @@ class RawMaterial {
       'currentStock': currentStock,
       'safetyStock': safetyStock,
       'leadTimeDays': leadTimeDays,
+      'autoSafetyStock': autoSafetyStock,
     };
   }
 }
